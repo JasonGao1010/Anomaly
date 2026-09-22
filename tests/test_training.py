@@ -358,8 +358,11 @@ def test_native_two_passes_preserve_every_record_and_partial_final_batch():
     assert len(order) == 38 and sorted(order[:19]) == sorted(order[19:]) == list(range(19))
     assert len(list(effective_batches(order))[-1]) == 6
     assert order == pilot_order(manifest, 0, 5)
-    with pytest.raises(ValueError, match="exactly twice"):
+    with pytest.raises(ValueError, match="complete data passes"):
         pilot_order(manifest, 0, 6)
+    longer = pilot_order(manifest, 0, 8, passes=3)
+    assert len(longer) == 57
+    assert all(sorted(longer[start:start + 19]) == list(range(19)) for start in (0, 19, 38))
 
 
 def test_conditional_interaction_learns_from_sampling_and_each_context_scale():
@@ -647,7 +650,7 @@ def test_interaction_formula_and_zero_initialized_head():
     torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
     actual.sum().backward()
     assert all(f.grad is not None and torch.isfinite(f.grad).all() for f in features)
-    model = Segmentor()
+    model = Segmentor("base")
     for mode in ("attention", "fusion"):
         branch = deepcopy(model)
         branch.add_interaction(mode)
@@ -1169,3 +1172,79 @@ def test_distributed_gradient_sum_with_empty_final_rank(tmp_path):
     balanced_loss(model(x).squeeze(-1), torch.tensor([0, 0, 1, 1, 1]), torch.tensor([2, 3])).backward()
     for expected, observed in zip(model.parameters(), torch.load(output, weights_only=True)):
         torch.testing.assert_close(expected.grad, observed, atol=0, rtol=0)
+
+
+def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(tmp_path, monkeypatch):
+    import src.train as training
+    from src.data import NATIVE_VERSION
+    class Model(_ToyModel):
+        def __init__(self, mode):
+            super().__init__(mode)
+            self.normal = nn.Linear(3, 4)
+            self.bn = nn.BatchNorm1d(4)
+        def forward(self, sample, *, normal_loss=False):
+            hidden = self.bn(self.backbone(sample["xyzi"]))
+            normal = self.normal(sample["xyzi"])
+            score = self.head(self.dropout(hidden + normal)).flatten()
+            nll = normal.square().mean() if sample["normal_training"] else normal.sum() * 0
+            return (score, nll) if normal_loss else score
+    class Data(_ToyScans):
+        def __getitem__(self, index):
+            return dict(super().__getitem__(index), normal_training=not self.records[index]["anomaly"])
+    monkeypatch.setattr(training, "Segmentor", Model)
+    monkeypatch.setattr(training, "PreparedScans", Data)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
+    monkeypatch.setattr(training, "validate_all", lambda *a, **kw: dict(metrics=dict(AP=2., FPR95=90., AUROC=51.)))
+    manifest = dict(version=NATIVE_VERSION, sha256="fixture-train", records=[
+        dict(group="normal_stu" if i % 2 else "anomaly_stu", normal=5, anomaly=0 if i % 2 else 5)
+        for i in range(7)])
+    config = dict(version=NATIVE_VERSION, model="field", updates=3, eval_every=3, epochs=3, microbatch=2,
+                  recipe="field", objective="metrics", world_size=1, train_manifest="fixture-train",
+                  sampling="complete passes", sampling_segment=0, optimizer_state="reset")
+    args = SimpleNamespace(output=tmp_path / "full", initial=tmp_path / "public.pth", resume=True,
+                           workers=0, save_every=100, score_path=None)
+    monkeypatch.setattr(training, "STOP", False)
+    assert training.train_stage(args, manifest, {}, 2, "field", torch.device("cpu"), config)
+    full = torch.load(args.output / "2/field/last.pt", weights_only=False)
+    order = json.loads((args.output / "2/field/sampling.json").read_text())
+    assert len(order["order"]) == 21 and order["passes"] == 3
+    assert full["successful_updates"] == 3 and full["overflows"] == 0
+    args.output = tmp_path / "resume"
+    training.STOP = True
+    assert not training.train_stage(args, manifest, {}, 2, "field", torch.device("cpu"), config)
+    training.STOP = False
+    assert training.train_stage(args, manifest, {}, 2, "field", torch.device("cpu"), config)
+    resumed = torch.load(args.output / "2/field/last.pt", weights_only=False)
+    for key, value in full["model"].items():
+        torch.testing.assert_close(value, resumed["model"][key], atol=0, rtol=0)
+    assert torch.equal(full["rng"][0]["torch"], resumed["rng"][0]["torch"])
+
+
+@pytest.mark.parametrize("count", [5, 17])
+@pytest.mark.parametrize("training", [False, True])
+def test_fp32_patch_attention_matches_double_precision_formula(count, training):
+    from vendor.litept.model import Point, PointROPEAttention
+    torch.manual_seed(151)
+    layer = PointROPEAttention(12, 2, 8, 100., fp32_attention=True).train(training)
+    feat = torch.randn(count, 12, requires_grad=True)
+    grid = torch.stack((torch.arange(count), torch.arange(count) % 3, torch.arange(count) % 5), 1)
+    point = Point(feat=feat, grid_coord=grid, offset=torch.tensor([count]))
+    point.serialization(order=["z"], shuffle_orders=False)
+    pad, unpad, _ = point.get_padding_and_inverse(8)
+    order = point.serialized_order[0][pad]
+    inverse = unpad[point.serialized_inverse[0]]
+    qkv = F.linear(feat.double(), layer.qkv.weight.double(), layer.qkv.bias.double())[order]
+    q, k, v = qkv.chunk(3, -1)
+    position = grid[order][None]
+    q = layer.rope(q.reshape(-1, 2, 6).transpose(0, 1)[None], position)[0].transpose(0, 1)
+    k = layer.rope(k.reshape(-1, 2, 6).transpose(0, 1)[None], position)[0].transpose(0, 1)
+    width = min(count, 8)
+    q, k, v = (x.reshape(-1, width, 2, 6).transpose(1, 2) for x in (q, k, v))
+    attended = ((q @ k.transpose(-1, -2) / math.sqrt(6)).softmax(-1) @ v).transpose(1, 2).reshape(-1, 12)[inverse]
+    expected = F.linear(attended, layer.proj.weight.double(), layer.proj.bias.double())
+    actual = layer(point).feat
+    torch.testing.assert_close(actual.double(), expected, atol=5e-7, rtol=2e-6)
+    grad, = torch.autograd.grad(actual.square().sum(), feat, retain_graph=True)
+    reference, = torch.autograd.grad(expected.square().sum(), feat)
+    torch.testing.assert_close(grad, reference, atol=1e-6, rtol=1e-5)

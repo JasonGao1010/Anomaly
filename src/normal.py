@@ -1,4 +1,4 @@
-"""Target-blind angular context and joint normal-return distributions."""
+"""Target-blind Gaussian return fields and analytic conditional ray observations."""
 
 import math
 
@@ -6,209 +6,309 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 from torch_scatter import segment_csr
 
 
-NORMAL_MODES = ("density", "geometry")
-AZIMUTH_BINS, ELEVATION_BINS = 180, 90
-HYPOTHESES = 4
+NORMAL_MODES = ("field",)
+SCALES = (1, 2, 4)
+HYPOTHESES, KERNELS = 4, 8
+LOWER, UPPER = 2.5, 50.
+RAY_CHUNK, BLOCK_CHUNK = 2048, 256
 
 
 def angular_observation(xyzi, *, origins=None, directions=None):
-    """Build angular blocks before any voxelization or spatial-neighbor search.
+    """Rebuild effective rays from the actual (possibly transformed) coordinates.
 
-    Default rays share the reference-frame origin. These are effective scan rays,
-    not recovered firing poses of a moving sensor. Directions carry no range.
+    Without firing metadata, rays share the scan reference origin. Block identity
+    uses directions only; target ranges, counts and intensity never select context.
     """
     xyz = np.asarray(xyzi[:, :3], dtype=np.float64)
-    origins = np.zeros_like(xyz) if origins is None else np.asarray(origins, dtype=np.float64)
-    distance = np.linalg.norm(xyz - origins, axis=1)
-    if np.any(distance <= 0) or not np.isfinite(distance).all():
-        raise ValueError("normal prediction requires finite positive return ranges")
-    directions = ((xyz - origins) / distance[:, None] if directions is None
-                  else np.asarray(directions, dtype=np.float64))
-    if origins.shape != xyz.shape or directions.shape != xyz.shape:
-        raise ValueError("ray metadata must identify every actual return")
-    if not np.allclose(np.linalg.norm(directions, axis=1), 1., atol=1e-6):
-        raise ValueError("ray directions must have unit length")
-    azimuth = np.arctan2(directions[:, 1], directions[:, 0])
-    elevation = np.arcsin(np.clip(directions[:, 2], -1, 1))
-    az = np.floor((azimuth + np.pi) * AZIMUTH_BINS / (2 * np.pi)).astype(np.int64) % AZIMUTH_BINS
-    el = np.floor((elevation + np.pi / 2) * ELEVATION_BINS / np.pi).astype(np.int64)
-    el = el.clip(0, ELEVATION_BINS - 1)
-    cells, group, counts = np.unique(el * AZIMUTH_BINS + az, return_inverse=True, return_counts=True)
-    order = np.argsort(group, kind="stable")
-    ca = ((cells % AZIMUTH_BINS + .5) / AZIMUTH_BINS * 2 - 1) * np.pi
-    ce = ((cells // AZIMUTH_BINS + .5) / ELEVATION_BINS - .5) * np.pi
-    center = np.column_stack((np.cos(ce) * np.cos(ca), np.cos(ce) * np.sin(ca), np.sin(ce)))
-    tangent = np.column_stack((-np.sin(ca), np.cos(ca), np.zeros_like(ca)))
-    vertical = np.cross(center, tangent)
-    neighbors = []
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            if dx == dy == 0:
-                continue
-            row = cells // AZIMUTH_BINS + dy
-            neighbor = row * AZIMUTH_BINS + (cells % AZIMUTH_BINS + dx) % AZIMUTH_BINS
-            neighbors.append(np.where((row >= 0) & (row < ELEVATION_BINS), neighbor, -1))
-    relative = np.column_stack(((azimuth - ca[group] + np.pi) % (2 * np.pi) - np.pi,
-                                elevation - ce[group]))
-    # Pointwise encoding and block-local pooling precede exclusion. No BatchNorm,
-    # global feature, target-cell count, target voxel or spatial kNN is allowed.
-    features = np.column_stack((xyz / 50, xyzi[:, 3], directions, origins / 50, np.log(distance)))
-    values = dict(features=features, origins=origins, directions=directions, log_range=np.log(distance),
-                  relative=relative, center=center, tangent=tangent, vertical=vertical,
-                  cells=cells, group=group, order=order,
-                  pointer=np.r_[0, np.cumsum(counts)], neighbors=np.stack(neighbors, 1))
-    return {key: torch.from_numpy(value.astype(np.int64 if key in
-            ("cells", "group", "order", "pointer", "neighbors") else np.float32))
-            for key, value in values.items()}
+    origin = np.zeros_like(xyz) if origins is None else np.asarray(origins, dtype=np.float64)
+    if origin.shape != xyz.shape:
+        raise ValueError("ray origins must identify every actual return")
+    distance = np.linalg.norm(xyz - origin, axis=1)
+    if not len(xyz) or np.any(distance <= 0) or not np.isfinite(xyzi).all() or not np.isfinite(distance).all():
+        raise ValueError("normal prediction requires finite real returns and positive ranges")
+    rays = (xyz - origin) / distance[:, None]
+    if directions is not None:
+        supplied = np.asarray(directions, dtype=np.float64)
+        if supplied.shape != rays.shape or not np.allclose(supplied, rays, atol=1e-6, rtol=0):
+            raise ValueError("ray metadata disagrees with current coordinates; rebuild after augmentation")
+        rays = supplied
+    azimuth = (np.rad2deg(np.arctan2(rays[:, 1], rays[:, 0])) + 180) % 360
+    elevation = np.rad2deg(np.arcsin(np.clip(rays[:, 2], -1, 1))) + 90
+    # Derive every scale from one integer grid so nesting is exact at boundaries.
+    az = np.floor(azimuth).astype(np.int64)
+    el = np.floor(elevation).astype(np.int64).clip(0, 179)
+    grids = {}
+    for size in SCALES:
+        width, height = 360 // size, 180 // size
+        cells, group, counts = np.unique((el // size) * width + az // size,
+                                          return_inverse=True, return_counts=True)
+        row, col = cells // width, cells % width
+        ca, ce = np.deg2rad((col + .5) * size - 180), np.deg2rad((row + .5) * size - 90)
+        center = np.column_stack((np.cos(ce) * np.cos(ca), np.cos(ce) * np.sin(ca), np.sin(ce)))
+        tangent = np.column_stack((-np.sin(ca), np.cos(ca), np.zeros_like(ca)))
+        # Grid positions are fixed, even if all target measurements change.
+        position = np.column_stack((np.cos(ca), np.sin(ca), ce / (np.pi / 2), np.full(len(cells), size / 4)))
+        table = np.full(width * height, len(cells), dtype=np.int64)
+        table[cells] = np.arange(len(cells))
+        neighbors = []
+        for dy in range(-2, 3):
+            for dx in range(-2, 3):
+                if dx == dy == 0:
+                    continue
+                valid = (row + dy >= 0) & (row + dy < height)
+                lookup = np.clip(row + dy, 0, height - 1) * width + (col + dx) % width
+                neighbors.append(np.where(valid, table[lookup], len(cells)))
+        grids[str(size)] = dict(cells=cells, group=group, order=np.argsort(group, kind="stable"),
+            pointer=np.r_[0, np.cumsum(counts)], neighbors=np.stack(neighbors, 1), position=position,
+            basis=np.stack((center, tangent, np.cross(center, tangent)), -1))
+    values = dict(features=np.column_stack((xyz / UPPER, xyzi[:, 3], rays)),
+                  origins=origin, directions=rays, distance=distance, grids=grids)
+
+    def tensors(value):
+        if isinstance(value, dict):
+            return {key: tensors(item) for key, item in value.items()}
+        return torch.from_numpy(value.astype(np.int64 if value.dtype.kind in "iu" else np.float32))
+    return tensors(values)
 
 
 def network(inputs, hidden, outputs):
     return nn.Sequential(nn.Linear(inputs, hidden), nn.LayerNorm(hidden), nn.GELU(), nn.Linear(hidden, outputs))
 
 
-class NormalDistribution(nn.Module):
-    """Four region-level hypotheses; ordinary ray regression or shared planes."""
+class NormalField(nn.Module):
+    """One four-hypothesis field per block, inferred exclusively from 24 neighbors."""
 
-    def __init__(self, mode):
+    def __init__(self, *, recompute=True):
         super().__init__()
-        if mode not in NORMAL_MODES:
-            raise ValueError(mode)
-        self.mode = mode
-        self.encoder = network(11, 32, 32)
-        self.context = network(8 * 34 + 3, 96, 96)
-        self.weights = nn.Linear(96, HYPOTHESES)
-        self.planes = nn.Linear(96, HYPOTHESES * 4) if mode == "geometry" else None
-        self.regression = network(96 + 8, 64, HYPOTHESES * 2) if mode == "density" else None
-        output = self.planes if self.planes is not None else self.regression[-1]
-        nn.init.zeros_(output.weight)
+        self.recompute = recompute
+        self.encoder = network(7, 64, 64)
+        self.pool = nn.Linear(128, 128)
+        self.position = nn.Linear(4, 128)
+        self.empty = nn.Parameter(torch.randn(128) * .02)
+        self.queries = nn.Parameter(torch.randn(HYPOTHESES, 128) * .02)
+        self.layers = nn.ModuleList(nn.ModuleDict(dict(
+            attention=nn.MultiheadAttention(128, 4, batch_first=True),
+            norm=nn.LayerNorm(128), feedforward=network(128, 256, 128), final_norm=nn.LayerNorm(128),
+        )) for _ in range(2))
+        self.weights = nn.Linear(128, 1)
+        self.parameters_out = nn.Linear(128, KERNELS * 10)
+        nn.init.normal_(self.parameters_out.weight, std=.001)
         with torch.no_grad():
-            output.bias.zero_()
-            output.bias.reshape(HYPOTHESES, -1)[:, 0] = torch.linspace(-.15, .15, HYPOTHESES)
-            output.bias.reshape(HYPOTHESES, -1)[:, -1] = -2.
+            bias = self.parameters_out.bias.reshape(KERNELS, 10)
+            bias.zero_()
+            bias[:, 0] = torch.linspace(LOWER / UPPER, 1., KERNELS)
+            # Broad initialization is an optimization choice, not a noise model.
+            bias[:, [3, 5, 8]] = math.log(math.expm1(20 / UPPER))
+            bias[:, 9] = -2.
+
+    def _run(self, function, *args):
+        if self.training and self.recompute and torch.is_grad_enabled():
+            return checkpoint(function, *args, use_reentrant=False)
+        return function(*args)
+
+    def decode(self, tokens, neighbors, position, basis):
+        count = len(tokens)
+        present = neighbors < count
+        # Exclude self in the index construction BEFORE any cross-block mixing.
+        context = F.pad(tokens, (0, 0, 0, 1))[neighbors]
+        empty = ~present.any(1)
+        context = torch.cat((context, self.empty.expand(len(neighbors), 1, -1)), 1)
+        mask = torch.cat((~present, ~empty[:, None]), 1)
+        state = self.queries[None] + self.position(position)[:, None]
+        for layer in self.layers:
+            update = layer["attention"](state, context, context, key_padding_mask=mask, need_weights=False)[0]
+            state = layer["norm"](state + update)
+            state = layer["final_norm"](state + layer["feedforward"](state))
+        raw = self.parameters_out(state).reshape(-1, HYPOTHESES, KERNELS, 10)
+        center = UPPER * torch.einsum("bij,bkmj->bkmi", basis, raw[..., :3])
+        a, b, c, d, e, f = raw[..., 3:9].unbind(-1)
+        zero = torch.zeros_like(a)
+        # A A^T is a full covariance. The floor only prevents singular solves.
+        diagonal = lambda x: UPPER * F.softplus(x) + 1e-4
+        chol = torch.stack((diagonal(a), zero, zero, UPPER * b, diagonal(c), zero,
+                            UPPER * d, UPPER * e, diagonal(f)), -1).reshape(*a.shape, 3, 3)
+        inverse = torch.linalg.solve_triangular(chol, torch.eye(3, device=chol.device).expand_as(chol), upper=False)
+        # log(softplus(x)) must remain finite for very negative amplitudes.
+        log_amplitude = torch.where(raw[..., 9] < -20, raw[..., 9],
+                                    F.softplus(raw[..., 9].clamp_min(-20)).log()) - math.log(UPPER)
+        weights = self.weights(state).squeeze(-1).log_softmax(-1)
+        return center, inverse, log_amplitude, weights
 
     def forward(self, observation):
-        # Keep probability calculations and geometry in FP32 even under N1 AMP.
         with torch.autocast(observation["features"].device.type, enabled=False):
-            return self.predict(observation)
-
-    def predict(self, o):
-        features = self.encoder(o["features"].float())
-        pooled = segment_csr(torch.cat((features, o["log_range"][:, None]), 1)[o["order"]],
-                             o["pointer"], reduce="mean")
-        population = (o["pointer"][1:] - o["pointer"][:-1]).float()
-        pooled = torch.cat((pooled, population.log1p()[:, None]), 1)
-        table = pooled.new_zeros((AZIMUTH_BINS * ELEVATION_BINS + 1, pooled.shape[1]))
-        table = table.index_copy(0, o["cells"], pooled)
-        neighbors = o["neighbors"]
-        surrounding = table[torch.where(neighbors < 0, table.shape[0] - 1, neighbors)]
-        present = surrounding[..., -1] > 0
-        count = present.sum(1).clamp_min(1)
-        base = (surrounding[..., -2] * present).sum(1) / count
-        base = torch.where(present.any(1), base, torch.full_like(base, math.log(15.)))
-        context = self.context(torch.cat((surrounding.flatten(1), o["center"]), 1))
-        log_weights = self.weights(context).log_softmax(-1)
-        group = o["group"]
-        if self.planes is not None:
-            raw = self.planes(context).reshape(-1, HYPOTHESES, 4)
-            radius = (base[:, None] + raw[..., 0]).clamp(-2., 7.).exp()
-            slopes = 20 * raw[..., 1:3].tanh()
-            normals = (o["center"][:, None] - slopes[..., :1] * o["tangent"][:, None]
-                       - slopes[..., 1:] * o["vertical"][:, None])
-            mu, valid = ray_planes(radius[group], normals[group], o["origins"], o["directions"])
-            scale = (.015 + F.softplus(raw[..., 3])).clamp_max(2.)[group]
-        else:
-            query = torch.cat((o["relative"], o["directions"], o["origins"] / 50), 1)
-            raw = self.regression(torch.cat((context[group], query), 1)).reshape(-1, HYPOTHESES, 2)
-            mu = (base[group, None] + raw[..., 0]).clamp(-2., 7.)
-            scale = (.015 + F.softplus(raw[..., 1])).clamp_max(2.)
-            valid = torch.ones_like(mu, dtype=torch.bool)
-        return dict(mu=mu, scale=scale, valid=valid, log_weights=log_weights, group=group)
+            features = torch.cat([self._run(self.encoder, part) for part in observation["features"].float().split(65536)])
+            fields = {}
+            for size in SCALES:
+                grid = observation["grids"][str(size)]
+                ordered = features[grid["order"]]
+                pooled = torch.cat((segment_csr(ordered, grid["pointer"], reduce="mean"),
+                                    segment_csr(ordered, grid["pointer"], reduce="max")), -1)
+                tokens = self.pool(pooled) + self.position(grid["position"])
+                parts = [self._run(self.decode, tokens, grid["neighbors"][start:start + BLOCK_CHUNK],
+                                   grid["position"][start:start + BLOCK_CHUNK], grid["basis"][start:start + BLOCK_CHUNK])
+                         for start in range(0, len(tokens), BLOCK_CHUNK)]
+                fields[str(size)] = dict(zip(("center", "inverse", "log_amplitude", "log_weights"),
+                                              (torch.cat(items) for items in zip(*parts))))
+            return fields
 
 
-def ray_planes(offset, normal, origin, direction):
-    """One plane n.x=b jointly fixes all of its ray intersections."""
-    numerator = offset - (normal * origin[:, None]).sum(-1)
-    denominator = (normal * direction[:, None]).sum(-1)
-    valid = (numerator > 0) & (denominator > 0)
-    mu = numerator.clamp_min(1e-8).log() - denominator.clamp_min(1e-8).log()
-    return mu, valid
+def ray_parameters(field, group, origin, direction):
+    """Restrict each 3D Gaussian to a ray; covariance inverses are cached by block."""
+    inverse = field["inverse"][group]
+    v = torch.einsum("nkmij,nj->nkmi", inverse, direction)
+    w = torch.einsum("nkmij,nkmj->nkmi", inverse, origin[:, None, None] - field["center"][group])
+    vv = v.square().sum(-1)
+    mu = -(v * w).sum(-1) / vv
+    tau = vv.rsqrt()
+    log_h = field["log_amplitude"][group] - .5 * (w + mu[..., None] * v).square().sum(-1)
+    return mu, tau, log_h
 
 
-def component_log_prob(prediction, log_range):
-    # Laplace observation noise gives a proper density and robust linear tails.
-    residual = (log_range[:, None] - prediction["mu"]) / prediction["scale"]
-    value = -residual.abs() - (2 * prediction["scale"]).log()
-    # Invalid forward intersections put their probability on the no-hit outcome.
-    return value.masked_fill(~prediction["valid"], -1e4)
+def log_normal_mass(mu, tau, lower, upper):
+    """Stable log Gaussian interval mass, including narrow intervals in either tail."""
+    width = (upper - lower) / tau
+    middle = ((upper - mu) + (lower - mu)) / (2 * tau)
+    left, right = middle - width / 2, middle + width / 2
+    # Reflect the positive tail before subtracting CDFs near one.
+    positive = middle > 0
+    lo = torch.special.log_ndtr(torch.where(positive, -right, left))
+    hi = torch.special.log_ndtr(torch.where(positive, -left, right))
+    delta = lo - hi
+    safe_delta = torch.where(delta < 0, delta, torch.full_like(delta, -1.))
+    ordinary = hi + torch.log(-torch.expm1(safe_delta))
+    narrow = (width < .01) & (middle.abs() * width < .01)
+    # The midpoint integral expansion avoids catastrophic CDF cancellation.
+    w2, m2 = width.square(), middle.square()
+    correction = (m2 - 1) * w2 / 24 + (m2.square() - 6 * m2 + 3) * w2.square() / 1920
+    local = width.clamp_min(torch.finfo(width.dtype).tiny).log() - .5 * m2 - .5 * math.log(2 * math.pi)
+    local = local + torch.log1p(torch.where(narrow, correction, torch.zeros_like(correction)))
+    return torch.where(width > 0, torch.where(narrow, local, ordinary), torch.full_like(local, -torch.inf))
 
 
-def joint_nll(prediction, log_range, selected):
-    log_prob = component_log_prob(prediction, log_range)
-    group, weights = prediction["group"], prediction["log_weights"]
-    total = log_prob.new_zeros(weights.shape).index_add(0, group, log_prob * selected[:, None])
-    counts = log_prob.new_zeros(len(weights)).index_add(0, group, selected.float())
+def log_event_ratio(log_H):
+    """log((1-exp(-H))/H), retaining the normalized limit as H tends to zero."""
+    small = log_H < math.log(.01)
+    H_small = log_H.clamp_max(math.log(.01)).exp()
+    approximation = -H_small / 2 + H_small.square() / 24
+    safe_log_H = log_H.clamp_min(math.log(.01))
+    regular = torch.log(-torch.expm1(-safe_log_H.exp())) - safe_log_H
+    return torch.where(small, approximation, regular)
+
+
+def ray_log_prob(mu, tau, log_h, distance, lower=LOWER, upper=UPPER):
+    """Conditional first-event log density in metres, with its low-rate limit."""
+    r = distance[:, None, None]
+    shift = log_h.amax(-1, keepdim=True)
+    relative = log_h - shift
+    log_hazard = torch.logsumexp(relative - .5 * ((r - mu) / tau).square(), -1)
+    integral = relative + tau.log() + .5 * math.log(2 * math.pi)
+    log_total = torch.logsumexp(integral + log_normal_mass(mu, tau, lower, upper), -1)
+    log_H = shift.squeeze(-1) + log_total
+    # Avoid evaluating log(0) in an inactive autograd branch at the lower bound.
+    b = torch.where(r > lower, r, torch.full_like(r, (lower + upper) / 2))
+    log_partial = torch.logsumexp(integral + log_normal_mass(mu, tau, lower, b), -1)
+    H_r = torch.where(distance[:, None] > lower, (shift.squeeze(-1) + log_partial).exp(), 0.)
+    value = log_hazard - log_total - H_r - log_event_ratio(log_H)
+    valid = (distance >= lower) & (distance <= upper)
+    return value.masked_fill(~valid[:, None], -torch.inf)
+
+
+@torch.no_grad()
+def ray_quantiles(mu, tau, log_h, log_weights, probabilities=(.05, .5, .95)):
+    """Analytic-CDF inversion of the context-prior mixture; no measured ranges."""
+    shift = log_h.amax(-1, keepdim=True)
+    integral = log_h - shift + tau.log() + .5 * math.log(2 * math.pi)
+    total = torch.logsumexp(integral + log_normal_mass(mu, tau, LOWER, UPPER), -1)
+    correction = log_event_ratio(shift.squeeze(-1) + total)
+    left = mu.new_full((len(mu), len(probabilities)), LOWER)
+    right = torch.full_like(left, UPPER)
+    probability = torch.as_tensor(probabilities, device=mu.device)
+    for _ in range(26):
+        middle = (left + right) / 2
+        partial = torch.logsumexp(integral[:, None] + log_normal_mass(
+            mu[:, None], tau[:, None], LOWER, middle[:, :, None, None]), -1)
+        log_cdf = partial - total[:, None] + log_event_ratio(shift.squeeze(-1)[:, None] + partial) - correction[:, None]
+        cdf = (log_weights[:, None] + log_cdf).logsumexp(-1).exp()
+        below = cdf < probability
+        left, right = torch.where(below, middle, left), torch.where(below, right, middle)
+    return (left + right) / 2
+
+
+def joint_nll(log_prob, log_weights, grid, selected):
+    """Marginalize ONE hypothesis after summing all valid rays, then average blocks."""
+    masked = torch.where(selected[:, None], log_prob, 0.)
+    total = segment_csr(masked[grid["order"]], grid["pointer"], reduce="sum")
+    counts = segment_csr(selected.float()[grid["order"]], grid["pointer"], reduce="sum")
+    nll = -torch.logsumexp(log_weights + total, -1) / counts.clamp_min(1)
     used = counts > 0
-    # Sum ray log-likelihoods BEFORE marginalizing the shared hypothesis.
-    nll = -torch.logsumexp(weights + total, -1)
-    return nll[used].sum() / counts.sum().clamp_min(1)
-
-
-def point_evidence(prediction, log_range):
-    log_prob = component_log_prob(prediction, log_range)
-    group, prior = prediction["group"], prediction["log_weights"]
-    total = log_prob.new_zeros(prior.shape).index_add(0, group, log_prob)
-    # Scoring may compare measured returns; prediction parameters never see them.
-    # Leave this point out when testing which shared hypothesis explains its peers.
-    posterior = (prior[group] + total[group] - log_prob).log_softmax(-1)
-    marginal = -torch.logsumexp(prior[group] + log_prob, -1)
-    conditional = -torch.logsumexp(posterior + log_prob, -1)
-    probabilities = posterior.exp()
-    mean = (probabilities * prediction["mu"]).sum(-1)
-    variance = (probabilities * (2 * prediction["scale"].square()
-                + (prediction["mu"] - mean[:, None]).square())).sum(-1)
-    residual = (log_range - mean) / variance.sqrt().clamp_min(.015)
-    entropy = -(probabilities * posterior).sum(-1)
-    # No regional joint NLL is broadcast to individual points.
-    return torch.stack((marginal, conditional, residual, residual.abs(),
-                        .5 * variance.clamp_min(1e-8).log(), entropy), -1).clamp(-30, 30)
-
-
-def quantiles(prediction, probabilities=(.05, .5, .95)):
-    """Marginal predictive intervals, computed before observing any target range."""
-    mu, scale = prediction["mu"], prediction["scale"]
-    weights = prediction["log_weights"][prediction["group"]].exp() * prediction["valid"]
-    if bool((weights.sum(-1) < max(probabilities)).any()):
-        raise ValueError("normal prediction assigns too much probability to no forward intersection")
-    low, high = (mu - 30 * scale).amin(-1), (mu + 30 * scale).amax(-1)
-    outputs = []
-    for probability in probabilities:
-        left, right = low.clone(), high.clone()
-        for _ in range(28):
-            midpoint = (left + right) / 2
-            delta = (midpoint[:, None] - mu) / scale
-            cdf = torch.where(delta < 0, .5 * delta.clamp_max(0).exp(),
-                              1 - .5 * (-delta).clamp_max(0).exp())
-            below = (cdf * weights).sum(-1) < probability
-            left, right = torch.where(below, midpoint, left), torch.where(below, right, midpoint)
-        outputs.append(((left + right) / 2).exp())
-    return torch.stack(outputs, -1)
+    return torch.where(used, nll, 0.).sum() / used.sum().clamp_min(1)
 
 
 @torch.no_grad()
 def prediction_metrics(model, sample):
+    """Diagnostic coverage/width on unmodified normal scans, never a training gate."""
+    if not sample.get("normal_training", False):
+        raise ValueError("normal diagnostics require an unmodified real-normal scan")
     observation = sample["observation"]
-    prediction = model(observation)
-    selected = sample["targets"] == 0
-    # Evaluate the normal-only held-out labels, including every selected ray.
-    subset = {k: v if k == "log_weights" else v[selected] for k, v in prediction.items()}
-    intervals = quantiles(subset)
-    actual = observation["log_range"][selected].exp()
-    error = intervals[:, 1] - actual
-    covered = (actual >= intervals[:, 0]) & (actual <= intervals[:, 2])
-    return dict(points=len(actual), mae_m=float(error.abs().mean()),
-                mse_m2=float(error.square().mean()), coverage90=float(covered.float().mean()),
-                width90_m=float((intervals[:, 2] - intervals[:, 0]).mean()),
-                joint_nll=float(joint_nll(prediction, observation["log_range"], selected)))
+    selected = ((sample["targets"] == 0) & (observation["distance"] >= LOWER)
+                & (observation["distance"] <= UPPER))
+    indices = selected.nonzero().flatten()
+    if not len(indices):
+        raise ValueError("normal diagnostic scan has no valid normal targets")
+    fields, result = model(observation), {}
+    with torch.autocast(indices.device.type, enabled=False):
+        for size in SCALES:
+            grid, field = observation["grids"][str(size)], fields[str(size)]
+            log_prob = observation["distance"].new_zeros((len(selected), HYPOTHESES))
+            totals = log_prob.new_zeros(3)
+            for chosen in indices.split(RAY_CHUNK):
+                group = grid["group"][chosen]
+                params = ray_parameters(field, group, observation["origins"][chosen], observation["directions"][chosen])
+                actual = observation["distance"][chosen]
+                log_prob[chosen] = ray_log_prob(*params, actual)
+                intervals = ray_quantiles(*params, field["log_weights"][group])
+                totals += torch.stack(((intervals[:, 1] - actual).abs().sum(),
+                    ((actual >= intervals[:, 0]) & (actual <= intervals[:, 2])).sum(),
+                    (intervals[:, 2] - intervals[:, 0]).sum()))
+            result[str(size)] = dict(zip(("mae_m", "coverage90", "width90_m"), (totals / len(indices)).tolist()))
+            result[str(size)]["joint_nll"] = float(joint_nll(log_prob, field["log_weights"], grid, selected))
+    return dict(points=len(indices), scales=result)
+
+
+class Compatibility(nn.Module):
+    """Learn pointwise compatibility from the context prior, never a target posterior."""
+
+    def __init__(self):
+        super().__init__()
+        self.tokens = network(4, 16, 64)
+        self.scale = nn.Parameter(torch.randn(len(SCALES), 64) * .02)
+        self.query = nn.Linear(64, 32)
+        self.range = network(1, 16, 32)
+
+    def forward(self, state, observation, fields, begin, end):
+        distance = observation["distance"][begin:end]
+        query = (self.query(state.float()) + self.range(distance[:, None] / UPPER)).reshape(-1, 4, 8)
+        features, marginals, probabilities = [], [], []
+        valid = (distance >= LOWER) & (distance <= UPPER)
+        for index, size in enumerate(SCALES):
+            group = observation["grids"][str(size)]["group"][begin:end]
+            field = fields[str(size)]
+            mu, tau, log_h = ray_parameters(field, group, observation["origins"][begin:end],
+                                            observation["directions"][begin:end])
+            weights = field["log_weights"][group]
+            parameters = torch.stack((mu / UPPER, (tau / UPPER).log(), log_h + math.log(UPPER),
+                                      weights[..., None].expand_as(mu)), -1)
+            tokens = self.tokens(parameters).flatten(1, 2) + self.scale[index]
+            key, value = (part.reshape(-1, HYPOTHESES * KERNELS, 4, 8) for part in tokens.chunk(2, -1))
+            attention = ((query[:, None] * key).sum(-1) / math.sqrt(8)).softmax(1)
+            features.append((attention[..., None] * value).sum(1).flatten(1))
+            # Outside protocol support, keep point logits but provide no density
+            # evidence. Such returns remain context and are never NLL targets.
+            prob = ray_log_prob(mu, tau, log_h, distance.clamp(LOWER, UPPER))
+            marginals.append(torch.where(valid, torch.logsumexp(weights + prob, -1), 0.))
+            probabilities.append(prob)
+        return torch.cat((state.float(), *features, torch.stack(marginals, -1)), -1), torch.stack(probabilities, 1)

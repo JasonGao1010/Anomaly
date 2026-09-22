@@ -11,7 +11,8 @@ from torch.utils.checkpoint import checkpoint
 from torch_scatter import segment_csr
 
 from .data import file_sha256
-from .normal import NORMAL_MODES, NormalDistribution, joint_nll, point_evidence
+from .normal import (NORMAL_MODES, NormalField, Compatibility, joint_nll,
+                     SCALES, RAY_CHUNK, LOWER, UPPER)
 from vendor.litept.model import LitePT, Point
 
 
@@ -236,10 +237,12 @@ class Relation(nn.Module):
 
 
 class Segmentor(nn.Module):
-    def __init__(self, mode="base", *, recompute=True):
+    def __init__(self, mode="field", *, recompute=True):
         super().__init__()
+        if mode in ("density", "geometry"):
+            raise ValueError("retired normal predictor; use its historical code revision to load that checkpoint")
         self.mode, self.recompute = mode, recompute
-        self.backbone = LitePT(shuffle_orders=False)
+        self.backbone = LitePT(shuffle_orders=False, fp32_attention=mode == "field")
         self.detail = mlp(7, 64, 64)
         self.adapter = mlp(128, 64, 36)
         nn.init.zeros_(self.adapter[-1].weight)
@@ -265,9 +268,10 @@ class Segmentor(nn.Module):
         self.normal = None
         if mode in NORMAL_MODES:
             with torch.random.fork_rng(devices=[]):
-                self.normal = NormalDistribution(mode)
-                self.normal_evidence = nn.Linear(6, 64, bias=False)
-                nn.init.zeros_(self.normal_evidence.weight)
+                self.normal = NormalField(recompute=recompute)
+                self.compatibility = Compatibility()
+                self.head = nn.Sequential(nn.Linear(163, 128), nn.LayerNorm(128), nn.GELU(),
+                                          nn.Linear(128, 64), nn.LayerNorm(64), nn.GELU(), nn.Linear(64, 1))
 
     def add_interaction(self, mode):
         if self.interaction is not None:
@@ -298,87 +302,100 @@ class Segmentor(nn.Module):
                     removed=ignored, trainable=sum(p.numel() for p in self.backbone.parameters()))
 
     def forward(self, sample, *, normal_loss=False):
-        evidence, auxiliary = None, None
-        if self.normal is not None:
-            observation = sample["observation"]
-            prediction = self.normal(observation)
-            # Anomaly gradients pass through the predictive evidence. Normal-only
-            # likelihood remains an anchor against widening every explanation.
-            evidence = point_evidence(prediction, observation["log_range"])
-            if normal_loss:
-                auxiliary = (joint_nll(prediction, observation["log_range"], sample["targets"] == 0)
-                             if sample["normal_training"] else prediction["mu"].sum() * 0)
-            del prediction
-        xyzi, inverse = sample["xyzi"], sample["inverse"]
-        detail = torch.cat([
-            self._checkpoint(self.detail, torch.cat((xyzi[start:start + POINT_CHUNK, :3] / 50,
-                                                      xyzi[start:start + POINT_CHUNK, 3:4],
-                                                      sample["offset"][start:start + POINT_CHUNK]), -1))
-            for start in range(0, len(xyzi), POINT_CHUNK)])
-        ordered = detail[sample["order"]].float()
-        with torch.autocast(xyzi.device.type, enabled=False):
-            pooled = torch.cat((segment_csr(ordered, sample["pointer"], reduce="mean"),
-                                segment_csr(ordered, sample["pointer"], reduce="max")), -1)
-        point = Point(coord=sample["voxel_xyzi"][:, :3], feat=sample["voxel_xyzi"],
-                      grid_coord=sample["grid"], grid_size=GRID_SIZE,
-                      offset=torch.tensor([len(sample["grid"])], device=xyzi.device))
-        point.sparsify()
-        point = self.backbone.embedding(point)
-        point.feat = point.feat + self.adapter(pooled)
-        point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(point.feat)
-        features, coords, ancestors, voxel_ancestors = [], [], [], []
-        ancestry = inverse
-        voxel_ancestry = torch.arange(len(sample["grid"]), device=xyzi.device)
-        for level, encoder in enumerate(self.backbone.enc):
-            point = encoder(point)
-            if level:
-                ancestry = point.pooling_inverse[ancestry]
-                voxel_ancestry = point.pooling_inverse[voxel_ancestry]
-            # Store tensors before decoder mutation of the Point containers.
-            features.append(point.feat)
-            coords.append(point.coord)
-            ancestors.append(ancestry)
-            voxel_ancestors.append(voxel_ancestry)
-        point = self.backbone.dec(point)
-        if self.mode == "conditional" or self.mode in (*RELATION_MODES, *NORMAL_MODES):
-            unified = self._checkpoint(self.conditional, pooled, sample["voxel_xyzi"][:, :3],
-                voxel_ancestors + [voxel_ancestors[0]], coords + [point.coord], features + [point.feat])
-            if self.relation is not None:
-                unified = self.relation(unified, sample["voxel_xyzi"][:, :3], sample["neighbors"],
-                                        recompute=self.recompute)
+        # FP32 avoids amplification of sparse-kernel rounding at BF16 boundaries.
+        # Legacy checkpoints keep their original externally selected precision.
+        with torch.autocast(sample["xyzi"].device.type,
+                            enabled=torch.is_autocast_enabled(sample["xyzi"].device.type) and self.mode != "field"):
+            fields = self.normal(sample["observation"]) if self.normal is not None else None
+            xyzi, inverse = sample["xyzi"], sample["inverse"]
+            detail = torch.cat([
+                self._checkpoint(self.detail, torch.cat((xyzi[start:start + POINT_CHUNK, :3] / 50,
+                                                          xyzi[start:start + POINT_CHUNK, 3:4],
+                                                          sample["offset"][start:start + POINT_CHUNK]), -1))
+                for start in range(0, len(xyzi), POINT_CHUNK)])
+            ordered = detail[sample["order"]].float()
+            with torch.autocast(xyzi.device.type, enabled=False):
+                pooled = torch.cat((segment_csr(ordered, sample["pointer"], reduce="mean"),
+                                    segment_csr(ordered, sample["pointer"], reduce="max")), -1)
+            point = Point(coord=sample["voxel_xyzi"][:, :3], feat=sample["voxel_xyzi"],
+                          grid_coord=sample["grid"], grid_size=GRID_SIZE,
+                          offset=torch.tensor([len(sample["grid"])], device=xyzi.device))
+            point.sparsify()
+            point = self.backbone.embedding(point)
+            point.feat = point.feat + self.adapter(pooled)
+            point.sparse_conv_feat = point.sparse_conv_feat.replace_feature(point.feat)
+            features, coords, ancestors, voxel_ancestors = [], [], [], []
+            ancestry = inverse
+            voxel_ancestry = torch.arange(len(sample["grid"]), device=xyzi.device)
+            for level, encoder in enumerate(self.backbone.enc):
+                point = encoder(point)
+                if level:
+                    ancestry = point.pooling_inverse[ancestry]
+                    voxel_ancestry = point.pooling_inverse[voxel_ancestry]
+                # Store tensors before decoder mutation of the Point containers.
+                features.append(point.feat)
+                coords.append(point.coord)
+                ancestors.append(ancestry)
+                voxel_ancestors.append(voxel_ancestry)
+            point = self.backbone.dec(point)
+            if self.mode == "conditional" or self.mode in (*RELATION_MODES, *NORMAL_MODES):
+                unified = self._checkpoint(self.conditional, pooled, sample["voxel_xyzi"][:, :3],
+                    voxel_ancestors + [voxel_ancestors[0]], coords + [point.coord], features + [point.feat])
+                if self.relation is not None:
+                    unified = self.relation(unified, sample["voxel_xyzi"][:, :3], sample["neighbors"],
+                                            recompute=self.recompute)
+                output, probabilities = [], []
+                chunk = RAY_CHUNK if fields is not None else POINT_CHUNK
+                for start in range(0, len(xyzi), chunk):
+                    end = min(start + chunk, len(xyzi))
+                    def score_points(e, context, offset, begin=start, stop=end):
+                        state = context + self.point_detail(e) + self.point_position(offset)
+                        if fields is not None:
+                            # Casting BEFORE the compatibility/head computation preserves
+                            # FP32 ranking precision; a cast of BF16 logits would not.
+                            with torch.autocast(xyzi.device.type, enabled=False):
+                                hidden, prob = self.compatibility(state.float(), sample["observation"], fields, begin, stop)
+                                return self.head(hidden).squeeze(-1), prob
+                        return self.head(state).squeeze(-1).float()
+                    result = self._checkpoint(score_points, detail[start:end], unified[inverse[start:end]],
+                                              sample["offset"][start:end])
+                    output.append(result[0] if fields is not None else result)
+                    if fields is not None and normal_loss and sample.get("normal_training", False):
+                        probabilities.append(result[1])
+                scores = torch.cat(output)
+                if normal_loss:
+                    auxiliary = scores.sum() * 0
+                    if probabilities:
+                        observation = sample["observation"]
+                        selected = ((sample["targets"] == 0) & (observation["distance"] >= LOWER)
+                                    & (observation["distance"] <= UPPER))
+                        prob = torch.cat(probabilities)
+                        with torch.autocast(xyzi.device.type, enabled=False):
+                            auxiliary = sum(joint_nll(prob[:, i], fields[str(size)]["log_weights"],
+                                                      observation["grids"][str(size)], selected)
+                                            for i, size in enumerate(SCALES)) / len(SCALES)
+                    return scores, auxiliary
+                return scores
+            context = self.context(point.feat)
+            keys, values = self.interaction.project(features) if self.interaction is not None else ((), ())
+
+            def score(start, end, e):
+                indices = [a[start:end] for a in ancestors]
+                sampling = self.sampling(torch.cat((e, features[0][indices[0]]), -1))
+                hidden = self.head[0](torch.cat((sampling, context[indices[0]]), -1))
+                if self.interaction is not None:
+                    interaction = self.interaction(xyzi[start:end, :3], sampling, indices, coords, keys, values)
+                    hidden = hidden + self.interaction_weight(interaction)
+                return self.head[2](self.head[1](hidden)).squeeze(-1).float()
+
             output = []
             for start in range(0, len(xyzi), POINT_CHUNK):
                 end = min(start + POINT_CHUNK, len(xyzi))
-                def score_points(e, context, offset, normal=None):
-                    state = context + self.point_detail(e) + self.point_position(offset)
-                    if normal is not None:
-                        state = state + self.normal_evidence(normal)
-                    return self.head(state).squeeze(-1).float()
-                output.append(self._checkpoint(score_points, detail[start:end], unified[inverse[start:end]],
-                                               sample["offset"][start:end],
-                                               None if evidence is None else evidence[start:end]))
-            scores = torch.cat(output)
-            return (scores, auxiliary) if normal_loss else scores
-        context = self.context(point.feat)
-        keys, values = self.interaction.project(features) if self.interaction is not None else ((), ())
-
-        def score(start, end, e):
-            indices = [a[start:end] for a in ancestors]
-            sampling = self.sampling(torch.cat((e, features[0][indices[0]]), -1))
-            hidden = self.head[0](torch.cat((sampling, context[indices[0]]), -1))
-            if self.interaction is not None:
-                interaction = self.interaction(xyzi[start:end, :3], sampling, indices, coords, keys, values)
-                hidden = hidden + self.interaction_weight(interaction)
-            return self.head[2](self.head[1](hidden)).squeeze(-1).float()
-
-        output = []
-        for start in range(0, len(xyzi), POINT_CHUNK):
-            end = min(start + POINT_CHUNK, len(xyzi))
-            # Bind block bounds; checkpoint recomputation occurs after this loop.
-            def block(e, begin=start, stop=end):
-                return score(begin, stop, e)
-            output.append(self._checkpoint(block, detail[start:end]))
-        return torch.cat(output)
+                # Bind block bounds; checkpoint recomputation occurs after this loop.
+                def block(e, begin=start, stop=end):
+                    return score(begin, stop, e)
+                output.append(self._checkpoint(block, detail[start:end]))
+            return torch.cat(output)
 
 
 def scatter_scores(scores, slots, slot_count):
@@ -443,7 +460,7 @@ def rank_sample(positive, negative, seed):
 
 
 def ranking_loss(logits, targets, seed, tau=1., *, auc_weight=.1, fpr95_weight=.1, return_terms=False):
-    """One two-scan proxy, with all positives and weighted sampled negatives."""
+    """One supplied score pool, with all positives and weighted sampled negatives."""
     with torch.autocast(logits.device.type, enabled=False):
         positive, negative = logits[targets == 1].float(), logits[targets == 0].float()
         zero = logits.float().sum() * 0

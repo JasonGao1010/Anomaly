@@ -23,12 +23,11 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, Scans, file_sha256, identity,
-                   load_manifest, replace_background, write_json)
+                   load_manifest, write_json)
 from .evaluate import PreparedScans, autocast, better, evaluate, memory_available, precision
 from .model import (POINT_CHUNK, Segmentor, balanced_loss, ranking_loss, to_device,
-                    LITEPT_COMMIT, WEIGHTS_REVISION, WEIGHTS_SHA256, RELATION_MODES, RELATION_CHUNK)
-from .normal import (NORMAL_MODES, NormalDistribution, joint_nll, prediction_metrics,
-                     AZIMUTH_BINS, ELEVATION_BINS, HYPOTHESES)
+                    LITEPT_COMMIT, WEIGHTS_REVISION, WEIGHTS_SHA256, RELATION_MODES)
+from .normal import NORMAL_MODES, SCALES, HYPOTHESES, KERNELS, RAY_CHUNK, LOWER, UPPER
 
 
 EPOCHS = (8, 4)
@@ -71,13 +70,13 @@ def material_order(order, manifest, indices, start, stop):
     return result
 
 
-def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None):
+def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None, passes=2):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
     if manifest.get("version") == NATIVE_VERSION:
         order = sum((epoch_order(len(manifest["records"]), seed, 1, epoch)
-                     for epoch in range(2 * segment, 2 * segment + 2)), [])
+                     for epoch in range(passes * segment, passes * segment + passes)), [])
         if updates != math.ceil(len(order) / BATCH_SIZE):
-            raise ValueError("native training visits every fixed record exactly twice")
+            raise ValueError("native training must finish the configured complete data passes")
         return order
     if background:
         reference = load_manifest(background["manifest"], "train")
@@ -187,15 +186,9 @@ def local_mask(sample, local):
 
 
 def forward_loss(model, samples, counts, *, rank_weight=0., rank_seed=0, auc_weight=.1, fpr95_weight=.1,
-                 local=None, local_count=0, record_points=False, normal_weight=0.):
-    """Retain both full-scan graphs; concatenate scores only for the training objective."""
-    if getattr(model, "normal", None) is not None:
-        outputs = [model(sample, normal_loss=True) for sample in samples]
-        predictions = [out[0] for out in outputs]
-        normal = sum(out[1] for out in outputs) * normal_weight
-    else:
-        predictions = [model(sample) for sample in samples]
-        normal = None
+                 local=None, local_count=0, record_points=False):
+    """Legacy per-pair objectives; the complete model uses cached_backward."""
+    predictions = [model(sample) for sample in samples]
     prediction = torch.cat(predictions)
     targets = torch.cat([sample["targets"] for sample in samples])
     bce = balanced_loss(prediction, targets, counts)
@@ -205,9 +198,6 @@ def forward_loss(model, samples, counts, *, rank_weight=0., rank_seed=0, auc_wei
     else:
         rank, details = bce * 0, {}
     loss = bce + rank_weight * rank
-    if normal is not None:
-        loss = loss + normal
-        details["normal_nll"] = normal.detach()
     if record_points:
         details["point_scores"] = [value.detach() for value in predictions]
     if local is not None:
@@ -248,6 +238,83 @@ def restore_rng(saved, device):
     torch.set_rng_state(saved["torch"])
     if saved["cuda"] is not None:
         torch.cuda.set_rng_state(saved["cuda"], device)
+
+
+def cached_backward(model, samples, device, *, rank_weight, rank_seed, microbatch=2, scaler=None):
+    """Joint effective-batch detection gradient with fixed microbatch forwards.
+
+    Replay uses the exact same inputs/RNG and pre-forward buffers. Running BN
+    statistics advance only during the first logical pass, never twice.
+    """
+    def buffers():
+        return {name: value.detach().clone() for name, value in model.named_buffers()}
+
+    def restore_buffers(saved):
+        with torch.no_grad():
+            for name, value in model.named_buffers():
+                value.copy_(saved[name])
+
+    cached, scores, labels = [], [], []
+    for begin in range(0, len(samples), microbatch):
+        state = dict(rng=rng_state(device), buffers=buffers(), begin=begin)
+        pair = [to_device(sample, device) for sample in samples[begin:begin + microbatch]]
+        with torch.no_grad(), autocast(device):
+            prediction = [model(sample) for sample in pair]
+        scores.extend(prediction)
+        labels.extend(sample["targets"] for sample in pair)
+        cached.append(state)
+        del pair, prediction
+    final_rng, final_buffers = rng_state(device), buffers()
+    leaf = torch.cat(scores).detach().requires_grad_()
+    targets = torch.cat(labels)
+    counts = torch.stack([(targets == label).sum() for label in (0, 1)])
+    bce = balanced_loss(leaf, targets, counts)
+    rank, details = ranking_loss(leaf, targets, rank_seed) if rank_weight else (bce * 0, {})
+    detection = bce + rank_weight * rank
+    if not torch.isfinite(detection):
+        raise FloatingPointError("nonfinite effective-batch detection loss")
+    if details.get("recall") is not None and abs(float(details["recall"]) - .95) > 2e-6:
+        raise FloatingPointError("effective-batch soft recall did not reach 0.95")
+    gradient, = torch.autograd.grad(detection, leaf)
+    # Equal weight per eligible normal scan, then scale/block means inside it.
+    normal_count = sum(bool(sample.get("normal_training", False)) and bool((sample["targets"] == 0).any())
+                       for sample in samples)
+    auxiliary = leaf.new_zeros(())
+    offset, replay_error = 0, 0.
+    try:
+        for saved in cached:
+            restore_rng(saved["rng"], device)
+            restore_buffers(saved["buffers"])
+            begin = saved["begin"]
+            pair = [to_device(sample, device) for sample in samples[begin:begin + microbatch]]
+            # The backbone already forwards each scan independently. Applying the
+            # cached chain rule immediately releases that scan's activations;
+            # neither the eight-scan ranking pool nor BN's forward batch changes.
+            for sample in pair:
+                with autocast(device):
+                    prediction, normal = model(sample, normal_loss=True)
+                stop = offset + len(prediction)
+                reference = leaf.detach()[offset:stop]
+                error = (prediction.detach() - reference).abs().max()
+                replay_error = max(replay_error, float(error))
+                # Check the bound on every update, not just the implementation fixture.
+                if not torch.allclose(prediction.detach(), reference, atol=1e-5, rtol=1e-5):
+                    raise FloatingPointError(f"gradient-cache replay changed logits (max error {float(error):.8g})")
+                normal = normal / max(normal_count, 1)
+                surrogate = (prediction * gradient[offset:stop]).sum() + .1 * normal
+                if not torch.isfinite(surrogate):
+                    raise FloatingPointError("nonfinite gradient-cache replay loss")
+                (scaler.scale(surrogate) if scaler is not None else surrogate).backward()
+                auxiliary += normal.detach()
+                offset = stop
+                del prediction, normal, surrogate
+            del pair
+    finally:
+        restore_buffers(final_buffers)
+        restore_rng(final_rng, device)
+    return detection.detach() + .1 * auxiliary, dict(bce=bce.detach(), **details,
+        normal_nll=auxiliary, normal_scans=normal_count, replay_max_abs=replay_error,
+        ranking_scans=len(samples), point_scores=[value.detach() for value in scores])
 
 
 def point_record(directory, train, order, model, device, updates, resume=False, identity_source=None):
@@ -426,7 +493,7 @@ def code_record():
 
 def configuration(train, val, device, world_size, *, updates=None, initial=None,
                   eval_every=None, recipe="mixed", optimizer_state="reset", segment=0, objective="bce", branch=None,
-                  hard_pool=None, material_indices=None, baseline_eval=None):
+                  hard_pool=None, material_indices=None, baseline_eval=None, passes=None):
     if branch:
         parent = torch.load(initial, map_location="cpu", weights_only=False)
         previous = parent["config"]
@@ -489,6 +556,32 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 augmentation=False, point_chunk=POINT_CHUNK, grid_size=.05,
                 precision=str(precision(device)), sparse_precision="float32", world_size=world_size,
                 code=code_record())
+    if recipe == "field":
+        if (train["version"] != NATIVE_VERSION or world_size != 1 or not passes or passes < 1
+                or file_sha256(initial) != WEIGHTS_SHA256 or optimizer_state != "reset"):
+            raise ValueError("field training requires fixed native data, public weights, explicit passes and one GPU")
+        visits = passes * len(train["records"])
+        updates = math.ceil(visits / BATCH_SIZE)
+        result.update(version=NATIVE_VERSION, model="field", recipe="field", epochs=passes, updates=updates,
+            scan_visits=visits, initial=str(initial.resolve()), initial_sha256=WEIGHTS_SHA256,
+            optimizer_state="reset", peak_lr=PEAK_LR[0], microbatch=2, objective="metrics", precision="torch.float32",
+            eval_every=eval_every or updates, sampling_segment=0,
+            sampling="complete shuffled passes; last effective batch may contain fewer than eight scans",
+            loss=dict(bce="class means over all effective-batch supervised points", ranking_scope="effective batch",
+                tau=1., ap_weight=1., auc_weight=.1, fpr95_weight=.1, normal_weight=.1,
+                positive_anchors=256, positive_references="all", normal_top=512, normal_random=3584,
+                normal_weights="top: 1; rest: population / sample; normalize by full normal count",
+                threshold_recall=.95, threshold_gradient="implicit", bce_only_fraction=.1, ramp_end_fraction=.2,
+                rank_seed="seed * 100000000 + update * 8; independent generator",
+                normal_reduction="mean of point-normalized block joint NLLs, then scales, then eligible normal scans"),
+            normal_field=dict(scales=SCALES, hypotheses=HYPOTHESES, kernels=KERNELS,
+                ray_chunk=RAY_CHUNK, range_m=[LOWER, UPPER], ray_origin="scan reference origin approximation",
+                precision="FP32 field, ray density, compatibility and output head", normal_pretraining=False),
+            model_precision="FP32 including backbone; at most two full attention patches per chunk, recomputed in backward",
+            gradient_cache=dict(microbatch=2, score_atol=1e-5, score_rtol=1e-5,
+                forwards="one score pass plus one replay; per-scan activation release; BN advances once"),
+            validation="val19 development; checkpoint selection permitted; no independent final-test claim")
+        return result
     if recipe == "native":
         visits = 2 * len(train["records"])
         if optimizer_state == "inherit":
@@ -661,7 +754,7 @@ def write_result(directory, state, config):
 
 def train_stage(args, train, val, seed, method, device, config):
     global STOP
-    if seed != 0 and not config.get("decoder_comparison"):
+    if seed != 0 and not config.get("decoder_comparison") and method != "field":
         raise ValueError("F240-R2 fixes the sole experiment seed to 0")
     rank, world_size = rank_info()
     native = method == "conditional" or method in (*RELATION_MODES, *NORMAL_MODES)
@@ -701,13 +794,6 @@ def train_stage(args, train, val, seed, method, device, config):
                            inherited_rng=True, inherited_sampling_offset=config.get("start_update", 0)*BATCH_SIZE)
     elif stage == 1:
         load_record = model.load_pretrained(args.initial if native else args.weights)
-        if method in NORMAL_MODES:
-            prediction_path = Path(config["normal_prediction"]["initial"]) / str(seed) / method / "last.pt"
-            normal_state = torch.load(prediction_path, map_location="cpu", weights_only=False)
-            if not normal_state["complete"] or normal_state["train_manifest"] != train["sha256"]:
-                raise ValueError("normal initialization must finish its matched normal-data experiment")
-            model.normal.load_state_dict(normal_state["model"], strict=True)
-            load_record["normal_prediction"] = str(prediction_path)
     elif pilot:
         if (not parent.get("complete") or not parent.get("selected") or
                 parent["validation"]["manifest_sha256"] != val["sha256"]):
@@ -732,7 +818,7 @@ def train_stage(args, train, val, seed, method, device, config):
                            inherited=sorted(inherited), new=sorted(expected_new))
     model.to(device)
     optimizer = optimizer_for(model, stage)
-    scaler = torch.amp.GradScaler("cuda", enabled=precision(device) == torch.float16)
+    scaler = torch.amp.GradScaler("cuda", enabled=method != "field" and precision(device) == torch.float16)
     steps_per_epoch = config.get("eval_every", config["updates"]) if pilot else math.ceil(len(train["records"]) / BATCH_SIZE)
     total = config["updates"] if pilot else EPOCHS[stage - 1] * steps_per_epoch
     schedule_total = config.get("schedule_updates", total)
@@ -795,7 +881,7 @@ def train_stage(args, train, val, seed, method, device, config):
         del parent
         full_order = pilot_order(train, seed, schedule_total, sampling=config.get("sampling"),
                                  segment=config.get("sampling_segment", 0), paired=config.get("recipe") == "paired",
-                                 background=config.get("background_reference"))
+                                 background=config.get("background_reference"), passes=config.get("epochs", 2) if method == "field" else 2)
         if branch and full_order != json.loads(Path(config["reference_sampling"]).read_text())["order"]:
             raise ValueError("branch scan order differs from the original recorded stream")
         reference_order = full_order
@@ -814,7 +900,7 @@ def train_stage(args, train, val, seed, method, device, config):
                 sources=source_counts(train, executed), distinct_records=len(set(executed)),
                 executed_order=executed, start_update=config.get("start_update", 0),
                 replaced_visits=sum(a!=b for a,b in zip(reference_order,full_order)),
-                passes=None if branch else 2, scans_per_pass=len(train["records"]), visits=len(executed)))
+                passes=None if branch else config.get("epochs", 2), scans_per_pass=len(train["records"]), visits=len(executed)))
         if config.get("recipe") == "paired" and rank == 0:
             paired_updates = min(total, PAIRED_UPDATES)
             reference = pilot_order(train, seed, paired_updates)
@@ -895,29 +981,39 @@ def train_stage(args, train, val, seed, method, device, config):
             pair_size = config["microbatch"] if native else 1
             pair_count = math.ceil(len(samples) / pair_size)
             ramp = (1. if continuation else ranking_weight(step, schedule_total)) if config.get("objective") == "metrics" else 0.
-            for pair_index, begin in enumerate(range(0, len(samples), pair_size)):
-                pair = [to_device(sample, device) for sample in samples[begin:begin + pair_size]]
-                with autocast(device):
-                    loss, details = forward_loss(model, pair, counts, rank_weight=ramp / pair_count,
-                                                rank_seed=seed * 100000000 + (step + config.get("parent_updates", 0)) * 8 + pair_index,
-                                                auc_weight=config.get("loss", {}).get("auc_weight", .1),
-                                                fpr95_weight=config.get("loss", {}).get("fpr95_weight", .1),
-                                                local=local, local_count=local_count, record_points=recording is not None,
-                                                normal_weight=.1 / len(global_indices))
-                if not torch.isfinite(loss):
-                    raise FloatingPointError("nonfinite segmentation loss")
-                if details.get("recall") is not None and abs(float(details["recall"]) - .95) > 2e-6:
-                    raise FloatingPointError("smooth recall threshold did not reach 0.95")
-                scaler.scale(loss).backward()
+            if method == "field":
+                loss_sum, details = cached_backward(model, samples, device, rank_weight=ramp,
+                    rank_seed=seed * 100000000 + step * 8, microbatch=pair_size, scaler=scaler)
                 if recording is not None:
-                    for offset, (sample, scores) in enumerate(zip(pair, details.pop("point_scores"))):
-                        record_scan(recording, sample, scores, (step - 1) * BATCH_SIZE + begin + offset)
-                loss_sum += loss.detach()
-                for key in components:
-                    components[key] += float(details.get(key, 0.)) / (1 if key in ("bce", "local") else pair_count)
+                    for offset, (sample, scores) in enumerate(zip(samples, details["point_scores"])):
+                        record_scan(recording, sample, scores, (step - 1) * BATCH_SIZE + offset)
+                details.pop("point_scores")
+                components.update({key: float(details.get(key, 0.)) for key in (*components, "normal_nll")})
                 pair_details.append({key: float(value) if isinstance(value, torch.Tensor) else value
                                      for key, value in details.items() if key not in components})
-                del pair, loss, details
+            else:
+                for pair_index, begin in enumerate(range(0, len(samples), pair_size)):
+                    pair = [to_device(sample, device) for sample in samples[begin:begin + pair_size]]
+                    with autocast(device):
+                        loss, details = forward_loss(model, pair, counts, rank_weight=ramp / pair_count,
+                                                    rank_seed=seed * 100000000 + (step + config.get("parent_updates", 0)) * 8 + pair_index,
+                                                    auc_weight=config.get("loss", {}).get("auc_weight", .1),
+                                                    fpr95_weight=config.get("loss", {}).get("fpr95_weight", .1),
+                                                    local=local, local_count=local_count, record_points=recording is not None)
+                    if not torch.isfinite(loss):
+                        raise FloatingPointError("nonfinite segmentation loss")
+                    if details.get("recall") is not None and abs(float(details["recall"]) - .95) > 2e-6:
+                        raise FloatingPointError("smooth recall threshold did not reach 0.95")
+                    scaler.scale(loss).backward()
+                    if recording is not None:
+                        for offset, (sample, scores) in enumerate(zip(pair, details.pop("point_scores"))):
+                            record_scan(recording, sample, scores, (step - 1) * BATCH_SIZE + begin + offset)
+                    loss_sum += loss.detach()
+                    for key in components:
+                        components[key] += float(details.get(key, 0.)) / (1 if key in ("bce", "local") else pair_count)
+                    pair_details.append({key: float(value) if isinstance(value, torch.Tensor) else value
+                                         for key, value in details.items() if key not in components})
+                    del pair, loss, details
             sync_gradients(model)
             if world_size > 1:
                 dist.all_reduce(loss_sum)
@@ -929,7 +1025,7 @@ def train_stage(args, train, val, seed, method, device, config):
             state["gradient_norm_max"] = max(state["gradient_norm_max"], float(norm))
             finite = bool(torch.isfinite(norm))
             if not scaler.is_enabled() and not finite:
-                raise FloatingPointError("nonfinite BF16 gradient; no silent skipped update")
+                raise FloatingPointError("nonfinite gradient; no silent skipped update")
             before = scaler.get_scale()
             if local:
                 before_update = observe_local(model, local_sample, local, device)
@@ -1057,30 +1153,40 @@ def train_stage(args, train, val, seed, method, device, config):
     return True
 
 
-def preflight(args, train, val, device, config, resources, method="conditional"):
+def preflight(args, train, val, device, config, resources, method="field"):
     """Measure the actual mixed update without changing the initial checkpoint."""
-    seed_all(0)
+    seed = getattr(args, "seed", 0)
+    seed_all(seed)
     dataset = PreparedScans(train, relations=method in RELATION_MODES, normal=method in NORMAL_MODES)
-    order = pilot_order(train, 0, args.updates, sampling=config["sampling"],
+    order = pilot_order(train, seed, args.updates, sampling=config["sampling"],
                           segment=config["sampling_segment"], paired=config.get("recipe") == "paired",
-                          background=config.get("background_reference"))
+                          background=config.get("background_reference"), passes=config.get("epochs", 2) if method == "field" else 2)
     indices = order[:BATCH_SIZE]
-    if config.get("recipe") == "native":
+    if config.get("recipe") in ("native", "field"):
         model = Segmentor(method).to(device)
         model.load_pretrained(args.initial)
-        if method in NORMAL_MODES:
-            path = Path(config["normal_prediction"]["initial"]) / "0" / method / "last.pt"
-            saved = torch.load(path, map_location="cpu", weights_only=False)
-            if not saved["complete"] or saved["train_manifest"] != train["sha256"]:
-                raise ValueError("normal preflight requires its completed matched prediction model")
-            model.normal.load_state_dict(saved["model"], strict=True)
-            del saved
     else:
         parent = torch.load(args.initial, map_location="cpu", weights_only=False)
         model = Segmentor(parent["mode"]).to(device)
         model.load_state_dict(parent["model"], strict=True)
         del parent
     model.train()
+    if method == "field":
+        samples = [dataset[index] for index in indices]
+        torch.cuda.reset_peak_memory_stats(device)
+        start = time.perf_counter()
+        loss, details = cached_backward(model, samples, device, rank_weight=1., rank_seed=seed * 100000000 + 8)
+        details.pop("point_scores")
+        torch.cuda.synchronize(device)
+        if any(p.grad is not None and not torch.isfinite(p.grad).all() for p in model.parameters()):
+            raise FloatingPointError("nonfinite full-model effective-batch gradient")
+        result = dict(configuration=config, resources=resources, indices=indices, parameter_updates=0,
+            points=[len(sample["xyzi"]) for sample in samples], loss=float(loss),
+            details={key: float(value) if isinstance(value, torch.Tensor) else value for key, value in details.items()},
+            seconds=time.perf_counter() - start, peak_vram_bytes=torch.cuda.max_memory_allocated(device))
+        write_json(args.output / "preflight.json", result)
+        print(json.dumps({key: value for key, value in result.items() if key not in ("configuration", "resources")}))
+        return
     counts = torch.tensor([sum(train["records"][i][key] for i in indices)
                            for key in ("normal", "anomaly")], device=device)
     records = []
@@ -1102,8 +1208,7 @@ def preflight(args, train, val, device, config, resources, method="conditional")
             loss, details = forward_loss(model, pair, counts,
                                         rank_weight=(1. if stress else pair_size / len(indices))
                                         if config.get("objective") == "metrics" else 0.,
-                                        rank_seed=8 + pair_index, record_points=bool(config.get("recording")),
-                                        normal_weight=.1 / len(indices))
+                                        rank_seed=8 + pair_index, record_points=bool(config.get("recording")))
         loss.backward()
         if config.get("recording"):
             scores = details.pop("point_scores")
@@ -1131,339 +1236,61 @@ def preflight(args, train, val, device, config, resources, method="conditional")
                      ("mixed_batch_seconds", "peak_vram_bytes", "parameter_updates", "scans")}))
 
 
-def normal_prediction(args, train, device):
-    """Normal-only initialization and an optional predictive comparison."""
-    check = load_manifest(args.prediction_check, "train")
-    selected = [i for i, row in enumerate(train["records"]) if row["group"].startswith("normal_")]
-    checked = [i for i, row in enumerate(check["records"]) if row["group"].startswith("normal_")]
-    if not selected or not checked or any(train["records"][i]["anomaly"] for i in selected):
-        raise ValueError("normal prediction needs actual pure-normal training and check scans")
-    train_logs = {r.get("log_token") for r in train["records"]} - {None}
-    logs = check["split"]["logs"]
-    check_logs = {logs[check["records"][i]["scene"]] for i in checked}
-    if not check_logs or train_logs & check_logs:
-        raise ValueError("prediction checks must use the existing task-training-disjoint normal logs")
-    config = dict(train_manifest=train["sha256"], check_manifest=check["sha256"],
-                  train_indices=selected, check_indices=checked, seeds=args.seeds,
-                  passes=2, batch_size=BATCH_SIZE, peak_lr=.002, weight_decay=.005,
-                  angular_block_degrees=[2, 2], hypotheses=HYPOTHESES,
-                  context="eight adjacent angular blocks; target block completely excluded before context aggregation",
-                  rays="reference-origin effective rays; no claim of recovered per-firing poses or unobserved geometry",
-                  loss="proper joint mixture of Laplace log-range likelihoods; one latent hypothesis per block",
-                  point_evidence="marginal and leave-one-out likelihoods and residuals; no broadcast region loss",
-                  selection="two full normal-data passes; endpoint only; no hyperparameter or checkpoint selection",
-                  comparison="optional normal-prediction diagnostic; not a prerequisite for anomaly training",
-                  evaluation_role="previously exposed internal development normals, not an independent final test",
-                  check_scope="nuScenes normal logs; no STU normal generalization claim", code=code_record())
-    resources = runtime_snapshot()
-    processes = subprocess.run(["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits"],
-                               check=True, capture_output=True, text=True).stdout.splitlines()
-    if any(p.strip().isdigit() and int(p.strip()) != os.getpid() for p in processes):
-        raise RuntimeError("another CUDA experiment is active")
-    disk_check(200_000_000)
-    args.output.mkdir(parents=True, exist_ok=True)
-    write_json(args.output / "resources.json", resources)
-    write_json(args.output / "config.json", config)
-    dataset = PreparedScans(train, normal=True, voxel=False)
-    check_data = PreparedScans(check, normal=True, voxel=False)
-    results = {}
-    signal.signal(signal.SIGINT, stop_requested)
-    signal.signal(signal.SIGTERM, stop_requested)
-    for seed in args.seeds:
-        order = [selected[i] for epoch in range(2) for i in epoch_order(len(selected), seed, 9, epoch)]
-        steps = math.ceil(len(order) / BATCH_SIZE)
-        for method in args.methods:
-            directory = args.output / str(seed) / method
-            directory.mkdir(parents=True, exist_ok=True)
-            path = directory / "last.pt"
-            seed_all(seed)
-            model = NormalDistribution(method).to(device)
-            optimizer = torch.optim.AdamW(model.parameters(), lr=.002, weight_decay=.005)
-            start, elapsed = 0, 0.
-            if path.exists():
-                if not args.resume:
-                    raise ValueError(f"{path} exists; explicit resume is required")
-                saved = torch.load(path, map_location="cpu", weights_only=False)
-                if saved["config"] != config or saved["seed"] != seed or saved["mode"] != method:
-                    raise ValueError("normal prediction resume changed its scientific inputs")
-                if saved["complete"]:
-                    report = json.loads((directory / "result.json").read_text())
-                    results.setdefault(str(seed), {})[method] = report["metrics"]
-                    print(f"completed normal prediction: seed={seed} method={method}", flush=True)
-                    del model, optimizer, saved
-                    continue
-                model.load_state_dict(saved["model"])
-                optimizer.load_state_dict(saved["optimizer"])
-                start, elapsed = saved["updates"], saved["training_seconds"]
-                restore_rng(saved["rng"], device)
-                del saved
-            loader = DataLoader(dataset, batch_size=None, sampler=order[start * BATCH_SIZE:],
-                                num_workers=args.workers, pin_memory=True,
-                                **({"prefetch_factor": 1} if args.workers else {}),
-                                generator=torch.Generator().manual_seed(seed))
-            iterator = iter(loader)
-            model.train()
-            torch.cuda.reset_peak_memory_stats(device)
-            for step in range(start, steps):
-                began = time.perf_counter()
-                optimizer.zero_grad(set_to_none=True)
-                for group in optimizer.param_groups:
-                    group["lr"] = .002 * lr_factor(step + 1, steps)
-                size = min(BATCH_SIZE, len(order) - step * BATCH_SIZE)
-                loss_sum = 0.
-                for _ in range(size):
-                    sample = to_device(next(iterator), device)
-                    prediction = model(sample["observation"])
-                    loss = joint_nll(prediction, sample["observation"]["log_range"], sample["targets"] == 0) / size
-                    if not bool(torch.isfinite(loss)):
-                        raise FloatingPointError("nonfinite normal joint likelihood")
-                    loss.backward()
-                    loss_sum += float(loss.detach())
-                norm = nn.utils.clip_grad_norm_(model.parameters(), 1.)
-                if not bool(torch.isfinite(norm)):
-                    raise FloatingPointError("nonfinite normal prediction gradient")
-                optimizer.step()
-                elapsed += time.perf_counter() - began
-                if (step + 1) % 50 == 0 or step + 1 == steps or STOP:
-                    print(json.dumps(dict(event="normal_update", seed=seed, method=method,
-                                          step=step + 1, steps=steps, loss=loss_sum,
-                                          training_seconds=elapsed,
-                                          peak_vram_bytes=torch.cuda.max_memory_allocated(device))), flush=True)
-                if (step + 1) % 250 == 0 or step + 1 == steps or STOP:
-                    disk_check(50_000_000)
-                    atomic_save(path, dict(model=model.state_dict(), optimizer=optimizer.state_dict(),
-                        config=config, train_manifest=train["sha256"], mode=method, seed=seed,
-                        updates=step + 1, training_seconds=elapsed, rng=rng_state(device), complete=False))
-                if STOP:
-                    return
-            del iterator, loader
-            model.eval()
-            rows = []
-            loader = DataLoader(check_data, batch_size=None, sampler=checked, num_workers=args.workers,
-                                pin_memory=True, **({"prefetch_factor": 1} if args.workers else {}),
-                                generator=torch.Generator().manual_seed(seed))
-            for sample in loader:
-                index = int(sample["index"])
-                metrics = prediction_metrics(model, to_device(sample, device))
-                row = check["records"][index]
-                rows.append(dict(index=index, log=logs[row["scene"]], **metrics))
-            mean = {key: float(np.mean([r[key] for r in rows]))
-                    for key in ("mae_m", "mse_m2", "coverage90", "width90_m", "joint_nll")}
-            mean["coverage90_error"] = abs(mean["coverage90"] - .9)
-            report = dict(seed=seed, method=method, complete=True, frames=len(rows),
-                          points=sum(r["points"] for r in rows), aggregation="equal weight per real scan",
-                          metrics=mean, scans=rows, parameters=sum(p.numel() for p in model.parameters()),
-                          updates=steps, scan_visits=len(order), training_seconds=elapsed,
-                          peak_vram_bytes=torch.cuda.max_memory_allocated(device))
-            write_json(directory / "result.json", report)
-            saved = torch.load(path, map_location="cpu", weights_only=False)
-            saved["complete"] = True
-            atomic_save(path, saved)
-            results.setdefault(str(seed), {})[method] = mean
-            print(json.dumps(dict(event="normal_result", **{k: v for k, v in report.items() if k != "scans"})), flush=True)
-            del model, optimizer, saved, loader
-            gc.collect()
-            torch.cuda.empty_cache()
-    decisions = {}
-    for seed, pair in results.items():
-        if not all(method in pair for method in NORMAL_MODES):
-            continue
-        a, b = pair["density"], pair["geometry"]
-        differences = {key: b[key] - a[key] for key in a}
-        passed = all(differences[key] < 0 for key in ("mae_m", "joint_nll", "coverage90_error"))
-        passed = passed and differences["width90_m"] <= 0
-        decisions[seed] = dict(geometry_minus_density=differences, prediction_gate_passed=passed)
-    if decisions:
-        write_json(args.output / "comparison.json", dict(seeds=decisions,
-            prediction_gate_passed=all(row["prediction_gate_passed"] for row in decisions.values()),
-            interpretation="normal-prediction diagnostic only; does not gate anomaly training or establish detection improvement"))
-
-
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--train-manifest", type=Path, default=Path("results/data/train.json"))
+    parser = argparse.ArgumentParser(description="Train the complete observation-constrained normal-field segmentor.")
+    parser.add_argument("--train-manifest", type=Path, default=Path("results/data/native/train.json"))
     parser.add_argument("--val-manifest", type=Path, default=Path("assets/val.json"))
-    parser.add_argument("--normal-manifest", type=Path)
-    parser.add_argument("--output", type=Path, default=Path("results/train/main"))
-    parser.add_argument("--initial", type=Path, default=Path("results/train/r2/0/base/best.pt"))
-    parser.add_argument("--updates", type=int, default=2000)
-    parser.add_argument("--eval-every", type=int, default=500)
-    parser.add_argument("--recipe", choices=("mixed", "old", "paired", "background", "native"), default="paired")
-    parser.add_argument("--objective", choices=("bce", "metrics"), default="bce")
-    parser.add_argument("--branch", choices=("replay", "ap", "lr", "control", "hard", "material-control", "material", "local"))
-    parser.add_argument("--hard-pool", type=Path)
-    parser.add_argument("--material-indices", type=int, nargs="+")
-    parser.add_argument("--baseline-eval", type=Path)
-    parser.add_argument("--score-path", type=Path, help="export exact endpoint validation scores in official point order")
-    parser.add_argument("--record-points", action="store_true",
-                        help="retain every training-point logit, identities, per-update buffers/RNG, interval checkpoints and validation scores")
-    parser.add_argument("--optimizer-state", choices=("inherit", "reset"), default="reset")
-    parser.add_argument("--sampling-segment", type=int, default=0)
-    parser.add_argument("--seeds", type=int, nargs="+", default=[0],
-                        help="legacy runs use seed 0; decoder comparisons permit matched nonnegative seeds")
-    parser.add_argument("--methods", nargs="+", choices=("conditional", *RELATION_MODES, *NORMAL_MODES),
-                        help="fresh N1 decoder comparison with endpoint-only development evaluation")
-    parser.add_argument("--normal-prediction", action="store_true", help="train/evaluate the requested normal predictors")
-    parser.add_argument("--prediction-check", type=Path, default=Path("results/train/native/diagnostics/check.json"))
-    parser.add_argument("--normal-initial", type=Path, help="completed normal-predictor initialization directory")
+    parser.add_argument("--output", type=Path, default=Path("results/train/field"))
+    parser.add_argument("--initial", type=Path, default=Path("assets/nuscenes.pth"))
+    parser.add_argument("--epochs", type=int, required=True, help="explicit complete training-data passes")
+    parser.add_argument("--eval-every", type=int, help="updates between development evaluations; default: endpoint only")
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--save-every", type=int, default=500)
+    parser.add_argument("--score-path", type=Path, help="optional endpoint scores in official point order")
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--check", action="store_true", help="one complete effective-batch backward; no parameter update")
     args = parser.parse_args()
-    if (args.workers < 0 or args.threads < 1 or args.save_every < 1 or args.updates < 1
-            or args.eval_every < 1 or args.sampling_segment < 0 or min(args.seeds) < 0
-            or len(set(args.seeds)) != len(args.seeds)):
-        parser.error("invalid runtime resource settings or duplicate seeds")
-    if not args.methods and args.seeds != [0]:
-        parser.error("legacy experiments retain seed 0; repeated seeds require --methods")
-    if args.methods and (args.recipe != "native" or args.objective != "metrics" or args.branch
-                         or args.optimizer_state != "reset" or args.sampling_segment or args.record_points
-                         or args.score_path or len(set(args.methods)) != len(args.methods)):
-        parser.error("decoder comparison requires fresh native metric training, unique methods and dedicated outputs")
+    if (args.epochs < 1 or args.seed < 0 or args.workers < 0 or args.threads < 1 or args.save_every < 1
+            or args.eval_every is not None and args.eval_every < 1):
+        parser.error("invalid training budget or runtime settings")
+    if int(os.environ.get("WORLD_SIZE", 1)) != 1:
+        parser.error("the full effective-batch gradient cache currently supports one GPU")
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     if not torch.cuda.is_available():
         parser.error("LitePT sparse convolution/FlashAttention requires CUDA")
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    device = torch.device("cuda", local_rank)
+    device = torch.device("cuda", 0)
     torch.cuda.set_device(device)
-    if int(os.environ.get("WORLD_SIZE", 1)) > 1:
-        dist.init_process_group("nccl")
-    rank, world_size = rank_info()
-    if world_size > BATCH_SIZE:
-        parser.error("at most eight GPUs for effective batch eight")
     train, val = load_manifest(args.train_manifest, "train"), load_manifest(args.val_manifest, "val")
-    if args.normal_prediction:
-        if (world_size != 1 or not args.methods or args.normal_initial
-                or any(method not in NORMAL_MODES for method in args.methods)):
-            parser.error("normal prediction requires one GPU and density and/or geometry methods")
-        if args.workers + args.threads > len(os.sched_getaffinity(0)) or args.check:
-            parser.error("invalid normal prediction resources or incompatible --check")
-        normal_prediction(args, train, device)
-        return
-    if (args.recipe == "background") != bool(args.normal_manifest):
-        parser.error("background comparison requires --normal-manifest and no other recipe accepts it")
-    if args.normal_manifest:
-        train = replace_background(train, args.normal_manifest, args.train_manifest)
-    if train["version"] not in (PILOT_VERSION, NATIVE_VERSION):
-        parser.error("training requires a mixed or native two-domain manifest")
-    if args.branch and (args.recipe != "native" or args.check):
-        parser.error("diagnostic branches require native training, not preflight")
-    if bool(args.hard_pool) != (args.branch in ("control","hard")):
-        parser.error("control/hard branches require the C-scored hard pool")
-    if (bool(args.material_indices) != (args.branch in ("material-control", "material", "local"))
-            or bool(args.baseline_eval) != bool(args.material_indices)):
-        parser.error("material branches require verified indices and the corrected initial evaluation")
-    if args.recipe == "native" and not args.branch:
-        args.updates = math.ceil(2 * len(train["records"]) / BATCH_SIZE)
-    elif args.recipe != "native" and args.objective != "bce":
-        parser.error("the paired metric objective is only defined for the native experiment")
-    normal_comparison = args.methods and any(method in NORMAL_MODES for method in args.methods)
-    if normal_comparison and (not args.normal_initial or any(method in RELATION_MODES for method in args.methods)):
-        parser.error("normal branches need --normal-initial and cannot mix with relation methods")
-    if args.methods:
-        args.eval_every = args.updates
-    config = configuration(train, val, device, world_size, updates=args.updates, initial=args.initial,
-                           eval_every=args.eval_every, recipe=args.recipe,
-                           optimizer_state=args.optimizer_state, segment=args.sampling_segment,
-                           objective=args.objective, branch=args.branch, hard_pool=args.hard_pool,
-                           material_indices=args.material_indices, baseline_eval=args.baseline_eval)
-    methods = args.methods or ["conditional" if args.recipe == "native" else "pilot"]
-    if args.methods and not normal_comparison:
-        config.update(seeds=args.seeds, decoder_comparison=dict(methods=methods,
-            neighbors="union of eight spatial and eight ray-direction nearest voxels; self/duplicates excluded",
-            edge_chunk=RELATION_CHUNK, selection="fixed endpoint, no checkpoint or seed selection",
-            inputs="shared N1 state, relative position, range and unit ray directions; no labels or missing-ray claims",
-            condition_ablation="zero explicit conditions in the added relation operator only; N1 and neighbors unchanged",
-            evaluation_role="val19 is previously used development data, not an independent final test",
-            training_budget="identical two complete passes, updates, loss, initialization and sample stream per seed",
-            seed_plan=[0, 1, 2],
-            screening="seed 0 first; stop expansion if the candidate is no better in both AP and FPR95 than either control; otherwise repeat paired seeds 1 and 2 before a stability claim",
-            stability="paired AP/FPR95 changes across seeds; a single seed is only a screening result"),
-            validation="one full val19 development evaluation at the fixed endpoint")
-    if normal_comparison:
-        check_path = args.normal_initial / "comparison.json"
-        decision = json.loads(check_path.read_text()) if check_path.exists() else None
-        config.update(seeds=args.seeds, decoder_comparison=dict(methods=methods,
-            selection="fixed endpoint, no checkpoint or seed selection", evaluation_role="development only",
-            training_budget="same training records twice and same N1 initialization/loss; normal-predictor initialization is recorded separately"),
-            normal_prediction=dict(initial=str(args.normal_initial.resolve()), auxiliary_weight=.1,
-                angular_block_degrees=[2, 2], hypotheses=HYPOTHESES,
-                supervision="anomaly gradients traverse point evidence into the normal predictor; normal-only joint NLL anchors its predictions",
-                prediction_check=decision), validation="one full val19 development evaluation at the fixed endpoint")
-    if args.record_points:
-        if args.recipe != "native" or args.branch or world_size != 1 or args.score_path:
-            parser.error("complete point recording uses one native training run and its own interval score paths")
-        train_points = sum(row["points"] for row in train["records"])
-        val_points = sum(row["normal"] + row["anomaly"] for row in val["records"] if row["eligible"])
-        val_returns = sum(row["points"] for row in val["records"] if row["eligible"])
-        evaluations = math.ceil(args.updates / args.eval_every)
-        checkpoints = sorted(set(range(args.save_every, args.updates + 1, args.save_every))
-                             | set(range(args.eval_every, args.updates + 1, args.eval_every)) | {0, args.updates})
-        continuing = bool(config.get("continuation_schedule"))
-        if continuing:
-            checkpoints = [0, args.updates]
-        # Scores/identities, all interval states, an atomic copy, and bounded follow-up diagnostics.
-        budget = dict(training_scores_and_identities=(8 if continuing else 13) * train_points,
-            validation_metric_scores=4 * evaluations * val_points,
-            validation_all_returns_and_identities=(4 * evaluations + (0 if continuing else 5)) * val_returns,
-            checkpoints_and_atomic_copy=(len(checkpoints) + 3) * 160_000_000,
-            per_update_history_and_logs=100_000_000, followup_and_temporary=4_000_000_000)
-        peak = sum(budget.values())
-        config["recording"] = dict(training_point_visits=2 * train_points, checkpoint_updates=checkpoints,
-            validation_updates=list(range(args.eval_every, args.updates, args.eval_every)) + [args.updates],
-            additional_peak_bytes=peak, budget_bytes=budget, dataset_use="val19 development milestones; no independent test claim",
-            inference="Full single scans with corrected rotary arithmetic; no changes to BN, DropPath, losses or sampling",
-            full_activation_limit="All-update per-point activations are not retained; preserve complete inputs, scores, buffer/RNG history and interval training states for subsequent comparisons")
-    resources = runtime_snapshot() if rank == 0 else None
-    if args.workers * world_size + args.threads * world_size > len(os.sched_getaffinity(0)):
-        parser.error("worker and BLAS thread counts exceed the available CPU affinity")
-    processes = [None] * world_size
-    if dist.is_initialized():
-        dist.all_gather_object(processes, os.getpid())
-    else:
-        processes = [os.getpid()]
-    gpu_processes = subprocess.run(
-        ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits"],
-        check=True, capture_output=True, text=True, timeout=15).stdout.splitlines()
-    other = [int(p.strip()) for p in gpu_processes if p.strip().isdigit() and int(p.strip()) not in processes]
+    config = configuration(train, val, device, 1, initial=args.initial, recipe="field",
+                           eval_every=args.eval_every, passes=args.epochs)
+    config["seeds"] = [args.seed]
+    args.updates = config["updates"]
+    resources = runtime_snapshot()
+    if args.workers + args.threads > len(os.sched_getaffinity(0)):
+        parser.error("worker and numerical-library threads exceed CPU affinity")
+    running = subprocess.run(["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader,nounits"],
+                             check=True, capture_output=True, text=True, timeout=15).stdout.splitlines()
+    other = [int(pid.strip()) for pid in running if pid.strip().isdigit() and int(pid.strip()) != os.getpid()]
     if other:
         raise RuntimeError(f"other CUDA processes must finish before this run: {other}")
-    # Include best/last optimizer states and the largest atomic replacement.
-    comparison_peak = len(methods) * len(args.seeds) * (
-        600_000_000 + 4 * sum(r["normal"] + r["anomaly"] for r in val["records"] if r["eligible"]))
-    disk_check((config.get("recording", {}).get("additional_peak_bytes",
-                comparison_peak if args.methods else 2_000_000_000 if args.score_path else 1_000_000_000))
-               if not args.check else 100_000_000)
-    free, _ = torch.cuda.mem_get_info(device)
-    if free < 7_000_000_000:
-        raise RuntimeError(f"full-scan training verification needs a free GPU; only {free / 1e9:.1f} GB available")
-    if rank == 0:
-        args.output.mkdir(parents=True, exist_ok=True)
-        write_json(args.output / "resources.json", resources)
+    # Best/last optimizer states, atomic replacement, bounded logs and optional scores.
+    peak = 100_000_000 if args.check else 1_000_000_000 + (
+        4 * sum(row["normal"] + row["anomaly"] for row in val["records"] if row["eligible"])
+        if args.score_path else 0)
+    disk_check(peak)
+    args.output.mkdir(parents=True, exist_ok=True)
+    write_json(args.output / "resources.json", resources)
     if args.check:
-        if world_size != 1:
-            parser.error("--check uses one GPU; accumulation equivalence is tested separately")
-        for method in methods:
-            preflight(args, train, val, device, config, resources, method)
+        preflight(args, train, val, device, config, resources, "field")
         return
     signal.signal(signal.SIGINT, stop_requested)
     signal.signal(signal.SIGTERM, stop_requested)
-    if rank == 0:
-        print(json.dumps(dict(version=config["version"], seeds=args.seeds,
-                              methods=methods,
-                              samples=config["samples"], sampling=config["sampling"],
-                              eval_every=args.eval_every, optimizer_state=config["optimizer_state"],
-                              start_update=config.get("start_update", 0), planned_updates=config["updates"],
-                              output=str(args.output.resolve()))), flush=True)
-    for seed in args.seeds:
-        for method in methods:
-            if not train_stage(args, train, val, seed, method, device, config) or STOP:
-                return
-    if dist.is_initialized():
-        dist.destroy_process_group()
+    print(json.dumps(dict(model="field", seed=args.seed, samples=config["samples"],
+                          passes=args.epochs, updates=config["updates"], eval_every=config["eval_every"])), flush=True)
+    train_stage(args, train, val, args.seed, "field", device, config)
 
 
 if __name__ == "__main__":

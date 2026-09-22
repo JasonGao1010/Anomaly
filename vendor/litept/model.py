@@ -13,6 +13,7 @@ import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
 import torch_scatter
+from torch.utils.checkpoint import checkpoint
 
 from addict import Dict
 from timm.layers import DropPath
@@ -322,10 +323,12 @@ class PointROPEAttention(PointModule):
         attn_drop=0.0,
         proj_drop=0.0,
         order_index=0,
+        fp32_attention=False,
     ):
         super().__init__()
         assert channels % num_heads == 0
         self.channels = channels
+        self.fp32_attention = fp32_attention
         self.num_heads = num_heads
         self.scale = qk_scale or (channels // num_heads) ** -0.5
         self.order_index = order_index
@@ -340,6 +343,10 @@ class PointROPEAttention(PointModule):
 
         # pointrope
         self.rope = PointROPE(freq=rope_freq)
+
+    def attend(self, q, k, v):
+        return torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, dropout_p=self.attn_drop if self.training else 0., scale=self.scale)
 
     def forward(self, point):
 
@@ -359,7 +366,8 @@ class PointROPEAttention(PointModule):
         pos = point.grid_coord[order] # [N, 3]
         pos = pos.reshape(-1, 3).unsqueeze(0)
 
-        dtype = torch.get_autocast_dtype('cuda') if torch.is_autocast_enabled('cuda') else torch.float16
+        dtype = (torch.float32 if self.fp32_attention else
+                 torch.get_autocast_dtype('cuda') if torch.is_autocast_enabled('cuda') else torch.float16)
         q, k, v = qkv.to(dtype).chunk(3, dim=-1)
         q = q.reshape(-1, H, C // H).transpose(0,1)[None] # [1, H, N, head_dim]
         k = k.reshape(-1, H, C // H).transpose(0,1)[None] # [1, H, N, head_dim]
@@ -376,13 +384,33 @@ class PointROPEAttention(PointModule):
             v.reshape(-1, H, C // H)
         ], dim=1) # [N, 3, H, head_dim]
 
-        feat = flash_attn.flash_attn_varlen_qkvpacked_func(
-            qkv_rotated,
-            cu_seqlens,
-            max_seqlen=self.patch_size,
-            dropout_p=self.attn_drop if self.training else 0,
-            softmax_scale=self.scale,
-        ).reshape(-1, C)
+        if self.fp32_attention:
+            # The segmentor forwards one complete scan at a time. Its padding
+            # forms equal patches (or one short patch), exactly as above.
+            if len(point.offset) != 1:
+                raise ValueError("FP32 attention expects the segmentor's single-scan forward")
+            width = min(self.patch_size, len(point.feat))
+            q, k, v = qkv_rotated.reshape(-1, width, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(0)
+            # Independent patches keep their full receptive fields. Recompute
+            # quadratic attention activations instead of retaining every layer's.
+            patches = []
+            for start in range(0, len(q), 2):
+                args = (q[start:start + 2], k[start:start + 2], v[start:start + 2])
+                if self.training and torch.is_grad_enabled():
+                    patches.append(checkpoint(self.attend, *args, use_reentrant=False,
+                                              preserve_rng_state=True))
+                else:
+                    patches.append(self.attend(*args))
+            feat = torch.cat(patches)
+            feat = feat.transpose(1, 2).reshape(-1, C)
+        else:
+            feat = flash_attn.flash_attn_varlen_qkvpacked_func(
+                qkv_rotated,
+                cu_seqlens,
+                max_seqlen=self.patch_size,
+                dropout_p=self.attn_drop if self.training else 0,
+                softmax_scale=self.scale,
+            ).reshape(-1, C)
 
         feat = feat.to(qkv.dtype)
         feat = feat[inverse]
@@ -624,6 +652,7 @@ class Block(PointModule):
         enable_conv=True,
         enable_attn=True,
         rope_freq=100.0,
+        fp32_attention=False,
     ):
         super().__init__()
         self.channels = channels
@@ -662,6 +691,7 @@ class Block(PointModule):
                 attn_drop=attn_drop,
                 proj_drop=proj_drop,
                 order_index=order_index,
+                fp32_attention=fp32_attention,
             )
             self.norm2 = PointSequential(norm_layer(channels))
             self.mlp = PointSequential(
@@ -735,6 +765,7 @@ class LitePT(PointModule):
         pre_norm=True,
         shuffle_orders=True,
         enc_mode=False,
+        fp32_attention=False,
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
@@ -815,7 +846,8 @@ class LitePT(PointModule):
                         cpe_indice_key=f"stage{s}",
                         enable_conv=enc_conv[s],
                         enable_attn=enc_attn[s],
-                        rope_freq=enc_rope_freq[s]
+                        fp32_attention=fp32_attention,
+                        rope_freq=enc_rope_freq[s],
                     ),
                     name=f"block{i}",
                 )
@@ -865,7 +897,8 @@ class LitePT(PointModule):
                             cpe_indice_key=f"stage{s}",
                             enable_conv=dec_conv[s],
                             enable_attn=dec_attn[s],
-                            rope_freq=dec_rope_freq[s]
+                            fp32_attention=fp32_attention,
+                            rope_freq=dec_rope_freq[s],
                         ),
                         name=f"block{i}",
                     )

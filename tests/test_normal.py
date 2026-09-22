@@ -1,4 +1,4 @@
-"""Leakage, shared-hypothesis likelihood, and point-local evidence regressions."""
+"""Gaussian ray mathematics, target exclusion and full-batch gradient semantics."""
 
 from copy import deepcopy
 import math
@@ -6,206 +6,384 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from scipy.integrate import quad
 import torch
+from torch import nn
+from torch.nn import functional as F
 
-from src.normal import (NORMAL_MODES, NormalDistribution, angular_observation, component_log_prob,
-                        joint_nll, point_evidence, quantiles, ray_planes)
-from src.model import Segmentor, prepare_scan, to_device
-from src.train import seed_all
+from src.normal import (NormalField, Compatibility, angular_observation, joint_nll,
+                        ray_parameters, ray_log_prob, log_normal_mass, SCALES, LOWER, UPPER)
+from src.model import Segmentor, balanced_loss, ranking_loss, to_device
+from src.train import cached_backward, seed_all, rng_state, restore_rng
 
 
 def angular_scan():
-    az = np.deg2rad(np.array([.3, .7, 1.3, 1.7, 2.3, 2.7, 3.3, 3.7, -1.7, -1.3, -.7, -.3]))
-    el = np.deg2rad(np.full(len(az), -5.))
+    az, el = np.meshgrid(np.arange(-9.7, 10., .7), np.arange(-8.3, 3., .8))
+    az, el = np.deg2rad(az.ravel()), np.deg2rad(el.ravel())
     rays = np.column_stack((np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)))
-    ranges = np.linspace(8., 14., len(az))
-    xyzi = np.column_stack((rays * ranges[:, None], np.full(len(az), .4))).astype(np.float32)
-    return xyzi, rays
+    ranges = np.linspace(8., 24., len(az))
+    return np.column_stack((rays * ranges[:, None], np.full(len(az), .4))).astype(np.float32), rays
 
 
-@pytest.mark.parametrize("mode", NORMAL_MODES)
-def test_prediction_excludes_all_ranges_coordinates_and_intensities_in_target_block(mode):
+@pytest.mark.parametrize("size", SCALES)
+def test_field_excludes_entire_target_block_values_counts_and_gradients(size):
     xyzi, rays = angular_scan()
     first = angular_observation(xyzi, directions=rays)
-    group = first["group"][0]
-    target = first["group"] == group
+    grid = first["grids"][str(size)]
+    group = int(grid["group"][len(xyzi) // 2])
+    target = (grid["group"] == group).numpy()
     changed = xyzi.copy()
-    changed[target, :3] *= np.array([.2, 7., 3., .1])[:, None]
+    changed[target, :3] *= np.linspace(.2, 7., target.sum())[:, None]
     changed[target, 3] = 1000.
     second = angular_observation(changed, directions=rays)
     seed_all(7)
-    model = NormalDistribution(mode)
-    # Activate every path; zero-initialized output weights could hide leakage.
-    with torch.no_grad():
-        for parameter in model.parameters():
-            parameter.add_(torch.randn_like(parameter) * .03)
-    a, b = model(first), model(second)
-    for name in ("mu", "scale", "valid"):
-        assert torch.equal(a[name][target], b[name][target])
-    assert torch.equal(a["log_weights"][group], b["log_weights"][group])
+    model = NormalField(recompute=False)
+    a, b = model(first)[str(size)], model(second)[str(size)]
+    for name in a:
+        torch.testing.assert_close(a[name][group], b[name][group], atol=0, rtol=0)
+    # Repeating target points changes its population but cannot change its field.
+    repeated = angular_observation(np.concatenate((changed, changed[target])),
+                                   directions=np.concatenate((rays, rays[target])))
+    c = model(repeated)[str(size)]
+    for name in a:
+        # A changed matrix batch shape can change FP32 GEMM rounding. The value
+        # intervention above is bitwise invariant; the gradient check is exact.
+        torch.testing.assert_close(a[name][group], c[name][group], atol=1e-5, rtol=2e-6)
     first["features"].requires_grad_()
-    first["log_range"].requires_grad_()
-    predicted = model(first)
-    objective = predicted["mu"][target].sum() + predicted["scale"][target].sum()
-    objective = objective + predicted["log_weights"][group].square().sum()
-    objective.backward()
+    predicted = model(first)[str(size)]
+    sum(value[group].square().sum() for value in predicted.values()).backward()
     assert torch.count_nonzero(first["features"].grad[target]) == 0
-    assert torch.count_nonzero(first["log_range"].grad[target]) == 0
     assert first["features"].grad[~target].abs().sum() > 0
-    assert first["log_range"].grad[~target].abs().sum() > 0
 
 
-def test_angular_blocks_use_only_rays_and_keep_azimuth_wrap_neighbors():
-    xyzi, rays = angular_scan()
-    a = angular_observation(xyzi, directions=rays)
-    xyzi[:, :3] *= np.linspace(.01, 100., len(xyzi))[:, None]
-    b = angular_observation(xyzi, directions=rays)
-    for key in ("cells", "group", "order", "pointer", "neighbors", "relative"):
-        assert torch.equal(a[key], b[key])
-    assert not (a["neighbors"] == a["cells"][:, None]).any()
-    # Changing the target's size cannot alter which outside rays provide context.
-    keep = np.arange(len(xyzi)) != 0
-    small = angular_observation(xyzi[keep], directions=rays[keep])
-    assert torch.equal(a["neighbors"], small["neighbors"])
+def test_nested_grids_wrap_missing_context_and_augmentation_consistency():
+    angle = np.deg2rad([179.7, -179.7])
+    xyzi = np.column_stack((10 * np.cos(angle), 10 * np.sin(angle), [0., 0.], [.1, .2])).astype(np.float32)
+    o = angular_observation(xyzi)
+    for grid in o["grids"].values():
+        assert grid["neighbors"].shape == (2, 24)
+        assert not (grid["neighbors"] == torch.arange(2)[:, None]).any()
+        assert (grid["neighbors"][0] == 1).any()
+    xyzi[:, :3] = xyzi[:, [1, 0, 2]]
+    with pytest.raises(ValueError, match="rebuild after augmentation"):
+        angular_observation(xyzi, directions=o["directions"].numpy())
+    lone = angular_observation(xyzi[:1])
+    field = NormalField()
+    outputs = field(lone)
+    sum(value.square().sum() for f in outputs.values() for value in f.values()).backward()
+    assert field.empty.grad.abs().sum() > 0
+    assert all(torch.isfinite(value).all() for f in outputs.values() for value in f.values())
 
 
-def distribution(mu, scale=.1, weights=None, group=None):
-    mu = torch.as_tensor(mu, dtype=torch.float32)
-    if weights is None:
-        weights = torch.ones((1, mu.shape[1])) / mu.shape[1]
-    return dict(mu=mu, scale=torch.full_like(mu, scale), valid=torch.ones_like(mu, dtype=torch.bool),
-                log_weights=torch.as_tensor(weights).log(),
-                group=torch.zeros(len(mu), dtype=torch.long) if group is None else group)
+def test_analytic_ray_field_matches_independent_3d_and_quadrature():
+    torch.manual_seed(12)
+    center = torch.randn(1, 2, 3, 3, dtype=torch.float64) * 4 + torch.tensor([12., 0., 0.])
+    a = torch.randn(1, 2, 3, 3, 3, dtype=torch.float64)
+    covariance = a @ a.transpose(-1, -2) + 2 * torch.eye(3)
+    chol = torch.linalg.cholesky(covariance)
+    inverse = torch.linalg.inv(chol)
+    log_amp = torch.randn(1, 2, 3, dtype=torch.float64) - 3
+    field = dict(center=center, inverse=inverse, log_amplitude=log_amp)
+    origin = torch.tensor([[.5, -.2, .1]], dtype=torch.float64)
+    direction = F.normalize(torch.tensor([[1., .1, -.04]], dtype=torch.float64), dim=1)
+    mu, tau, log_h = ray_parameters(field, torch.zeros(1, dtype=torch.long), origin, direction)
+    r = torch.tensor([11.3], dtype=torch.float64)
+    delta = origin[:, None, None] + r[:, None, None, None] * direction[:, None, None] - center
+    direct = log_amp - .5 * torch.einsum('bkmi,bkmij,bkmj->bkm', delta, torch.linalg.inv(covariance), delta)
+    torch.testing.assert_close(log_h - .5 * ((r[:, None, None] - mu) / tau).square(), direct, rtol=1e-12, atol=1e-12)
+    expected = []
+    for k in range(2):
+        def rate(t):
+            return sum(math.exp(float(log_h[0, k, m]) - .5 * ((t - float(mu[0, k, m])) / float(tau[0, k, m]))**2)
+                       for m in range(3))
+        total = quad(rate, LOWER, UPPER, epsabs=1e-12)[0]
+        partial = quad(rate, LOWER, float(r), epsabs=1e-12)[0]
+        expected.append(math.log(rate(float(r))) - partial - math.log(-math.expm1(-total)))
+    actual = ray_log_prob(mu, tau, log_h, r)[0]
+    np.testing.assert_allclose(actual.numpy(), expected, atol=2e-11, rtol=2e-11)
+    torch.testing.assert_close(actual, ray_log_prob(mu.flip(-1), tau.flip(-1), log_h.flip(-1), r)[0])
 
 
-def test_joint_likelihood_marginalizes_one_shared_hypothesis_after_all_rays():
-    prediction = distribution([[0., 2.], [0., 2.]], weights=[[.3, .7]])
-    observations = torch.tensor([0., 2.])
-    value = joint_nll(prediction, observations, torch.ones(2, dtype=torch.bool))
-    # Each point fits a different mode. Independent pointwise mode selection
-    # would falsely give this incompatible patch a high joint likelihood.
-    p = torch.exp(component_log_prob(prediction, observations))
-    expected = -torch.log(.3 * p[0, 0] * p[1, 0] + .7 * p[0, 1] * p[1, 1]) / 2
-    independent = -torch.log((p * torch.tensor([.3, .7])).sum(1)).mean()
-    torch.testing.assert_close(value, expected)
-    assert value > independent + 5
-    selected = torch.tensor([True, False])
-    torch.testing.assert_close(joint_nll(prediction, observations, selected),
-                               -torch.log((p[0] * torch.tensor([.3, .7])).sum()))
+@pytest.mark.parametrize("log_amplitude", [-1000., -20., -4., 1.])
+def test_conditional_density_normalizes_with_overlap_and_tiny_amplitude(log_amplitude):
+    mu = torch.tensor([[[10., 20., 22.], [6., 25., 40.]]], dtype=torch.float64)
+    tau = torch.tensor([[[2., 4., 3.], [1., 10., 2.]]], dtype=torch.float64)
+    h = torch.full_like(mu, log_amplitude)
+    weights = np.array([.3, .7])
+    def density(r):
+        value = ray_log_prob(mu, tau, h, torch.tensor([r], dtype=torch.float64))[0].exp().numpy()
+        return value @ weights
+    assert abs(quad(density, LOWER, UPPER, epsabs=2e-9, limit=200)[0] - 1) < 2e-8
 
 
-def test_physical_intersections_share_one_plane_across_directions_and_origins():
-    normal = torch.tensor([1., .2, -.1]).expand(3, 1, 3)
-    origin = torch.tensor([[0., 0., 0.], [.3, .1, 0.], [-.1, .2, .05]])
-    direction = torch.nn.functional.normalize(torch.tensor([[1., 0., 0.], [1., .2, 0.], [1., -.1, .1]]), dim=1)
-    mu, valid = ray_planes(torch.full((3, 1), 8.), normal, origin, direction)
-    hits = origin + mu.exp() * direction
-    assert valid.all()
-    torch.testing.assert_close((hits * normal[:, 0]).sum(1), torch.full((3,), 8.))
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA"))])
+def test_fp32_tail_mass_density_and_gradients_do_not_collapse(device):
+    mu = torch.tensor([[[-100., 130.], [12., 15.]]], device=device, requires_grad=True)
+    tau = torch.tensor([[[1.3, .8], [4., 2.]]], device=device, requires_grad=True)
+    h = torch.tensor([[[-1000., -1002.], [-1000., -1001.]]], device=device, requires_grad=True)
+    values = ray_log_prob(mu, tau, h, torch.tensor([20.], device=device))
+    reference = ray_log_prob(mu.detach().double(), tau.detach().double(), h.detach().double(),
+                             torch.tensor([20.], device=device, dtype=torch.float64)).float()
+    torch.testing.assert_close(values, reference, atol=.008, rtol=2e-5)
+    assert torch.isfinite(values).all() and values[0, 0] != values[0, 1]
+    values.sum().backward()
+    assert all(torch.isfinite(p.grad).all() for p in (mu, tau, h))
+    assert mu.grad.abs().sum() > 0 and tau.grad.abs().sum() > 0
+    # Very narrow far-tail intervals require a local integral, not CDF subtraction.
+    mass = log_normal_mass(torch.tensor([0.], device=device), torch.tensor([1.], device=device), 100., 100.00001)
+    expected = -.5 * 100.000005**2 - .5 * math.log(2 * math.pi) + math.log(.00001)
+    assert abs(float(mass) - expected) < .002
 
 
-def test_single_bad_return_is_scored_locally_not_by_broadcasting_patch_loss():
-    prediction = distribution([[0., 2.]] * 20, scale=.1, weights=[[.8, .2]])
-    normal = torch.zeros(20)
-    abnormal = normal.clone()
-    abnormal[-1] = 1.
-    before, after = point_evidence(prediction, normal), point_evidence(prediction, abnormal)
-    torch.testing.assert_close(after[:-1], before[:-1], atol=2e-5, rtol=2e-5)
-    assert after[-1, 1] > before[-1, 1] + 9
-    assert after[-1, 3] > after[:-1, 3].max() + 5
+def test_joint_nll_shares_hypothesis_and_weights_blocks_equally():
+    prob = torch.tensor([[.9, .01], [.01, .9], [.7, .3]]).log().requires_grad_()
+    weights = torch.tensor([[.4, .6], [.2, .8]]).log()
+    grid = dict(order=torch.arange(3), pointer=torch.tensor([0, 2, 3]))
+    selected = torch.ones(3, dtype=torch.bool)
+    expected = (-math.log(.009) / 2 - math.log(.2 * .7 + .8 * .3)) / 2
+    actual = joint_nll(prob, weights, grid, selected)
+    assert abs(float(actual.detach()) - expected) < 1e-6
+    actual.backward()
+    assert (prob.grad.abs().sum(1) > 0).all()
+    assert actual > -(prob.exp() * weights.exp()[torch.tensor([0, 0, 1])]).sum(1).log().mean()
 
 
-def test_predictive_intervals_use_prior_distribution_and_known_laplace_quantiles():
-    prediction = distribution([[math.log(10.)]], scale=.2)
-    intervals = quantiles(prediction)[0]
-    expected = torch.tensor([10 * math.exp(-.2 * math.log(10)), 10., 10 * math.exp(.2 * math.log(10))])
-    torch.testing.assert_close(intervals, expected, atol=3e-5, rtol=3e-6)
-    # The complete likelihood penalizes wider normal predictions at zero error.
-    narrow = joint_nll(prediction, torch.tensor([math.log(10.)]), torch.tensor([True]))
-    wide = deepcopy(prediction)
-    wide["scale"] *= 3
-    assert joint_nll(wide, torch.tensor([math.log(10.)]), torch.tensor([True])) > narrow
+def test_point_compatibility_never_reweights_prior_with_target_peer_ranges():
+    xyzi, _ = angular_scan()
+    observation = angular_observation(xyzi)
+    fields = NormalField()(observation)
+    decoder = Compatibility()
+    state = torch.randn(len(xyzi), 64)
+    before, _ = decoder(state, observation, fields, 0, len(xyzi))
+    changed = deepcopy(observation)
+    changed["distance"][0] *= 1.8
+    after, _ = decoder(state, changed, fields, 0, len(xyzi))
+    torch.testing.assert_close(before[1:], after[1:], atol=0, rtol=0)
+    assert not torch.equal(before[0], after[0])
+    after.square().mean().backward()
+    assert decoder.tokens[0].weight.grad.abs().sum() > 0
 
 
-@pytest.mark.parametrize("mode", NORMAL_MODES)
-def test_new_branches_preserve_every_n1_parameter_and_rng(mode):
+def test_field_preserves_actual_path_initialization_and_has_fresh_fp32_head():
     seed_all(31)
-    original = Segmentor("conditional")
+    baseline = Segmentor("conditional")
     random = torch.get_rng_state()
     seed_all(31)
-    candidate = Segmentor(mode)
+    candidate = Segmentor()
     assert torch.equal(torch.get_rng_state(), random)
-    for key, value in original.state_dict().items():
-        assert torch.equal(value, candidate.state_dict()[key]), key
-    assert torch.count_nonzero(candidate.normal_evidence.weight) == 0
+    for key, value in baseline.state_dict().items():
+        if not key.startswith("head."):
+            assert torch.equal(value, candidate.state_dict()[key]), key
+    assert candidate.head[0].in_features == 163
+    extra = sum(p.numel() for p in candidate.parameters()) - sum(p.numel() for p in baseline.parameters())
+    assert 0 < extra < 2_000_000
+    with pytest.raises(ValueError, match="retired"):
+        Segmentor("geometry")
 
 
-@pytest.mark.parametrize("mode", NORMAL_MODES)
-def test_single_scan_inference_builds_observation_and_preserves_raw_slots(mode, monkeypatch):
+class CacheModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.encoder = nn.Sequential(nn.Linear(4, 12), nn.BatchNorm1d(12), nn.GELU(), nn.Dropout(.25))
+        self.normal = nn.Linear(12, 4)
+        self.head = nn.Linear(16, 1)
+
+    def forward(self, sample, *, normal_loss=False):
+        x = self.encoder(sample["xyzi"])
+        normal = self.normal(x)
+        score = self.head(torch.cat((x, normal), 1)).flatten()
+        auxiliary = normal.square().mean() if sample["normal_training"] else normal.sum() * 0
+        return (score, auxiliary) if normal_loss else score
+
+
+@pytest.mark.parametrize("scans,all_normal", [(8, False), (3, False), (8, True)])
+def test_gradient_cache_equals_joint_graph_with_bn_dropout_and_one_rng_advance(scans, all_normal):
+    seed_all(71)
+    model = CacheModel().train()
+    reference = deepcopy(model)
+    samples = [dict(xyzi=torch.randn(15 + i, 4), targets=torch.zeros(15 + i, dtype=torch.long),
+                    normal_training=i % 3 == 0) for i in range(scans)]
+    if not all_normal:
+        for i, sample in enumerate(samples):
+            if i % 3:
+                sample["targets"][i % 5] = 1
+            sample["targets"][-1] = -1
+    device = torch.device("cpu")
+    start = rng_state(device)
+    outputs = [reference(sample, normal_loss=True) for sample in samples]
+    scores = torch.cat([value[0] for value in outputs])
+    targets = torch.cat([s["targets"] for s in samples])
+    counts = torch.stack([(targets == label).sum() for label in (0, 1)])
+    rank, detail = ranking_loss(scores, targets, 19)
+    normal = sum(v[1] for v in outputs) / sum(s["normal_training"] for s in samples)
+    loss = balanced_loss(scores, targets, counts) + rank + .1 * normal
+    loss.backward()
+    end = rng_state(device)
+    restore_rng(start, device)
+    cached, info = cached_backward(model, samples, device, rank_weight=1., rank_seed=19)
+    torch.testing.assert_close(cached, loss.detach())
+    assert info["ranking_scans"] == scans and info["replay_max_abs"] == 0
+    if not all_normal:
+        torch.testing.assert_close(info["threshold"], detail["threshold"])
+    else:
+        assert info["threshold"] is None
+    for a, b in zip(model.parameters(), reference.parameters()):
+        torch.testing.assert_close(a.grad, b.grad, atol=3e-7, rtol=3e-5)
+    for a, b in zip(model.buffers(), reference.buffers()):
+        torch.testing.assert_close(a, b, atol=0, rtol=0)
+    assert torch.equal(torch.get_rng_state(), end["torch"])
+
+
+def test_infer_preserves_actual_slots_and_builds_multiscale_observation(monkeypatch):
     import src.evaluate as evaluation
     xyzi, _ = angular_scan()
-    slots = np.arange(len(xyzi)) * 2
     raw = np.zeros((2 * len(xyzi), 4), np.float32)
-    raw[slots] = xyzi
+    raw[::2] = xyzi
     frame = SimpleNamespace(xyzi=raw, actual=np.arange(len(raw)) % 2 == 0,
-                            return_slots=slots, frame_id=0)
+                            return_slots=np.arange(0, len(raw), 2), frame_id=0)
     def read_scan(path, *, io_timing):
         io_timing["seconds"] = 0.
         return frame
     monkeypatch.setattr(evaluation, "read_scan", read_scan)
-    class Score(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.normal = NormalDistribution(mode)
+    class Score(nn.Module):
+        normal = True
         def forward(self, sample):
-            observation = sample["observation"]
-            return point_evidence(self.normal(observation), observation["log_range"])[:, 0]
-    model = Score().eval()
-    expected = model(dict(observation=angular_observation(xyzi))).detach().numpy()
-    actual, timing = evaluation.infer(model, "fixture", torch.device("cpu"))
-    np.testing.assert_array_equal(actual[slots], expected)
-    np.testing.assert_array_equal(actual[1::2], 0.)
-    assert timing["real_points"] == len(xyzi)
+            assert set(sample["observation"]["grids"]) == {"1", "2", "4"}
+            return sample["observation"]["distance"]
+    prediction, _ = evaluation.infer(Score(), "unused", torch.device("cpu"))
+    assert not prediction[1::2].any()
+    np.testing.assert_allclose(prediction[::2], np.linalg.norm(xyzi[:, :3], axis=1), rtol=1e-6)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="LitePT requires CUDA")
-def test_anomaly_loss_reaches_normal_predictor_through_complete_segmentor():
-    from src.evaluate import autocast
-    xyzi, _ = angular_scan()
-    sample = prepare_scan(dict(xyzi=xyzi, targets=np.arange(len(xyzi)) % 2,
-                               slots=np.arange(len(xyzi)), slot_count=len(xyzi), index=0))
-    sample.update(observation=angular_observation(xyzi), normal_training=False)
-    seed_all(13)
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="full LitePT requires CUDA")
+def test_real_complete_model_gradients_maximum_pair_and_checkpoint_reload(tmp_path):
+    """Implementation evidence on real scans, not a trained detection benchmark."""
+    from pathlib import Path
+    import subprocess
+    import sys
+    import time
+    from src.data import load_manifest, NATIVE_VERSION
+    from src.evaluate import PreparedScans, autocast, load_model
+    from src.model import balanced_loss
+    from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
+    manifest_path = Path("results/data/native/train.json")
+    if not manifest_path.exists() or not Path("assets/nuscenes.pth").exists():
+        pytest.skip("local real data and official initialization are required")
     device = torch.device("cuda")
-    model = Segmentor("geometry").to(device).eval()
-    # The zero-initialized projection first learns to use the evidence. Activate
-    # it here to test the subsequent anomaly-gradient path independently of NLL.
-    with torch.no_grad():
-        model.normal_evidence.weight.normal_(std=.02)
-    sample = to_device(sample, device)
+    manifest = load_manifest(manifest_path, "train")
+    data = PreparedScans(manifest, normal=True)
+    indices = [max((i for i, row in enumerate(manifest["records"]) if row["group"] == group),
+                   key=lambda i: manifest["records"][i]["points"])
+               for group in ("anomaly_stu", "normal_stu")]
+    samples = [data[i] for i in indices]
+    assert [s["normal_training"] for s in samples] == [False, True]
+    seed_all(17)
+    model = Segmentor().to(device).train()
+    model.load_pretrained("assets/nuscenes.pth")
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+    sample = to_device(samples[0], device)
     with autocast(device):
-        scores, auxiliary = model(sample, normal_loss=True)
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(scores, sample["targets"].float())
-    assert auxiliary.item() == 0
-    loss.backward()
-    for module in (model.normal, model.backbone):
+        score, auxiliary = model(sample, normal_loss=True)
+    assert score.dtype == torch.float32 and auxiliary.item() == 0
+    counts = torch.stack([(sample["targets"] == label).sum() for label in (0, 1)])
+    balanced_loss(score, sample["targets"], counts).backward()
+    for module in (model.normal.encoder, model.normal.parameters_out, model.normal.weights,
+                   model.compatibility, model.backbone):
         gradients = [p.grad for p in module.parameters() if p.grad is not None]
         assert gradients and all(torch.isfinite(g).all() for g in gradients)
-        assert sum(g.abs().sum().item() for g in gradients) > 0
+        assert sum(float(g.abs().sum()) for g in gradients) > 0
+    optimizer.zero_grad(set_to_none=True)
+    del score, auxiliary, sample
+    torch.cuda.reset_peak_memory_stats()
+    started = time.perf_counter()
+    loss, detail = cached_backward(model, samples, device, rank_weight=1., rank_seed=73)
+    assert detail["normal_scans"] == 1 and detail["replay_max_abs"] <= 1e-5
+    assert torch.isfinite(loss)
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
+    assert torch.isfinite(norm) and norm > 0
+    previous = model.normal.parameters_out.weight.detach().clone()
+    optimizer.step()
+    assert not torch.equal(previous, model.normal.parameters_out.weight)
+    optimizer.zero_grad(set_to_none=True)
+    torch.cuda.synchronize()
+    seconds = time.perf_counter() - started
+    peak = torch.cuda.max_memory_allocated()
+    del optimizer, detail
+    model.eval()
+    sample = to_device(samples[0], device)
+    with torch.no_grad(), autocast(device):
+        before = model(sample).cpu()
+    assert torch.isfinite(before).all() and len(before) == len(sample["xyzi"])
+    path = tmp_path / "field.pt"
+    torch.save(dict(version=NATIVE_VERSION, mode="field", model=model.state_dict()), path)
+    del model
+    torch.cuda.empty_cache()
+    restored, _ = load_model(path, device)
+    with torch.no_grad(), autocast(device):
+        after = restored(sample).cpu()
+    # Bounds are set before this real execution: absolute logits 1e-5 + rtol 1e-5,
+    # and each official percentage-valued metric within 1e-5 percentage points.
+    torch.testing.assert_close(before, after, atol=1e-5, rtol=1e-5)
+    del restored, sample, module
+    torch.cuda.empty_cache()
+    cold_path = tmp_path / "cold.npy"
+    subprocess.run([sys.executable, "-c", '''
+import sys, numpy as np, torch
+from pathlib import Path
+from src.data import load_manifest
+from src.evaluate import PreparedScans, autocast, load_model
+from src.model import to_device
+torch.set_num_threads(2)
+torch.set_num_interop_threads(1)
+device = torch.device("cuda")
+model, _ = load_model(Path(sys.argv[1]), device)
+data = PreparedScans(load_manifest(Path(sys.argv[2]), "train"), normal=True)
+sample = to_device(data[int(sys.argv[3])], device)
+with torch.no_grad(), autocast(device):
+    scores = model(sample).cpu().numpy()
+np.save(sys.argv[4], scores)
+''', str(path), str(manifest_path), str(indices[0]), str(cold_path)], check=True)
+    cold = torch.from_numpy(np.load(cold_path))
+    torch.testing.assert_close(before, cold, atol=1e-5, rtol=1e-5)
+    targets = samples[0]["targets"].numpy()
+    valid = targets >= 0
+    metrics = []
+    for scores in (before, after, cold):
+        calculator = PointOODMetricsCalculator()
+        calculator.all_scores = [scores.numpy()[valid]]
+        calculator.all_labels = [targets[valid]]
+        metrics.append(calculator.compute_metrics())
+    delta = {key: max(abs(metrics[0][key] - other[key]) for other in metrics[1:])
+             for key in ("AP", "AUROC", "FPR95")}
+    assert max(delta.values()) <= 1e-5
+    print(dict(real_indices=indices, real_points=[len(s["xyzi"]) for s in samples],
+               maximum_pair_seconds=seconds, peak_vram_bytes=peak,
+               reload_max_abs=max(float((before - other).abs().max()) for other in (after, cold)), metric_deltas=delta))
+    path.unlink()
+    cold_path.unlink()
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA comparison")
-@pytest.mark.parametrize("mode", NORMAL_MODES)
-def test_cpu_cuda_prediction_and_joint_likelihood_agree(mode):
-    xyzi, rays = angular_scan()
-    observation = angular_observation(xyzi, directions=rays)
-    seed_all(5)
-    cpu = NormalDistribution(mode)
-    gpu = deepcopy(cpu).cuda()
-    first, second = cpu(observation), gpu(to_device(observation, torch.device("cuda")))
-    for key in ("mu", "scale", "log_weights"):
-        torch.testing.assert_close(first[key], second[key].cpu(), atol=2e-5, rtol=2e-5)
-    selected = torch.ones(len(xyzi), dtype=torch.bool)
-    a = joint_nll(first, observation["log_range"], selected)
-    b = joint_nll(second, observation["log_range"].cuda(), selected.cuda())
-    torch.testing.assert_close(a, b.cpu(), atol=2e-5, rtol=2e-5)
+def test_predictive_quantiles_match_truncated_exponential_and_low_rate_limit():
+    from src.normal import ray_quantiles
+    probabilities = np.array([.05, .5, .95])
+    mu, tau = torch.zeros(2, 1, 1), torch.full((2, 1, 1), 1e8)
+    h = torch.tensor([[[math.log(.04)]], [[-1000.]]])
+    intervals = ray_quantiles(mu, tau, h, torch.zeros(2, 1))
+    expected = np.stack((LOWER - np.log1p(-probabilities * -np.expm1(-.04 * (UPPER - LOWER))) / .04,
+                         LOWER + probabilities * (UPPER - LOWER)))
+    np.testing.assert_allclose(intervals.numpy(), expected, atol=1e-5, rtol=2e-6)
+
+
+def test_normal_diagnostics_use_all_valid_normals_and_reject_synthetic_targets():
+    from src.normal import prediction_metrics
+    xyzi, _ = angular_scan()
+    xyzi = xyzi[:12]
+    sample = dict(observation=angular_observation(xyzi), targets=torch.tensor([0] * 10 + [-1, -1]), normal_training=True)
+    result = prediction_metrics(NormalField().eval(), sample)
+    assert result["points"] == 10 and set(result["scales"]) == {"1", "2", "4"}
+    for values in result["scales"].values():
+        assert all(math.isfinite(v) for v in values.values())
+        assert 0 <= values["coverage90"] <= 1 and 0 < values["width90_m"] < UPPER - LOWER
+    sample["normal_training"] = False
+    with pytest.raises(ValueError, match="unmodified real-normal"):
+        prediction_metrics(NormalField(), sample)

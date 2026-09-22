@@ -13,11 +13,17 @@ from torch.utils.data import DataLoader
 from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, load_manifest, make_real_manifest,
                    read_scan, write_json)
 from .model import Segmentor, prepare_scan, scatter_scores, to_device
-from .normal import angular_observation
+from .normal import angular_observation, prediction_metrics, SCALES
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
 STU_COMMIT = "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
+
+
+def normal_record(record):
+    return (record.get("source") in ("nuscenes", "normal_stu")
+            and record.get("group") in ("normal_nuscenes", "normal_stu")
+            and not record.get("anomaly", 0) and not record.get("delta") and not record.get("augmented", False))
 
 
 class PreparedScans(Scans):
@@ -33,8 +39,36 @@ class PreparedScans(Scans):
                    for key, value in sample.items()})
         if self.normal:
             result["observation"] = angular_observation(sample["xyzi"])
-            result["normal_training"] = self.records[index].get("group", "").startswith("normal_")
+            # Only unmodified real-normal sources anchor the auxiliary task.
+            result["normal_training"] = normal_record(self.records[index])
         return result
+
+
+@torch.no_grad()
+def evaluate_normal(model, manifest, device, workers=2):
+    if model.normal is None:
+        raise ValueError("this checkpoint has no normal return field")
+    indices = [i for i, row in enumerate(manifest["records"]) if normal_record(row)]
+    if not indices:
+        raise ValueError("manifest has no reliable unmodified normal scans")
+    data = PreparedScans(manifest, normal=True, voxel=False)
+    loader = DataLoader(data, batch_size=None, sampler=indices, num_workers=workers,
+        pin_memory=device.type == "cuda", generator=torch.Generator().manual_seed(0),
+        **({"prefetch_factor": 1} if workers else {}))
+    totals = {str(size): dict(mae_m=0., coverage90=0., width90_m=0., joint_nll=0.) for size in SCALES}
+    model.eval()
+    points, start = 0, time.perf_counter()
+    for sample in loader:
+        measured = prediction_metrics(model.normal, to_device(sample, device))
+        points += measured["points"]
+        for size, values in measured["scales"].items():
+            for key, value in values.items():
+                totals[size][key] += value * (1 if key == "joint_nll" else measured["points"])
+    for values in totals.values():
+        for key in values:
+            values[key] /= len(indices) if key == "joint_nll" else points
+    return dict(scales=totals, scans=len(indices), points=points, seconds=time.perf_counter() - start,
+                manifest_sha256=manifest["sha256"], role="normal prediction diagnostic; not anomaly detection accuracy")
 
 
 def precision(device):
@@ -323,7 +357,7 @@ def mine(model, manifest, checkpoint, output, device, workers=4):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "test", "infer", "benchmark", "mine"):
+    for name in ("validate", "test", "infer", "benchmark", "mine", "normal"):
         command = sub.add_parser(name)
         command.add_argument("--checkpoint", type=Path, required=True)
         command.add_argument("--output", type=Path, required=True)
@@ -332,9 +366,11 @@ def main():
             command.add_argument("--manifest", type=Path, default=Path("assets/val.json"))
         if name == "mine":
             command.add_argument("--manifest", type=Path, default=Path("results/data/train.json"))
+        if name == "normal":
+            command.add_argument("--manifest", type=Path, required=True)
         if name == "test":
             command.add_argument("--data", type=Path, required=True)
-        if name in ("validate", "test", "mine"):
+        if name in ("validate", "test", "mine", "normal"):
             command.add_argument("--workers", type=int, default=4)
         else:
             command.add_argument("--scans", type=Path, nargs="+", required=True)
@@ -352,7 +388,10 @@ def main():
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
     model, saved = load_model(args.checkpoint, device)
-    if args.action == "mine":
+    if args.action == "normal":
+        result = evaluate_normal(model, load_manifest(args.manifest, "train"), device, args.workers)
+        write_json(args.output, dict(checkpoint=str(args.checkpoint.resolve()), **result))
+    elif args.action == "mine":
         mine(model, load_manifest(args.manifest, "train"), args.checkpoint, args.output, device, args.workers)
     elif args.action in ("validate", "test"):
         if args.action == "test":
