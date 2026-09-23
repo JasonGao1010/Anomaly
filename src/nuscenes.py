@@ -83,6 +83,8 @@ def sources(root):
             selected.append(row)
     if len(selected) != len(labels) or len(selected) != len(samples):
         raise ValueError("every original keyframe must have exactly one lidarseg observation")
+    if {r["sample_token"] for r in selected} != set(samples):
+        raise ValueError("labeled observations must cover each sample exactly once")
     needed = {r["ego_pose_token"] for r in selected}
     poses = {r["token"]: _pose(r) for r in _rows(meta / "ego_pose.json") if r["token"] in needed}
     calibrations = {r["token"]: _pose(r) for r in _rows(meta / "calibrated_sensor.json")}
@@ -99,6 +101,9 @@ def sources(root):
             pose=(poses[row["ego_pose_token"]] @ calibrations[row["calibrated_sensor_token"]]).tolist()))
     for split in records:
         records[split].sort(key=lambda r: (r["scene"], r["timestamp"], r["token"]))
+    counts = Counter(r["scene"] for rows in records.values() for r in rows)
+    if len(counts) != len(scenes) or any(counts[s["name"]] != s["nbr_samples"] for s in scenes.values()):
+        raise ValueError("labeled keyframe counts differ from original scene metadata")
     logs = {split: {r["log_token"] for r in rows} for split, rows in records.items()}
     if logs["train"] & logs["val"]:
         raise ValueError("official partitions share acquisition logs")
@@ -121,6 +126,70 @@ def _counts(raw, labels, mapping):
     actual = np.any(raw[:, :3] != 0, axis=1)
     normal = (mapping[labels] == 1) & actual & (distance >= 2.5) & (distance <= 50.)
     return dict(points=int(actual.sum()), slots=len(raw), normal=int(normal.sum()), anomaly=0, eligible=False)
+
+
+def _background_scene(task):
+    records, mapping = task
+    lookup = np.asarray([r["target"] for r in mapping], np.uint8)
+    counts, categories = Counter(), np.zeros(32, dtype=np.int64)
+    ranges = np.zeros(5, dtype=np.int64)
+    rows = []
+    for record in records:
+        raw, labels = _read(record)
+        if np.any(labels >= len(lookup)):
+            raise ValueError("unknown original lidarseg label")
+        row = dict(record, role="original", **_counts(raw, labels, lookup))
+        rows.append(row)
+        actual = np.any(raw[:, :3] != 0, axis=1)
+        distance = np.linalg.norm(raw[:, :3], axis=1)
+        valid = actual & (distance >= 2.5) & (distance <= 50.)
+        normal = valid & (lookup[labels] == 1)
+        counts.update({key: row[key] for key in ("points", "slots", "normal")})
+        counts.update(ignored_in_range=int((valid & ~normal).sum()),
+                      outside_range=int((actual & ~valid).sum()), empty_slots=int((~actual).sum()))
+        categories += np.bincount(labels, minlength=32)
+        ranges += np.histogram(distance[normal], [2.5, 10., 20., 30., 40., 50.])[0]
+    return rows, counts, categories, ranges
+
+
+def _backgrounds(root, output, workers, records, mapping):
+    """Preserve complete raw scans; only trusted in-range points are supervised."""
+    logs = {r["token"]: r["location"] for r in _rows(Path(root) / "v1.0-trainval/log.json")}
+    manifests = {}
+    for split, original in records.items():
+        scenes = defaultdict(list)
+        for record in original:
+            scenes[record["scene"]].append(record)
+        rows, counts = [], Counter()
+        categories, ranges = np.zeros(32, dtype=np.int64), np.zeros(5, dtype=np.int64)
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            for result in executor.map(_background_scene, [(r, mapping) for r in scenes.values()]):
+                observed, totals, raw_counts, distance_counts = result
+                rows.extend(observed)
+                counts.update(totals)
+                categories += raw_counts
+                ranges += distance_counts
+        # An ignored point remains observed context, never an implicit normal label.
+        assert counts["points"] == counts["normal"] + counts["ignored_in_range"] + counts["outside_range"]
+        summary = dict(frames=len(rows), scenes=len(scenes), logs=len({r["log_token"] for r in rows}),
+                       **counts, anomaly=0, raw_class_points=categories.tolist(),
+                       normal_distance_edges_m=[2.5, 10., 20., 30., 40., 50.],
+                       normal_distance_points=ranges.tolist(),
+                       location_frames=dict(Counter(logs[r["log_token"]] for r in rows)))
+        manifest = dict(version=SOURCE_VERSION, kind=split, root=str(Path(root).resolve()),
+            directory=str(output), mapping=mapping, records=rows,
+            split=dict(name=split, scenes=sorted(scenes), logs=sorted({r["log_token"] for r in rows})),
+            recipe=dict(stage="background", partition="Official nuScenes train/val scenes; disjoint acquisition logs",
+                input="Complete original measured returns; no point removal by semantic label or supervision range",
+                supervision="20 known normal classes within 2.5-50 m; all other points ignored; no positive labels",
+                validation="Normal-field and false-positive analysis only; anomaly metrics require later positive examples"),
+            summary=summary)
+        manifest["sha256"] = identity(manifest)
+        manifests[split] = manifest
+        print("nuScenes background " + json.dumps(dict(subset=split, **summary)), flush=True)
+    for split, manifest in manifests.items():
+        write_json(output / f"{split}.json", manifest, indent=None)
+    return manifests
 
 
 def _seed(value):
@@ -633,11 +702,13 @@ def _catalog(donors):
                           object_center_local=d["object_center_local"].tolist()) for d in donors}
 
 
-def build(root, output, workers):
+def build(root, output, workers, *, background_only=False):
     """Census actual surfaces, then materialize bounded source-only requests."""
     output = Path(output).resolve()
     if workers < 1:
         raise ValueError("workers must be positive")
+    if background_only and output.exists() and any(output.iterdir()):
+        raise ValueError("background split requires an empty output directory")
     staging = output / ".building"
     if staging.exists():
         raise ValueError("an unfinished build exists; inspect it before replacement")
@@ -645,6 +716,8 @@ def build(root, output, workers):
         raise ValueError("output is not an existing complete nuScenes build")
     started = time.monotonic()
     records, mapping = sources(root)
+    if background_only:
+        return _backgrounds(root, output, workers, records, mapping)
     annotations, instances = _annotations(root, records, mapping)
     print(f"nuScenes selected candidate instances {dict(Counter((d['subset'] + ':' + d['kind']) for d in instances.values()))}", flush=True)
     original, donors, failures = {}, [], {}

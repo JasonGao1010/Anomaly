@@ -8,6 +8,47 @@ from scipy.spatial.transform import Rotation
 from src.nuscenes import _basis, _instance_slots, _intersections, _triangles, transplant
 
 
+def test_background_split_keeps_ignored_context_and_never_enters_object_generation(tmp_path, monkeypatch):
+    import json
+    import pytest
+    from src import nuscenes
+    from src.data import Scans, load_manifest
+
+    meta = tmp_path / "v1.0-trainval"
+    meta.mkdir()
+    (meta / "log.json").write_text(json.dumps([dict(token=s, location="test") for s in ("train", "val")]))
+    mapping = [dict(raw=i, name=str(i), target=int(i == 24)) for i in range(32)]
+    raw = np.array([[2.5, 0, 0, 255, 0], [50, 0, 0, 10, 1], [50.1, 0, 0, 5, 2],
+                    [5, 0, 0, 80, 3], [6, 0, 0, 90, 4], [0, 0, 0, 0, 5]], np.float32)
+    records = {}
+    for split in ("train", "val"):
+        scan, label = tmp_path / f"{split}.bin", tmp_path / f"{split}.label"
+        raw.tofile(scan)
+        np.array([24, 24, 24, 10, 11, 24], np.uint8).tofile(label)
+        records[split] = [dict(source="nuscenes", scene=split, log_token=split, token=split,
+            sample_token=split, timestamp=0, frame=0, scan=str(scan), label=str(label),
+            group="normal_nuscenes", subset=split, pose=np.eye(4).tolist())]
+    monkeypatch.setattr(nuscenes, "sources", lambda root: (records, mapping))
+    def reject_objects(*args):
+        raise AssertionError("background construction must not extract or synthesize objects")
+    monkeypatch.setattr(nuscenes, "_annotations", reject_objects)
+    output = tmp_path / "background"
+    nuscenes.build(tmp_path, output, 1, background_only=True)
+    assert {p.name for p in output.iterdir()} == {"train.json", "val.json"}
+    for split in ("train", "val"):
+        manifest = load_manifest(output / f"{split}.json", split)
+        assert manifest["summary"]["normal"] == 2
+        assert manifest["summary"]["ignored_in_range"] == 2
+        assert manifest["summary"]["outside_range"] == 1
+        assert manifest["summary"]["empty_slots"] == 1
+        assert not manifest["records"][0]["eligible"]
+        sample = Scans(manifest)[0]
+        np.testing.assert_array_equal(sample["xyzi"][:, :3], raw[:5, :3])
+        np.testing.assert_array_equal(sample["targets"], [0, 0, -1, -1, -1])
+    with pytest.raises(ValueError, match="empty output"):
+        nuscenes.build(tmp_path, output, 1, background_only=True)
+
+
 def test_instance_extraction_intersects_semantics_rotated_box_and_unique_identity():
     rotation = Rotation.from_euler("z", 90, degrees=True)
     center = np.array([3., -2., 1.])

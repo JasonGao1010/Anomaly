@@ -1327,12 +1327,15 @@ def main():
     parser.add_argument("--train", type=Path, default=Path("assets/train.json"))
     parser.add_argument("--val", type=Path, default=Path("assets/val.json"))
     parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
+    parser.add_argument("--background-only", action="store_true", help="nuScenes: split original backgrounds without extracting or inserting objects")
     args = parser.parse_args()
+    if args.background_only and args.operation != "nuscenes":
+        parser.error("--background-only is only supported by the nuscenes operation")
     if args.operation == "nuscenes":
         if args.output is None:
             parser.error("nuscenes requires an explicit new --output directory")
         from .nuscenes import build
-        build(args.nuscenes_root, args.output, args.workers)
+        build(args.nuscenes_root, args.output, args.workers, background_only=args.background_only)
         return
     if args.output is None:
         args.output = Path("results/data")
