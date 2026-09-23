@@ -1,0 +1,1274 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{fontspec,xeCJK,amsmath,amssymb,geometry,booktabs,longtable,array,xurl,hyperref,needspace}
+\setmainfont{Times New Roman}
+\setsansfont{Times New Roman}
+\setmonofont{Times New Roman}
+\setCJKmainfont{SimSun}[AutoFakeBold=2]
+\setCJKsansfont{SimSun}[AutoFakeBold=2]
+\setCJKmonofont{SimSun}
+\geometry{margin=23mm}
+\hypersetup{colorlinks=true,urlcolor=blue,linkcolor=blue,pdftitle={主模型创新性与投稿竞争力评估}}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{4pt}
+\setlength{\emergencystretch}{3em}
+\renewcommand{\arraystretch}{1.2}
+\newcommand{\paper}[2]{\href{#2}{#1}}
+\begin{document}
+\begin{center}
+{\LARGE 主模型创新性与投稿竞争力评估}\\[8pt]
+{\large nuScenes 训练、冻结后 STU 点级异常分割}\\[6pt]
+2026 年 9 月 23 日
+\end{center}
+
+\noindent\textbf{审查结论。}
+这条路线在科学问题上成立，也属于 ICLR 的研究范围；如果新方法在不接触目标数据选择模型的条件下，稳定改善真实异常分割，并能辨别收益的来源，就有竞争价值。但是，“nuScenes 训练＋冻结＋STU 三指标领先”本身既不是方法创新，也不是录用保证。当前模型有可检验的具体差别，尚未形成足以支持强方法贡献的证据。现阶段不支持仅为追求新颖性立即推倒全部结构；应先用最小受控比较判断共享三维场是否值得保留。
+
+本报告采用人工智能辅助的分层文献调研，重点核查可能覆盖创新点的反向证据。它不是对所有数据库的穷尽系统综述，也不是会议的真实审稿决定。附录逐篇说明来源、阅读深度、机制和本项目关系；摘要阅读不等于阅读全文，方法与实验核对也不等于独立复现。
+
+\section*{一、评估对象与证据边界}
+本轮用户确定的新方案为：真实训练数据仅来自 nuScenes，允许在其上合成异常；训练和模型选择不使用 STU；模型及预处理确定后，在 STU 上评价。固定模型指整套预测过程，包括参数、归一化统计、分数构造、预处理及任何后处理规则。读取测试扫描以计算预测属于正常推理；利用整套 STU 分布重新估计统计、调整权重或选择检查点，则改变了上述设定。
+
+当前实际模型以 2026 年 9 月 22 日架构文件及现有代码为准：单帧真实回波经 LitePT-S 和多尺度实际观测路径编码；另一条路径在聚合上下文前排除目标角块，预测四个正常假设、每假设八个各向异性高斯核；射线观测公式把共享场变成条件距离分布；实际点特征、分布参数和逐点密度进入学习型兼容判别头。所有可学习部分联合优化，正常似然只是辅助监督。
+
+本轮重新核对了架构文件、\texttt{src/normal.py} 的目标排除与块联合损失、\texttt{src/model.py} 的实际预测路径、\texttt{src/data.py} 的 nuScenes 标签映射，以及 \texttt{results/train/ndp/0/field/result.json}。后者仍是当前完整场模型的已完成结果：以 nuScenes 权重初始化，随后在 STU 206 的 Perlin 合成异常上训练。它不是“仅 nuScenes 训练”的结果。开发目录中其他历史模型、未提交的数据生成修改和新生成材料，均未被当作新路线的有效性能证据。
+
+\begin{center}
+\begin{tabular}{p{.24\linewidth}p{.66\linewidth}}
+\toprule
+证据状态 & 当前事实\\
+\midrule
+实现 & 完整正常场模型已经实现；本轮核查了关键语义路径。\\
+真实实验 & 已有 STU 合成训练、一个随机种子的完整验证结果。\\
+有效性能范围 & STU 开发验证集上的点级指标；训练条件与对方论文仍有差别。\\
+新路线结论 & 尚无仅用 nuScenes 训练的完整模型结果，不能预测三指标数值。\\
+机制结论 & 尚不能把已有增益归因于共享三维场、首返回公式或多假设建模。\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+历史上已经依据 STU 开发集改过模型，这段研究经历不能通过重新训练消除。后续可以如实主张最终训练与新一轮选择只用 nuScenes，但不能把已反复观察的 STU 验证集重新称为完全未知的最终测试。应披露开发经历，以从未用于决策的隐藏测试或其他独立测试检验最终泛化。改变这一表述不要求丢弃已有成果。
+
+\section*{二、路线可行性与真实竞争目标}
+该路线要回答的科学问题可以写为：\textbf{仅从一个源数据集学习正常道路场景及合成异常，模型能否在传感器与场景变化后，仍将未知物体异常与正常观测变化区分开？} 输入是单帧 LiDAR，输出是每个真实回波的异常分数。STU 是主要真实异常检验，但一个源域到一个目标域的结果，仅支持这一迁移对，不足以概括所有传感器。
+
+源域训练后跨数据集评价已有直接先例。\paper{LIDO}{https://arxiv.org/html/2604.23604} 使用 SemanticKITTI 训练后评价 STU；\paper{LiDomAug}{https://openaccess.thecvf.com/content/CVPR2023/papers/Ryu_Instant_Domain_Augmentation_for_LiDAR_Semantic_Segmentation_CVPR_2023_paper.pdf}、\paper{DGLSS}{https://openaccess.thecvf.com/content/CVPR2023/html/Kim_Single_Domain_Generalization_for_LiDAR_Semantic_Segmentation_CVPR_2023_paper.html} 等已研究不使用目标数据的 LiDAR 域泛化。因此，新训练数据选择能提高检验价值，不能单独承担创新。
+
+三项点级指标分别反映：AP 衡量异常点排在前部时的精确率与召回关系；AUROC 衡量正常与异常点对的整体排序；FPR95 衡量达到约 95\% 异常召回时被误报的正常点比例。它们可由同一分数计算，不是三个相互独立的机制证据。三项全部领先是有吸引力的目标，但 ICLR 没有把这一条件规定为接收门槛；官方审稿要求关注新知识、技术正确性、证据和研究价值。
+
+当前能够核查到的部分 STU 验证结果如下，全部为百分数。不同训练来源的表格用于了解竞争水平，不是控制变量后的方法归因。
+\begin{center}
+\begin{tabular}{p{.26\linewidth}rrrp{.28\linewidth}}
+\toprule
+方法 & AP$\uparrow$ & FPR95$\downarrow$ & AUROC$\uparrow$ & 证据与训练边界\\
+\midrule
+当前完整模型 & 75.6900 & 1.0860 & 99.8034 & 本地完成结果；使用 STU 合成训练\\
+NDP-EE & 74.24 & 1.43 & 99.53 & 原论文表 1；多来源预训练及 STU 训练\\
+COVAL，MinkNet，学习异常分数 & 89.00 & 0.13 & 99.92 & 原 PDF 表 1 的主源文本索引；见下述限制\\
+LIDO & 27.53 & 34.86 & 95.05 & 原论文；SemanticKITTI 源域正常训练\\
+本轮提出的新路线 & — & — & — & 尚未训练与评价\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paper{NDP 原文}{https://arxiv.org/html/2604.09232v2}已核对方法和表格。\paper{COVAL 原 PDF}{https://openreview.net/pdf?id=Hly2QYcuLW}的表 1 及第 4.1 节通过主源搜索索引取得，列名与行对应已交叉核对；PDF 下载页仍受访问验证限制，未完成该页图像复核。因此，这组数值是明确注明获取方式的文献报告值，不是本地重现结果，也不应被包装为已经穷尽的最新排行榜。其第 4.1 节明确使用 SemanticKITTI、Panoptic-CUDAL 和 STU 正常序列，和新路线不同。
+
+这一发现足以修正“超过 NDP 就达到当前最优”的假设。STU 官方公开材料也没有提供本轮可完整核对的实时公共排行榜，故严格的当前最优声明还需要最终原表、协议和测试集结果共同支持。尤其不能将验证集数值与他人隐藏测试集数值直接比较。
+
+为主张模型贡献，至少需要两种比较：一是统一 nuScenes 数据、预训练和合成规则的机制比较；二是忠实保留对方训练要求的公开方法比较，并在表中注明数据差异。强制把所有方法改成同一二分类头可能破坏其本来机制；这类改编应明确标为适配版本。对没有使用合成异常的方法，也应披露监督条件差别。
+
+\section*{三、文献对当前创新点的约束}
+最接近的文献形成三条互相交叉的路线。第一条从正常参照恢复到异常判别；第二条从掩码点云到三维场和观测重建；第三条直接研究 LiDAR 未知异常与跨域分割。把这些路线联合考察，比单独寻找题名相同的方法更能判断创新性。
+
+\begin{longtable}{p{.20\linewidth}p{.33\linewidth}p{.36\linewidth}}
+\toprule
+相邻工作 & 已有机制 & 当前还需要证明的区别\\
+\midrule
+\endhead
+DRAEM、DeSTSeg & 正常恢复、实际与恢复特征比较、学习型异常分割。DRAEM 明确联合训练；DeSTSeg 分阶段冻结师生。 & 新增三维场是否超过一般恢复与融合的收益。\\
+Detecting Road Obstacles by Erasing Them & 擦除目标区域，以道路上下文补全，再学习差异来发现道路障碍。 & 目标排除加兼容性头不是新范式；区别须落到三维约束及其实际价值。\\
+IMRNet、UniAD、SSPCAB & 掩码预测、防止恒等复制、多尺度或上下文正常重建。 & 严格排除目标信息是必要正确性条件，单独不足以成为主要贡献。\\
+DOODLE & 恢复正常 LiDAR 语义特征，以重建差异增强异常判别；包含距离和反射率条件。 & 正常参照在 LiDAR 中也已有先例；真实空间共享场与条件分布需额外证据。\\
+UniPAD、Ponder & 遮挡点云、预测三维隐式场、经可微渲染重建观测，用于表示学习。 & “掩码＋三维场＋射线＋分割收益”的宽泛组合已覆盖。\\
+PLiNK、NFL & 概率 LiDAR 场、观测过程及多峰返回；NFL 处理更详细的发射与接收效应。 & 当前是单扫描条件正常参照，不是逐场景建图；首事件机制本身已有基础。\\
+Volumetrically Consistent 3D Gaussian Rasterization、3DGEER & 各向异性高斯沿射线的解析变换与积分。 & 不能把解析可积或高斯参数化列为本研究发明。\\
+MAELi、NOMAE & 传感器感知遮挡、未知空间处理、位置泄漏与多尺度占据恢复。 & 多尺度角块的任务收益和跨密度适用性需要实测。\\
+NDP、REL、LIDO、COVAL & 学习分布先验、相对能量、正常类别原型、遮挡可见性监督。 & 必须解释显式正常观测分布比特征/能量/训练期遮挡约束带来什么。\\
+GPFlow、AARD & 高斯正常特征先验、解析概率恢复或几何约束扩散重建。 & GPFlow 高斯在特征空间；AARD 依赖物体模板，均不能直接等同当前场，但排除了宽泛宣传。\\
+\bottomrule
+\end{longtable}
+
+本轮没有找到完整同构的“目标不可见上下文→共享多假设三维正常场→归一化条件返回分布→学习型逐点异常分割”工作。这支持继续检验具体设计差别，\textbf{不构成首次性证明}。当前新颖性更适合定位为一个有明确约束的组合机制，而不是已经成立的新建模范式。组合贡献可以发表；关键在于这些约束是否解决了已有方法不能可靠解决的问题。
+
+最值得保留的候选贡献表述是：\textbf{同一个正常三维假设必须共同解释多条观测射线，这一几何约束是否使正常参照在采样变化下更可靠，并改善未知异常的逐点排序？} 它比“加入正常分支”“加入高斯”“物理感知”更具体，也可以被实验证伪。
+
+\section*{四、当前模型的竞争力与主要未知}
+\textbf{有利条件。} 模型已经具备可运行的完整实现；正常支路确实在混合上下文前排除了目标块；多个目标点共享三维参数；条件距离分布经过归一化，避免把任意残差冒充概率；最终判别器保留语义与原始点细节，允许正常几何罕见但语义合理。新增参数规模较小，现有结构不必依赖更大的骨干才继续检验。
+
+\textbf{第一项未知是归因。} 当前完整模型与公开 NDP 结果在骨干、预训练、损失及训练设置上存在差别；本地又缺少同条件的直接判别与自由射线预测对照。因此，现有结果不能识别共享三维约束的独立增量。普通正常辅助预测、更多梯度路径或更强判别头都是合理替代解释。
+
+\textbf{第二项未知是传感器迁移。} nuScenes 的 32 线与 STU 的 128 线观测，在角采样、局部密度、安装条件及强度统计上存在差别。当前编码器读取坐标、强度和方向，角块内使用平均与最大池化；输出为连续场不能消除输入统计依赖。DDFE、GRC、LiDomAug 说明密度和强度差异已有明确方法研究；不能把“加入射线”当作自然获得迁移不变性的证明。
+
+\textbf{第三项未知是正常分布的含义。} 当前有效回波率由已记录的距离监督，未识别出真实占据、材料反射率与设备响应。真实接收器也未必记录理想首次返回。异常损失会更新正常场，辅助似然不能自动保证其校准。因此，正常预测应被描述为受观测关系约束的判别参照，不能直接称为准确的物理世界模型。
+
+\textbf{第四项未知是共同假设是否真正用于判别。} 训练采用块联合混合似然，推理主要使用逐点边缘分布和学习特征。若两个正常假设分别为“左近右远”和“左远右近”，逐点边缘可同时容许“左近右近”，但没有一个共同假设支持它。这是数学上的表示边界；是否导致当前数据实际失分仍未知，不能据此直接判模型错误。
+
+块联合损失为
+\[
+ -\frac1n\log\!\left[\sum_k\pi_k
+ \exp\!\left(\sum_{i=1}^{n}\log p_{ik}(r_i)\right)\right].
+\]
+在对数求和之后除以点数，没有消除射线数量对假设选择的影响。更多观测使假设更明确，也可能是合理统计行为，不能机械追求点数完全不变。需要区分新增真实信息与传感器统计捷径，而不是直接改公式。
+
+\textbf{第五项未知是合成异常迁移。} 源域合成能提供判别监督，但模型可能学到生成器留下的点密度、反射强度或边界特征。随机换一个种子仍可能共享同一捷径。需要区分训练未出现的异常形状、生成机制及合法但少见的正常物体。现有代码已经把一部分 nuScenes 含糊类设为忽略；新方案应先确认这个语义范围，不能简单把所有原始点标为正常，也不能将未见语义类自动等同道路障碍。
+
+\section*{五、能够改变判断的最小比较}
+以下是研究建议，本轮没有启动训练或修改方法。开发与选择只使用 nuScenes；用场景或采集日志划分，避免相邻帧跨训练与开发。若使用官方 nuScenes 预训练权重，必须披露它已见过哪些训练背景；从其预训练集再划出的小集合不能称为预训练未见。合成规则、预算、检查点选择和评价条件应在观察新 STU 结果前确定。
+
+\begin{center}
+\begin{tabular}{p{.12\linewidth}p{.44\linewidth}p{.34\linewidth}}
+\toprule
+比较对象 & 必须保持和改变什么 & 消除的科学不确定性\\
+\midrule
+A：直接判别 & 保留同一实际点路径、预训练和检测损失，移去正常预测。 & 正常参照整条路径是否确实增加价值。\\
+B：自由射线预测 & 保留同一目标排除、上下文、正常监督、混合假设与兼容头；直接预测射线分布参数，不强制投影自同一个三维场。 & 收益是否只来自一般条件预测与额外监督。\\
+C：当前共享场 & 保留现有完整结构；使用同样的源数据和训练/选择规则。 & 三维几何共享约束是否具有额外价值。\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+B 与 C 应尽可能匹配有效容量、正常扫描访问量、训练充分程度和优化预算。B 可直接从块外上下文及射线方向预测同类正值率分布的参数，沿用相同条件归一化与共同假设目标；这样主要改变的是三维投影约束。历史旧模型不是该受控比较的替代品，也不需要恢复其旧训练队列。
+
+在 nuScenes 保留场景上同时评价异常分割与正常误报，并用事先指定的删束、角采样稀疏化和合理强度扰动检查脆弱性。异常合成至少留出一种机制或形状族用于开发检验，以区分同生成器插值与更远的异常迁移。正常覆盖率和区间宽度有助于解释，但不能作为与最终异常识别无关的强制门槛。
+
+真实 32 线扫描不能提供真实 128 线观测。删束仅检验稀疏化；插值增加的是预测；多帧积累改变时间与视点，还需要处理运动。因此，即使“较稀疏源视图训练→完整 32 线评价”成功，也不能推出“32→128 线真实迁移”成功。最终仍需冻结后的 STU 结果。
+
+若初步比较显示有值得解释的增量，再进行重复训练并估计不确定性。视频扫描与点高度相关，应以序列或场景为重采样单位，不能把数亿点当作独立样本获得极窄区间。重复种子衡量训练波动，序列层比较衡量目标场景变动，两者不能互相替代。三项指标均使用同一分数和同一检查点，不按指标各挑一个最优模型。
+
+\section*{六、何时保留、何时重构}
+建议按能够识别原因的证据决定修改范围。
+\begin{enumerate}
+\item 若 C 相比 A 和 B，在充分且匹配的比较中持续显示异常分割、稳健性或效率上的额外价值，应保留核心结构，凝练贡献。没有必要为了外观新颖更换整个骨干。
+\item 若 C 只比 A 好，与 B 长期没有可辨别的额外价值，则当前证据不支持把共享三维场作为核心贡献。一次差异不显著不等于两者等效；还需考虑样本量、训练充分程度和随机波动。
+\item 若源域有效而源域采样扰动下失效，应先定位强度单位、空邻域比例、上下文污染、合成捷径或分数偏移。只有这些简单解释不足，且证据指向表示的设备依赖时，才扩大重构范围。
+\item 若充分检查后发现正常条件预测本身缺少可利用信息，更多高斯核、扩散生成器或更大注意网络都不能补回不存在的信息。此时应重新审视核心假设，而不是继续堆叠模块。
+\end{enumerate}
+
+一个可以考虑的条件式重构方向，是把“局部正常几何假设”与“设备如何采样并产生回波”分开表达，在同一源域场景的合法观测变化下，学习对采样差异稳健、对异常几何敏感的判别。若使用多帧 nuScenes 辅助正常监督，推理仍可保持单帧，但需要真实处理运动和不可见区域。
+
+这一方向不是本轮宣布的新方法：Complete \& Label、LiDomAug、NFL、UniPAD、GRC，以及 2026 年源域占据辅助泛化工作，已经覆盖多项相关思路。未来新贡献必须落实为明确的学习准则和可验证收益。仅把这些模块拼接、把有效回波率改名为几何、或承诺单域数据完全分离几何与设备响应，都不充分。是否实施大幅改变科学路线的重构，应在上述比较后形成具体方案，由用户决定。
+
+\section*{七、对本届投稿的判断}
+用户已确认提交 ICLR 2027 摘要。根据\paper{官方征稿通知}{https://iclr.cc/Conferences/2027/CallForPapers}，全文截止为 2026 年 9 月 25 日 23:59（UTC−12），对应北京时间 9 月 26 日 19:59。因而本届仍有提交资格，但时间紧迫。
+
+就当前证据而言，若论文把现有验证结果直接写成“仅 nuScenes 训练、冻结到 STU 且达到最优”，会产生实质性证据错误；若只更换训练来源而没有受控比较，方法新颖性与归因仍很可能受到质疑。当前状态的拒稿风险较高。这是基于现有材料的判断，不是对未来评审结果的精确预测。
+
+若新路线得到扎实的真实结果、明确胜过关键替代解释，并如实处理历史开发使用、强竞争者及跨域范围，可以形成有竞争价值的方法论文。即使三项指标都领先，也仍须说明共享场带来的知识；反过来，三项没有全部领先，也不自动否定一个机制清楚、价值充分的研究。\paper{ICLR 2027 审稿指南}{https://iclr.cc/Conferences/2027/ReviewerGuidelines}明确要求开放地评价新知识，不将已有排行榜当作唯一标准。
+
+现有旧设置中，4,490 次合成扫描访问的训练约耗时 9 小时，完整验证及指标计算约 21 分钟。由于 nuScenes 点密度、数据量和优化过程不同，这些数值不能直接换算新路线的完成时间。本报告不承诺在剩余时间内完成全面重构、充分训练、独立测试及完整论文验证。
+
+\section*{八、已确认、未确认与下一步}
+已确认：新路线问题成立；现有模型已经实现；大部分基础机制有明确先例；当前实测只支持 STU 合成训练后的开发集表现；NDP 不能继续作为唯一最强竞争标尺。
+
+尚未确认：共享三维约束的独立收益、nuScenes 到 STU 的真实表现、相对最新强方法的优势、跨序列和训练随机性的稳定程度，以及任何重构候选是否更好。
+
+被否定的是宽泛的新颖性叙事和“换训练数据加三指标领先即足以录用”的推论；并未否定当前模型全部研究价值，也未证明必须重置路线。下一项最能改变判断的动作，是仅在 nuScenes 内开展 A/B/C 的受控先导比较，并用结果确定是否保留共享三维场。正式目标测试保留到模型确定后。
+
+\section*{九、调研方法与阅读范围}
+检索截止日期为 2026 年 9 月 23 日。采用机制关键词、已知强竞争者题名检索及参考文献追溯，来源包括 arXiv、CVF、ICLR/NeurIPS/ICML 论文材料、PMLR、AAAI、作者项目页及官方代码。纳入与道路/三维异常、正常条件预测、概率密度、LiDAR 场、掩码学习、跨传感器分割或公平基线直接相关的论文；排除同名无关工作、重复版本和仅有二手评价而不能核对原始摘要的条目。
+
+核心检索词包括 LiDAR anomaly segmentation、STU OOD、masked reconstruction anomaly、normal reconstruction discriminative segmentation、Gaussian ray integration、probabilistic LiDAR field、LiDAR masked occupancy、source-only domain generalization、density-aware segmentation 和 likelihood OOD。文献按题名、arXiv 标识及正式版本去重；没有编造数据库总命中量或标准化筛选流水线。部分工业物体、二维图像和表示学习论文仅用于界定机制边界，绝不计为 STU 同任务性能竞争者。
+
+原文直连失败时，使用同一论文的作者公开全文、arXiv HTML 或原始页面的文本索引；具体限制保留在条目中。对于只核实预印本的条目，不将其自动升级为已正式发表。作者自报成绩只被视作文献证据，没有进行外部方法的独立复现。文献数量反映覆盖宽度，不代表每篇都完成了全部公式、代码和实验审计。
+
+本轮去重后共纳入 135 篇文献：26 篇进一步核对方法与实验，106 篇完成摘要层面分析，另 3 条主要依据原文索引片段或摘要索引，保留获取限制。四组分别为道路异常与直接竞争 35 篇、正常重建与概率异常 35 篇、雷达场与掩码学习 35 篇、域泛化及数据骨干 30 篇。不同预印本和正式版不重复计数；同一研究的实质延展如 PointAD 与 PointAD+ 分别列出，并说明关联。
+\clearpage\section*{附录：逐篇文献分析}
+条目编号与随附数据表一致。阅读层级为本轮实际可取得并分析的内容；表内“威胁”表示对某个宽泛创新点的覆盖风险，不表示已覆盖当前完整模型。年份优先采用已核实正式发表年份；仅核实预印本时保留相应年份及状态说明。
+
+\subsection*{道路异常与直接竞争}
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R001．Neural Distribution Prior for LiDAR Out-of-Distribution Detection}\\
+2026；CVPR；已发表。\\
+\textbf{阅读与定位：}方法与实验；原文 HTML §3.2–3.5、§4.1、表1–2；CVF正式论文入口已交叉核对。\href{https://arxiv.org/html/2604.09232v2}{原始来源}\\
+\textbf{机制：}NDP 在 Mask4Former 点分支学习类条件神经先验，以注意力调制正负能量；PerlinRaise 从道路生成异常，软化未知标签。\\
+\textbf{对本项目的意义：}先验引导异常判别及源内合成已有强对手。原报告使用 SemanticKITTI、CUDAL 预训练及 STU 正常训练序列，不能直接充当 nuScenes 单源公平对照。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R002．Relative Energy Learning for LiDAR Out-of-Distribution Detection}\\
+2026；ISPRS Journal of Photogrammetry and Remote Sensing 239:334–346；已发表；2025年预印本。\\
+\textbf{阅读与定位：}方法与实验；原文 HTML §3.2–3.4、§4.3、表1–4；\href{https://www.sciencedirect.com/science/article/pii/S0924271626002984}{正式出版页面}。\href{https://arxiv.org/html/2511.06720v1}{原始来源}\\
+\textbf{机制：}REL 用两组 K 类输出的对数概率比形成相对能量，以不平衡加权逻辑损失训练；PointRaise 收缩并抬升道路点簇。\\
+\textbf{对本项目的意义：}仅源内异常合成和联合判别不是新增贡献；需以相同源数据和骨干控制比较。论文 STU 结果使用目标正常序列微调。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R003．Learning to Identify Out-of-Distribution Objects for 3D LiDAR Anomaly Segmentation}\\
+2026；CVPR；已发表。\\
+\textbf{阅读与定位：}方法与实验；原文 HTML §3–5，尤其§5.1与STU结果表。\href{https://arxiv.org/html/2604.23604}{原始来源}\\
+\textbf{机制：}LIDO 结合已知类原型余弦距离、语义熵和对比特征范数；训练只用正常点，并构造带射线匹配及反射率的合成异常评测集。\\
+\textbf{对本项目的意义：}STU实验明确只用 SemanticKITTI 训练，已有跨数据集正常训练先例；不能仅凭正文训练范围推定其超参数完全不使用STU。其场外原型评分不同于条件回波分布。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R004．Counterfactual Occlusion-Aware Learning via Visibility Intervention for LiDAR Anomaly Detection}\\
+2026；ICML；会议录用已由ICML及作者官方页面核实；原PDF直接获取受阻。\\
+\textbf{阅读与定位：}原文索引片段；原PDF搜索索引：摘要、§3.2–3.4、§4.1、表1；已核对表格文本，未复核PDF页图。\href{https://icml.cc/Downloads/2026}{ICML 正式目录}。\href{https://openreview.net/pdf?id=Hly2QYcuLW}{原始来源}\\
+\textbf{机制：}COVAL 固定异常原因和几何，通过保留或移除被遮挡背景产生可见性配对；用缺失区域特征重建和共同可见区域一致性训练。推理移除辅助头。\\
+\textbf{对本项目的意义：}直接威胁把遮挡、射线缺失和物理约束作为新概念的主张。其训练期反事实约束不同于推理期上下文正常回波概率场；仍须全文比对。表1索引报告STU验证AP89.00，训练含STU正常序列，不能据此裁决全球SOTA。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R005．Spotting the Unexpected (STU): A 3D LiDAR Dataset for Anomaly Segmentation in Autonomous Driving}\\
+2025；CVPR；已发表。\\
+\textbf{阅读与定位：}方法与实验；已下载并验证CVF PDF文件头及内容，读§3–4与评价表；\href{https://raw.githubusercontent.com/kumuji/stu_dataset/main/README.md}{官方说明}。\href{https://arxiv.org/abs/2505.02148}{原始来源}\\
+\textbf{机制：}提供128线雷达异常序列，点级三指标与实例级指标；公开验证序列、隐藏测试序列和正常训练序列。\\
+\textbf{对本项目的意义：}nuScenes到STU同时改变传感器、场景和异常分布。必须严格区分公开验证与隐藏测试，以及目标正常数据是否进入训练。官方README未找到持续更新公开榜单。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R006．Open-world Semantic Segmentation for LIDAR Point Clouds}\\
+2022；ECCV；已发表。\\
+\textbf{阅读与定位：}方法与实验；已下载\href{https://www.ecva.net/papers/eccv_2022/papers_ECCV/papers/136980315.pdf}{ECVA 原 PDF}，读§4.2、§5.1–5.2。\href{https://arxiv.org/abs/2207.01452}{原始来源}\\
+\textbf{机制：}REAL 加冗余未知分类器，缩放已有物体生成未知物，令已知点未知类分数次于真实类，并支持后续增量学习。\\
+\textbf{对本项目的意义：}nuScenes源内构造异常已有明确先例；其四类留出协议不是STU真实异常协议，不能直接混用指标。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R007．Open-Set Semantic Segmentation for Point Clouds via Adversarial Prototype Framework}\\
+2023；CVPR；已发表。\\
+\textbf{阅读与定位：}原文索引摘要；CVF原始摘要和PDF第一页全文索引均已读取；直接HTML访问返回403，未声称全文精读。\href{https://openaccess.thecvf.com/content/CVPR2023/html/Li_Open-Set_Semantic_Segmentation_for_Point_Clouds_via_Adversarial_Prototype_Framework_CVPR_2023_paper.html}{原始来源}\\
+\textbf{机制：}APF 学习已知类原型，再用对抗生成的未知特征调整特征与原型，使未知点可分。\\
+\textbf{对本项目的意义：}生成辅助分布与原型判别组合已出现；其生成对象是特征而非共享三维回波几何。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R008．LiON: Learning Point-Wise Abstaining Penalty for LiDAR Outlier DetectioN Using Diverse Synthetic Data}\\
+2025；AAAI；已发表；2023年预印本。\\
+\textbf{阅读与定位：}方法与实验；原文 HTML 方法、实验和合成消融；\href{https://ojs.aaai.org/index.php/AAAI/article/view/32968}{AAAI 页面}。\href{https://arxiv.org/html/2309.10230v3}{原始来源}\\
+\textbf{机制：}结合点级能量弃权损失、自适应惩罚和物体缩放、ShapeNet落地及射线重采样两条异常合成路径，缓解点密度捷径。\\
+\textbf{对本项目的意义：}密度、射线一致性和合成多样性不是全新问题；其外部ShapeNet路径不满足用户仅nuScenes约束，可作为额外数据组或仅保留源内路径。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R009．DOODLE: Diffusion-based Out-of-Distribution Learning for Open-set LiDAR Semantic Segmentation}\\
+2026；WACV；已发表。\\
+\textbf{阅读与定位：}方法与实验；原PDF已下载、验证application/pdf和\%PDF文件头；读§3–4与主结果、消融。\href{https://openaccess.thecvf.com/content/WACV2026/papers/Oh_DOODLE_Diffusion-based_Out-of-Distribution_Learning_for_Open-set_LiDAR_Semantic_Segmentation_WACV_2026_paper.pdf}{原始来源}\\
+\textbf{机制：}在语义特征上训练正常潜空间扩散模型，以深度和反射率为条件；比较原始与重建语义输出，并用差异放大及密度聚类改进已有未知分类器。\\
+\textbf{对本项目的意义：}直接覆盖LiDAR正常生成先验加判别输出的泛化构想。当前可区分处为屏蔽目标输入、显式多假设三维几何与首返回概率，而非单纯把生成模型换成高斯或扩散。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R010．Out-of-Distribution Detection in LiDAR Semantic Segmentation Using Epistemic Uncertainty from Hierarchical GMMs}\\
+2025；arXiv；预印本；未核实后续正式发表。\\
+\textbf{阅读与定位：}摘要；已打开arXiv原始摘要页。\href{https://arxiv.org/abs/2510.08631}{原始来源}\\
+\textbf{机制：}在层次高斯混合模型中显式刻画参数不确定性，分离认知与随机不确定性，在没有辅助异常训练时做点级检测。\\
+\textbf{对本项目的意义：}概率正常性不应直接等同异常；需要证明当前多假设场未把正常场景歧义或采样稀疏度当成异常。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R011．Uncertainty Estimation and Out-of-Distribution Detection for LiDAR Scene Semantic Segmentation}\\
+2024；ECCV；已发表。\\
+\textbf{阅读与定位：}摘要；已打开arXiv摘要，comments核实ECCV2024。\href{https://arxiv.org/abs/2410.08687}{原始来源}\\
+\textbf{机制：}对确定性分割特征拟合高斯混合，结合马氏距离统计检验和混合参数不确定性估计，实现异常检测及不确定性区分。\\
+\textbf{对本项目的意义：}简单特征密度是必须考虑的概率基线；当前优势应来自测量生成结构，不应仅来自额外似然损失。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R012．Lidar Panoptic Segmentation in an Open World}\\
+2025；International Journal of Computer Vision 133:1153–1174；2024年在线发表；2025年卷期。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要和comments；DOI 10.1007/s11263-024-02166-9。\href{https://arxiv.org/abs/2409.14273}{原始来源}\\
+\textbf{机制：}把点云组织为类无关层次聚类树，以可学习段评分选择树切割，兼顾已知与未知实例，在更大类别词表的跨数据集环境评价。\\
+\textbf{对本项目的意义：}开放世界及跨数据集设置已有独立研究；其未知实例发现与STU逐点异常不同，可防止任务新颖性夸大。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R013．RbA: Segmenting Unknown Regions Rejected by All}\\
+2023；ICCV；已发表。\\
+\textbf{阅读与定位：}摘要；已打开arXiv摘要；CVF/IEEE核实ICCV2023。\href{https://arxiv.org/abs/2211.14293}{原始来源}\\
+\textbf{机制：}将掩码类别预测理解为各已知类的一对其余判别，按被所有类别拒绝产生异常分数，并可用少量异常暴露优化。\\
+\textbf{对本项目的意义：}强点/区域判别基线；语义兼容性头的增益必须排除分数设计本身的贡献。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R014．Unmasking Anomalies in Road-Scene Segmentation}\\
+2023；ICCV；已发表；Mask2Anomaly系列只计一次。\\
+\textbf{阅读与定位：}摘要；已打开arXiv原摘要和comments；不另计后续Mask2Anomaly扩展稿。\href{https://arxiv.org/abs/2307.13316}{原始来源}\\
+\textbf{机制：}Mask2Anomaly 用前景/背景全局掩码注意力、掩码对比学习及掩码细化，从独立像素转向区域级异常判断。\\
+\textbf{对本项目的意义：}上下文与分组抑制边界误报已成熟；注意力或多尺度兼容头本身难支撑主要创新。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R015．Pixel-wise Energy-biased Abstention Learning for Anomaly Segmentation on Complex Urban Driving Scenes}\\
+2022；ECCV；已发表。\\
+\textbf{阅读与定位：}摘要；实际下载并读取arXiv摘要；comments为ECCV2022 Oral。\href{https://arxiv.org/abs/2111.12264}{原始来源}\\
+\textbf{机制：}PEBAL 联合能量正常分布和逐像素弃权学习，按能量自适应调整异常类惩罚，利用异常暴露训练。\\
+\textbf{对本项目的意义：}生成式正常性与判别损失的联合训练已有先例，也是LiON直接来源。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R016．DenseHybrid: Hybrid Anomaly Detection for Dense Open-set Recognition}\\
+2022；ECCV；已发表。\\
+\textbf{阅读与定位：}摘要；实际下载并读取arXiv原始摘要与ECCV录用comments。\href{https://arxiv.org/abs/2207.02606}{原始来源}\\
+\textbf{机制：}共享特征同时估计类别后验、数据集后验和未归一化正常似然，再组合后两者构成异常分数。\\
+\textbf{对本项目的意义：}直接覆盖“生成正常模型和判别异常模型联合”的宽泛贡献；当前需要证明条件测量模型带来额外可解释约束。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R017．Residual Pattern Learning for Pixel-wise Out-of-Distribution Detection in Semantic Segmentation}\\
+2023；ICCV；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要和ICCV2023 comments。\href{https://arxiv.org/abs/2211.14512}{原始来源}\\
+\textbf{机制：}RPL 添加残差异常分支，结合对上下文变化稳健的对比学习，保留已知分割并改善新环境异常检测。\\
+\textbf{对本项目的意义：}关注正常上下文变化与异常信号的解耦；当前跨传感器贡献应超出给异常头增加上下文训练。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R018．PixOOD: Pixel-Level Out-of-Distribution Detection}\\
+2024；ECCV；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取ECVA原摘要；作者仓库核实会议为ECCV而非CVPR。\href{https://www.ecva.net/papers/eccv_2024/papers_ECCV/html/7720_ECCV_2024_paper.php}{原始来源}\\
+\textbf{机制：}使用可梯度优化的在线数据压缩表示正常类内部多样性，无需异常训练，做通用逐像素分布外检测。\\
+\textbf{对本项目的意义：}仅正常训练和多模态正常表示已有成熟方法；可检验当前复杂条件场是否超过简单正常特征模型。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R019．Maskomaly: Zero-Shot Mask Anomaly Segmentation}\\
+2023；BMVC；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要；BMVC官方页面核实题名与会议。\href{https://proceedings.bmvc2023.org/329/}{原始来源}\\
+\textbf{机制：}复用已有语义掩码网络原始掩码，在推理时后处理得到异常分割，不额外训练异常样本。\\
+\textbf{对本项目的意义：}说明冻结现有模型及无需异常训练不构成独有创新；不据摘要把其所有模型选择声称为目标盲。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R020．Random Walk on Pixel Manifolds for Anomaly Segmentation of Complex Driving Scenes}\\
+2024；ECCV；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要与录用comments。\href{https://arxiv.org/abs/2404.17961}{原始来源}\\
+\textbf{机制：}利用像素特征流形上的随机游走改善域变化下的表示失真，再计算已有异常分数。\\
+\textbf{对本项目的意义：}空间上下文传播本身能提升检测；必须把场几何约束和普通邻域平滑/特征传播分开检验。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R021．Generalize or Detect? Towards Robust Semantic Segmentation Under Multiple Distribution Shifts}\\
+2024；NeurIPS；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要与NeurIPS2024 comments；原会议论文入口已核对。\href{https://arxiv.org/abs/2411.03829}{原始来源}\\
+\textbf{机制：}生成同时含未知物体和域变化的图像，重新校准语义未知的不确定性，并约束域变化下的特征保持稳定。\\
+\textbf{对本项目的意义：}“对传感器/场景变化保持稳定，对语义异常保持敏感”已是明确问题；当前必须给出LiDAR测量层面的新增解决机制。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R022．The Fishyscapes Benchmark: Measuring Blind Spots in Semantic Segmentation}\\
+2021；International Journal of Computer Vision；已发表；2019年预印本及早期基准不重复计数。\\
+\textbf{阅读与定位：}摘要；已打开arXiv原摘要，正式DOI 10.1007/s11263-021-01511-6。\href{https://arxiv.org/abs/1904.03215}{原始来源}\\
+\textbf{机制：}建立道路场景像素级未知检测基准，比较置信度、贝叶斯和特征密度方法，显示常规语义准确率不能保证异常识别。\\
+\textbf{对本项目的意义：}支持把已知泛化与异常检测分别评价，并辨别合成和真实异常数据的作用。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R023．SegmentMeIfYouCan: A Benchmark for Anomaly Segmentation}\\
+2021；NeurIPS Datasets and Benchmarks；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要；NeurIPS Datasets and Benchmarks官方页核实。\href{https://arxiv.org/abs/2104.14812}{原始来源}\\
+\textbf{机制：}分别定义未知物体分割与道路障碍分割，并提供像素和物体连通组件评价，减少物体尺寸主导汇总分数。\\
+\textbf{对本项目的意义：}三项点级指标不是三个独立机制证据；若用户主张安全发现能力，应至少检查大小/距离分组而非只看总AP。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R024．A Likelihood Ratio-Based Approach to Segmenting Unknown Objects}\\
+2025；International Journal of Computer Vision；已发表；2024年预印本。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要；另读出版社§3索引，未计全文精读；DOI 10.1007/s11263-025-02509-0。\href{https://arxiv.org/abs/2409.06424}{原始来源}\\
+\textbf{机制：}冻结已知分割模型，增加轻量未知估计模块，学习代理未知分布和通用正常分布，用似然比融合已知模型输出。\\
+\textbf{对本项目的意义：}正常似然加判别头不自动构成概率上的新发现；当前条件首返回模型需解释为何优于特征空间似然比。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R025．Pixel-wise Anomaly Detection in Complex Driving Scenes}\\
+2021；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv原摘要；CVF正式论文入口已核对。\href{https://arxiv.org/abs/2103.05445}{原始来源}\\
+\textbf{机制：}SynBoost 将语义重合成差异与分割不确定性联合，利用已有分割网络而保持其已知类输出。\\
+\textbf{对本项目的意义：}生成正常参考再由可学习比较器解释差异是长期路线；需突出三维测量约束而非重新包装比较分支。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R026．A Dataset for Semantic Segmentation in the Presence of Unknowns}\\
+2025；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要与CVPR2025 comments。\href{https://arxiv.org/abs/2503.22309}{原始来源}\\
+\textbf{机制：}ISSU 在拥挤真实场景同时标注已知和异常，并含跨域、跨传感器、照明变化及静态/时间测试。\\
+\textbf{对本项目的意义：}说明仅单基准异常分数不能充分覆盖正常泛化；可作为科学问题参照，不要求将二维数据直接并入当前训练。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R027．FlowCLAS: Enhancing Normalizing Flow-Based Anomaly Segmentation Via Contrastive Learning}\\
+2026；WACV；已发表；arXiv早期标题略有不同，合并计一次。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要与WACV2026 Camera Ready comments；CVF正式题名已核对。\href{https://arxiv.org/abs/2411.19888}{原始来源}\\
+\textbf{机制：}在正常化流最大似然目标中加入异常暴露对比损失，使复杂多模态正常密度兼具判别性。\\
+\textbf{对本项目的意义：}直接覆盖给正常概率模型追加异常判别目标的宽泛构想；主模型必须检验似然是否有独立作用。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R028．ClimaOoD: Improving Anomaly Segmentation via Physically Realistic Synthetic Data}\\
+2026；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；已打开arXiv摘要与CVPR2026 comments。\href{https://arxiv.org/abs/2512.02686}{原始来源}\\
+\textbf{机制：}利用语义引导、多天气生成和异常修补构造物理合理道路训练样本，提高跨天气异常分割。\\
+\textbf{对本项目的意义：}合成真实性和条件变化可独立产生大增益，当前应控制异常合成预算和几何难度，避免把数据优势归因主模型。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R029．Open-Set LiDAR Panoptic Segmentation Guided by Uncertainty-Aware Learning}\\
+2025；IROS；已发表；作者官方仓库核实。\\
+\textbf{阅读与定位：}摘要；已打开arXiv摘要；\href{https://ulops.cs.uni-freiburg.de/}{官方项目页}与作者ULOPS仓库。\href{https://arxiv.org/abs/2506.13265}{原始来源}\\
+\textbf{机制：}ULOPS 以Dirichlet证据不确定性配合语义、实例嵌入和中心预测，设计均匀、对比和自适应分离损失识别未知实例。\\
+\textbf{对本项目的意义：}支持无专门目标异常样本的LiDAR开放集建模已有竞争；其输出为全景分割，不能把结果数字直接与STU点级三指标混排。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R030．Label-Free Model Failure Detection for Lidar-based Point Cloud Segmentation}\\
+2025；IEEE Intelligent Vehicles Symposium；已发表；2024年预印本。\\
+\textbf{阅读与定位：}摘要；已打开arXiv摘要；comments和DOI 10.1109/IV64158.2025.11163519。\href{https://arxiv.org/abs/2407.14306}{原始来源}\\
+\textbf{机制：}比较监督与自监督表示流来识别分割失败，利用无标签场景训练，并给出LidarCODA评测。\\
+\textbf{对本项目的意义：}失败检测和未知物体不是同一标签构念；可用于核查当前分数是否只是在检测困难区域。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R031．Outlier detection by ensembling uncertainty with negative objectness}\\
+2024；BMVC；已发表。\\
+\textbf{阅读与定位：}摘要；已打开BMVC官方摘要和BibTeX。\href{https://bmvc2024.org/proceedings/779/}{原始来源}\\
+\textbf{机制：}UNO 把已知分类不确定性和负类后验分开，再组合异常分数；可用联合训练的正常化流降低负样本偏置。\\
+\textbf{对本项目的意义：}当前兼容头须区分真正正常性偏离与对合成异常外观的熟悉度，不能把后者作为开放未知机制证据。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R032．Prior2Former - Evidential Modeling of Mask Transformers for Assumption-Free Open-World Panoptic Segmentation}\\
+2025；ICCV；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv摘要；CVF正式题名与ICCV2025已核对。\href{https://arxiv.org/abs/2504.04841}{原始来源}\\
+\textbf{机制：}给掩码成员预测引入Beta证据先验，以不确定性发现未知实例，不使用异常样本或未标注类别对比训练。\\
+\textbf{对本项目的意义：}无目标异常训练、先验及不确定性组合已有方法；当前需通过测量结构而非先验名称建立区别。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R033．Road Anomaly Detection by Partial Image Reconstruction With Segmentation Coupling}\\
+2021；ICCV；已发表。\\
+\textbf{阅读与定位：}摘要；实际请求并读取CVF原始摘要；作者JSRNet仓库补充训练范围。\href{https://openaccess.thecvf.com/content/ICCV2021/html/Vojir_Road_Anomaly_Detection_by_Partial_Image_Reconstruction_With_Segmentation_Coupling_ICCV_2021_paper.html}{原始来源}\\
+\textbf{机制：}JSR-Net 用小瓶颈重建道路，将结构相似性误差与语义分割信息耦合输出异常分数。\\
+\textbf{对本项目的意义：}正常重建和语义比较器的组合已有明确道路异常先例；其小瓶颈不等于当前目标角块盲预测。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R034．Detecting Road Obstacles by Erasing Them}\\
+2024；IEEE Transactions on Pattern Analysis and Machine Intelligence 46(4):2450–2460；2023年在线发表；2024年卷期；2020年初稿不重复计数。\\
+\textbf{阅读与定位：}方法与实验；实际读取原文HTML §III-B、III-C、IV及表II；\href{https://doi.org/10.1109/TPAMI.2023.3335152}{出版标识}。\href{https://arxiv.org/html/2012.13633v3}{原始来源}\\
+\textbf{机制：}滑窗屏蔽道路图块，由周围上下文补全正常道路，再用原图/补全图特征及相关性差异头检测障碍。合成障碍来自Cityscapes，但补全器及骨干使用外部预训练。\\
+\textbf{对本项目的意义：}直接覆盖屏蔽目标、预测正常参考、学习兼容头这一总体结构。表II去掉补全仍保留多数AP，提示当前必须排除判别头绕过场分支。三维共享几何和首返回测量仍需单独判断。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R035．Detecting the Unexpected via Image Resynthesis}\\
+2019；ICCV；已发表。\\
+\textbf{阅读与定位：}摘要；实际读取arXiv原摘要；CVF正式原PDF入口核对。\href{https://arxiv.org/abs/1904.07595}{原始来源}\\
+\textbf{机制：}将已有语义预测重新生成图像，以可学习差异网络识别无法被已知语义解释的区域，并提供RoadAnomaly数据。\\
+\textbf{对本项目的意义：}生成可解释正常参考后比较原观测属于经典路线；当前若仅保留这一叙事，创新不足。
+
+
+\subsection*{正常重建与概率异常}
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R036．DRAEM - A Discriminatively Trained Reconstruction Embedding for Surface Anomaly Detection}\\
+2021；ICCV；已发表。\\
+\textbf{阅读与定位：}方法与实验；arXiv:2108.07610v2 §3.1–3.3、§4.2、表3；明确有分割梯度回传重建器。\href{https://openaccess.thecvf.com/content/ICCV2021/html/Zavrtanik_DRAEM_-_A_Discriminatively_Trained_Reconstruction_Embedding_for_Surface_Anomaly_ICCV_2021_paper.html}{原始来源}\\
+\textbf{机制：}用合成异常训练正常重建器，并将原图与重建图交给判别分割网络；重建与分割梯度共同优化。\\
+\textbf{对本项目的意义：}直接覆盖“正常恢复＋学习兼容判别＋联合训练”的宽泛构想；本项目差异须落在目标排除、共享三维场和射线条件分布。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R037．DeSTSeg: Segmentation Guided Denoising Student-Teacher for Anomaly Detection}\\
+2023；CVPR；已发表。\\
+\textbf{阅读与定位：}方法与实验；arXiv:2211.11317 §3.2–3.4、§4.4、表4–6。\href{https://openaccess.thecvf.com/content/CVPR2023/html/Zhang_DeSTSeg_Segmentation_Guided_Denoising_Student-Teacher_for_Anomaly_Detection_CVPR_2023_paper.html}{原始来源}\\
+\textbf{机制：}先让学生将受污染输入恢复为干净教师特征，再冻结师生，用合成掩码训练多层相似特征的分割器。\\
+\textbf{对本项目的意义：}覆盖多尺度正常参照与可学习兼容分割；原文分阶段冻结，与本项目全网络联合训练不同。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R038．Reconstruction by inpainting for visual anomaly detection}\\
+2021；Pattern Recognition；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://www.sciencedirect.com/science/article/pii/S0031320320305094}{原始来源}\\
+\textbf{机制：}随机移除局部图像区域，只用邻域补全，再以重建偏差检测异常。\\
+\textbf{对本项目的意义：}排除待测区域以防直接复制的思想已有先例；当前严格在原始点聚合前排除及观测模型仍有具体差异。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R039．Inpainting Transformer for Anomaly Detection}\\
+2021；ICIAP2021；作者原始页注明ICIAP2021录用；年份按预印本首发2021。\\
+\textbf{阅读与定位：}摘要；原论文摘要；arXiv作者Comments: Accepted to ICIAP2021。\href{https://arxiv.org/abs/2104.13897}{原始来源}\\
+\textbf{机制：}使用自注意力整合较远上下文，补全被遮蔽图像块。\\
+\textbf{对本项目的意义：}多尺度/长程上下文与遮蔽预测本身不足成为创新；它无三维共享场及传感器观测约束。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R040．Self-Supervised Predictive Convolutional Attentive Block for Anomaly Detection}\\
+2022；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2022/html/Ristea_Self-Supervised_Predictive_Convolutional_Attentive_Block_for_Anomaly_Detection_CVPR_2022_paper.html}{原始来源}\\
+\textbf{机制：}卷积感受野中心遮蔽，结合通道注意力与自监督重建损失形成可嵌入的正常预测块。\\
+\textbf{对本项目的意义：}“加正常预测辅助分支改善异常检测”也已有建筑块层面的先例；需证明三维约束特有收益。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R041．A Unified Model for Multi-class Anomaly Detection}\\
+2022；NeurIPS；已发表。\\
+\textbf{阅读与定位：}方法与实验；arXiv原文§3.1–3.3、§4.2、表5、附录表A2；NeurIPS2022官方论文集核实发表状态。\href{https://proceedings.neurips.cc/paper_files/paper/2022/hash/1d774c112926348c3e25ea47d87c835b-Abstract-Conference.html}{原始来源}\\
+\textbf{机制：}分层查询解码、邻域遮蔽注意力及特征扰动共同防止复制输入，重建多类正常特征。\\
+\textbf{对本项目的意义：}明确覆盖信息泄漏/恒等捷径防范；原文先经预训练图像骨干，严格原始目标点排除仍是实现差别但不是独立充分贡献。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R042．Dinomaly: The Less Is More Philosophy in Multi-Class Unsupervised Anomaly Detection}\\
+2025；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2025/html/Guo_Dinomaly_The_Less_Is_More_Philosophy_in_Multi-Class_Unsupervised_Anomaly_CVPR_2025_paper.html}{原始来源}\\
+\textbf{机制：}强基础模型特征、噪声瓶颈、线性注意力、宽松特征重建构成简洁统一模型。\\
+\textbf{对本项目的意义：}提醒性能可能主要来自骨干及训练正则；增加复杂几何分支必须胜过同骨干简单重建/判别基线。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R043．CutPaste: Self-Supervised Learning for Anomaly Detection and Localization}\\
+2021；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2021/html/Li_CutPaste_Self-Supervised_Learning_for_Anomaly_Detection_and_Localization_CVPR_2021_paper.html}{原始来源}\\
+\textbf{机制：}通过剪贴形成代理异常分类任务，再在学习特征上建立单类检测器。\\
+\textbf{对本项目的意义：}只用正常数据加合成异常训练不是新范式；要核验合成异常是否训练了可迁移而非配方特征。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R044．DSR -- A dual subspace re-projection network for surface anomaly detection}\\
+2022；ECCV；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://www.ecva.net/papers/eccv_2022/papers_ECCV/papers/136910526.pdf}{原始来源}\\
+\textbf{机制：}量化特征空间采样产生接近正常分布的异常，双解码器重投影到正常子空间。\\
+\textbf{对本项目的意义：}特征层合成和正常恢复已有成熟路线；可作为不依赖几何渲染的反事实基线思想。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R045．SimpleNet: A Simple Network for Image Anomaly Detection and Localization}\\
+2023；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2023/html/Liu_SimpleNet_A_Simple_Network_for_Image_Anomaly_Detection_and_Localization_CVPR_2023_paper.html}{原始来源}\\
+\textbf{机制：}预训练特征经浅层适配，用高斯噪声合成异常特征并训练二分类器。\\
+\textbf{对本项目的意义：}为同骨干、同训练量的简单判别基线提供直接依据；复杂正常场应有可重复增量。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R046．Towards Total Recall in Industrial Anomaly Detection}\\
+2022；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2022/html/Roth_Towards_Total_Recall_in_Industrial_Anomaly_Detection_CVPR_2022_paper.html}{原始来源}\\
+\textbf{机制：}PatchCore存储具有代表性的正常局部特征记忆，以查询到记忆的距离定位异常。\\
+\textbf{对本项目的意义：}正常参照不一定要由生成网络产生；可比较正常几何/骨干特征记忆的收益与成本。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R047．PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization}\\
+2020；ICPR 2020 Industrial Machine Learning Workshop；作者原始页注明工作坊录用；年份按预印本首发2020。\\
+\textbf{阅读与定位：}摘要；原论文摘要；arXiv作者录用注释。\href{https://arxiv.org/abs/2011.08785}{原始来源}\\
+\textbf{机制：}多层预训练局部特征建立多元高斯正常分布，利用层间相关定位偏离。\\
+\textbf{对本项目的意义：}高斯建模正常分布本身早已有之；当前三维空间有效回波率与特征空间高斯须明确区分。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R048．Anomaly Detection via Reverse Distillation From One-Class Embedding}\\
+2022；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2022/html/Deng_Anomaly_Detection_via_Reverse_Distillation_From_One-Class_Embedding_CVPR_2022_paper.html}{原始来源}\\
+\textbf{机制：}教师编码器与学生解码器通过单类瓶颈恢复多尺度教师特征，以差异检测。\\
+\textbf{对本项目的意义：}正常信息瓶颈、实际/恢复双流及多尺度差异已有先例；不能把双流结构单独包装贡献。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R049．EfficientAD: Accurate Visual Anomaly Detection at Millisecond-Level Latencies}\\
+2024；WACV；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/WACV2024/html/Batzner_EfficientAD_Accurate_Visual_Anomaly_Detection_at_Millisecond-Level_Latencies_WACV_2024_paper.html}{原始来源}\\
+\textbf{机制：}轻量师生差异检测局部异常，加入全局自编码器检测正常部件的不合理组合，并限制学生外推。\\
+\textbf{对本项目的意义：}联合/上下文一致性可发现各局部看似正常的组合异常；当前以边缘密度推理可能丢失共享假设证据。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R050．Multimodal Industrial Anomaly Detection via Hybrid Fusion}\\
+2023；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2023/html/Wang_Multimodal_Industrial_Anomaly_Detection_via_Hybrid_Fusion_CVPR_2023_paper.html}{原始来源}\\
+\textbf{机制：}M3DM用块级对比学习融合RGB与点云特征，再用多记忆库及新颖性判别融合。\\
+\textbf{对本项目的意义：}多尺度/多模态正常参照融合有先例；工业物体RGB+点云设置不能直接充当道路LiDAR同任务SOTA。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R051．Asymmetric Student-Teacher Networks for Industrial Anomaly Detection}\\
+2023；WACV；已发表。\\
+\textbf{阅读与定位：}方法与实验；原论文§3、§4.4、表3–5；MVTec3D报告多次运行，图像检测与像素定位分开。\href{https://openaccess.thecvf.com/content/WACV2023/papers/Rudolph_Asymmetric_Student-Teacher_Networks_for_Industrial_Anomaly_Detection_WACV_2023_paper.pdf}{原始来源}\\
+\textbf{机制：}以可逆密度模型为教师、普通前馈网络为学生，正常数据上匹配输出，用差异替代原始似然作异常分数。\\
+\textbf{对本项目的意义：}概率模型与可学习比较器组合已有；密度估计正确性与异常分割效果应分别诊断。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R052．Back to the Feature: Classical 3D Features Are (Almost) All You Need for 3D Anomaly Detection}\\
+2023；CVPR Workshops；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2023W/VAND/html/Horwitz_Back_to_the_Feature_Classical_3D_Features_Are_Almost_All_CVPRW_2023_paper.html}{原始来源}\\
+\textbf{机制：}比较手工与深度三维表征，发现旋转不变局部几何特征强，并结合颜色特征。\\
+\textbf{对本项目的意义：}三维领域有效的简单几何先验不能忽略；用复杂场前须解释超出局部几何描述子的收益。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R053．Real3D-AD: A Dataset of Point Cloud Anomaly Detection}\\
+2023；NeurIPS Datasets and Benchmarks；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要；\href{https://github.com/M-3LAB/Real3D-AD}{作者仓库}核实发表状态。\href{https://arxiv.org/abs/2309.13226}{原始来源}\\
+\textbf{机制：}高精度完整物体点云异常基准；Reg3D-AD用配准与全局/局部特征记忆建立正常参照。\\
+\textbf{对本项目的意义：}依赖完整原型和物体配准，提示正常参照的可获得性；道路单帧不具备相同模板条件。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R054．PointAD: Comprehending 3D Anomalies from Points and Pixels for Zero-shot 3D Anomaly Detection}\\
+2024；NeurIPS；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要；NeurIPS2024官方论文集。\href{https://proceedings.neurips.cc/paper_files/paper/2024/hash/9a263e235f6d1521d13a8531c7974951-Abstract-Conference.html}{原始来源}\\
+\textbf{机制：}把点云渲染为多视图图像并反投影，借助CLIP及辅助点云学习通用异常文本提示。\\
+\textbf{对本项目的意义：}未见目标类别的三维异常识别已有；nuScenes到STU不因冻结或零目标训练自动具备方法新颖性。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R055．PointAD+: Learning Hierarchical Representations for Zero-shot 3D Anomaly Detection}\\
+2025；arXiv；预印本；arXiv作者注释Submitted to TPAMI，未核实接收。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://arxiv.org/abs/2509.03277}{原始来源}\\
+\textbf{机制：}在PointAD基础上加入显式空间几何聚合、渲染/几何两层提示及跨层对比。\\
+\textbf{对本项目的意义：}说明零样本工业3D正向几何与语义联合推进；它是PointAD延展，不能当两条独立范式统计。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R056．Towards Scalable 3D Anomaly Detection and Localization: A Benchmark via 3D Anomaly Synthesis and A Self-Supervised Learning Network}\\
+2024；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2024/html/Li_Towards_Scalable_3D_Anomaly_Detection_and_Localization_A_Benchmark_via_CVPR_2024_paper.html}{原始来源}\\
+\textbf{机制：}Anomaly-ShapeNet提供合成异常物体；IMRNet用几何感知采样、遮蔽点块重建、反复重建与输入差异定位。\\
+\textbf{对本项目的意义：}直接相邻的三维遮蔽正常预测异常检测；共享回波场及单次射线条件分布是本项目需证明的区别。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R057．Geometry-Aligned and Anomaly-Aware Reconstruction for 3D Anomaly Detection}\\
+2026；CVPR；已发表。\\
+\textbf{阅读与定位：}方法与实验；原论文§3.1–3.2、式8–13、§4、表1–3；16384点物体输入，正常模板检索。\href{https://openaccess.thecvf.com/content/CVPR2026/html/Wu_Geometry-Aligned_and_Anomaly-Aware_Reconstruction_for_3D_Anomaly_Detection_CVPR_2026_paper.html}{原始来源}\\
+\textbf{机制：}AARD沿表面法线及邻域一致性调整扩散噪声，借助正常模板和输入的自适应双参考注意力恢复异常区域。\\
+\textbf{对本项目的意义：}几何约束正常重建并非空白；该文需要模板检索及旋转候选，当前道路局部上下文无模板假设是实际差异。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R058．Anomaly-to-Normal Translation: A Training Paradigm for Feature-Based 3D Point Cloud Anomaly Detection}\\
+2026；CVPR Workshops；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2026W/VISION26/html/Fichtel_Anomaly-to-Normal_Translation_A_Training_Paradigm_for_Feature-Based_3D_Point_Cloud_CVPRW_2026_paper.html}{原始来源}\\
+\textbf{机制：}合成受损点云恢复正常形状，用编码—解码—再编码的特征循环误差；分别考察结构缺陷和表面异常。\\
+\textbf{对本项目的意义：}直接指出正常重建可复制异常、仅坐标误差遗漏属性异常；当前几何场应与强度/语义保留互补，不能宣称覆盖所有异常。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R059．A Semantically Disentangled Unified Model for Multi-category 3D Anomaly Detection}\\
+2026；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2026/html/Kim_A_Semantically_Disentangled_Unified_Model_for_Multi-category_3D_Anomaly_Detection_CVPR_2026_paper.html}{原始来源}\\
+\textbf{机制：}全局语义标记、类别条件对比及几何引导解码，降低跨类别特征混淆并恢复正常特征。\\
+\textbf{对本项目的意义：}上下文正常分布的多模态性与语义混合已受关注；增加多个正常假设必须验证分工与价值。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R060．Back to Point: Exploring Point-Language Models for Zero-Shot 3D Anomaly Detection}\\
+2026；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://openaccess.thecvf.com/content/CVPR2026/html/Li_Back_to_Point_Exploring_Point-Language_Models_for_Zero-Shot_3D_Anomaly_CVPR_2026_paper.html}{原始来源}\\
+\textbf{机制：}BTP直接用点语言模型的多粒度局部、全局及几何特征对齐文本，避免多视图投影。\\
+\textbf{对本项目的意义：}更换为更强预训练三维表征不能单独主张创新；这类工作已有未见目标类别识别，但工业物体任务不同。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R061．GPFlow: Gaussian Prototype Probability Flow for Unsupervised Multi-Modal Anomaly Detection}\\
+2026；CVPR；已发表。\\
+\textbf{阅读与定位：}方法与实验；原论文§3.1–3.4、式1–16、§4.1、表1；对角特征协方差，测试样本独立先验校准。\href{https://openaccess.thecvf.com/content/CVPR2026/html/Li_GPFlow_Gaussian_Prototype_Probability_Flow_for_Unsupervised_Multi-Modal_Anomaly_Detection_CVPR_2026_paper.html}{原始来源}\\
+\textbf{机制：}正常特征用可学习高斯混合表示，通过解析后验均值进行各向异性收缩；模态内/跨模态恢复并在单测试实例上重估先验。\\
+\textbf{对本项目的意义：}可学习各向异性高斯正常参照及解析概率运算已有；其高斯在特征空间，本项目为真实三维空间且由块外上下文预测，二者不等同。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R062．Do Deep Generative Models Know What They Don't Know?}\\
+2019；ICLR；作者arXiv原始页明确注明ICLR2019。\\
+\textbf{阅读与定位：}摘要；原论文摘要与arXiv作者Comments: ICLR 2019。\href{https://arxiv.org/abs/1810.09136}{原始来源}\\
+\textbf{机制：}发现流模型、VAE与PixelCNN可对不同语义的分布外图像赋更高似然，并分析均值、方差和曲率影响。\\
+\textbf{对本项目的意义：}低正常似然不是异常语义的充分条件；本项目应把正常预测诊断与分割成绩分开。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R063．Likelihood Ratios for Out-of-Distribution Detection}\\
+2019；NeurIPS；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://proceedings.neurips.cc/paper/2019/hash/1e79596878b2320cac26dd792a6c51c9-Abstract.html}{原始来源}\\
+\textbf{机制：}用目标模型与背景模型似然之比抵消背景统计对密度分数的干扰。\\
+\textbf{对本项目的意义：}若重构为传感器/距离去混杂似然比，不能宣称首次使用似然比；需识别具体干扰与条件分布假设。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R064．Input complexity and out-of-distribution detection with likelihood-based generative models}\\
+2020；ICLR；已发表。\\
+\textbf{阅读与定位：}摘要；ICLR2020官方海报页原论文摘要。\href{https://iclr.cc/virtual_2020/poster_SyxIWpVYvr.html}{原始来源}\\
+\textbf{机制：}指出输入复杂度强烈影响似然，用复杂度估计构造类似似然比的分数。\\
+\textbf{对本项目的意义：}LiDAR稀疏度、距离和场景复杂度也可能混入似然；这是待检验类比，原文并未证明LiDAR结论。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R065．Detecting Out-of-Distribution Inputs to Deep Generative Models Using Typicality}\\
+2019；arXiv；预印本。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://arxiv.org/abs/1906.02994}{原始来源}\\
+\textbf{机制：}区分高密度与典型集合，用正常似然经验分布进行典型性检验。\\
+\textbf{对本项目的意义：}高密度不代表正常、低密度也不直接等于异常；其批组检测不能直接当作当前逐点检验保证。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R066．Why Normalizing Flows Fail to Detect Out-of-Distribution Data}\\
+2020；NeurIPS；已发表。\\
+\textbf{阅读与定位：}方法与实验；arXiv:2006.08545 §4–8；图5和附录表2比较原像素/语义特征密度。\href{https://proceedings.neurips.cc/paper/2020/hash/ecb9fe2fbb99c31f567e9823e884dbec-Abstract.html}{原始来源}\\
+\textbf{机制：}分析耦合流偏向局部像素相关而非语义，改变遮蔽与瓶颈或改在语义特征上估密度能改善检测。\\
+\textbf{对本项目的意义：}架构归纳偏置比“密度正规化”标签本身更关键；几何预测精确但无法区分正常物体和语义异常仍可能失败。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R067．Density of States Estimation for Out of Distribution Detection}\\
+2021；AISTATS；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://proceedings.mlr.press/v130/morningstar21a.html}{原始来源}\\
+\textbf{机制：}对似然等模型统计的出现频率再建模，通过典型性而非原始概率值检测。\\
+\textbf{对本项目的意义：}提示正常分布校准可用多种统计，但不能仅再加手工统计就形成新方法贡献。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R068．Perfect Density Models Cannot Guarantee Anomaly Detection}\\
+2021；Entropy；已发表。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://www.mdpi.com/1099-4300/23/12/1690}{原始来源}\\
+\textbf{机制：}通过变量重参数化分析指出，即便密度估计完美，异常检测仍依赖未明确的假设。\\
+\textbf{对本项目的意义：}当前有效回波密度只能是判别的证据输入；不能以归一化、解析可积或辅助NLL通过证明异常语义正确。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R069．Excision And Recovery: Visual Defect Obfuscation Based Self-Supervised Anomaly Detection Strategy}\\
+2023；arXiv；预印本已核；本轮未核会议版本。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://arxiv.org/abs/2310.04010}{原始来源}\\
+\textbf{机制：}以预训练注意力确定单次遮蔽位置，用马赛克提示改善大区域补全，减少随机多次遮蔽的不一致与成本。\\
+\textbf{对本项目的意义：}遮蔽尺度、上下文信息量及推理成本已有明确权衡；固定多角度留出需要针对稀疏传感器检验。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R070．Feature Attenuation of Defective Representation Can Resolve Incomplete Masking on Anomaly Detection}\\
+2024；arXiv；预印本已核；本轮未核会议版本。\\
+\textbf{阅读与定位：}摘要；原论文摘要。\href{https://arxiv.org/abs/2407.04597}{原始来源}\\
+\textbf{机制：}以两层MLP衰减残留异常特征，缓解单次确定性遮蔽未完整覆盖异常的问题。\\
+\textbf{对本项目的意义：}直接相关于邻块仍含异常的上下文污染风险；单纯更大遮蔽或残差衰减已有相邻思想。
+
+
+\subsection*{雷达场与掩码学习}
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R071．A Probabilistic Formulation of LiDAR Mapping with Neural Radiance Fields}\\
+2024；arXiv；已核验预印本；正式发表信息本轮未核验。\\
+\textbf{阅读与定位：}方法与实验；§III 式4–10；§IV；§V Newer College、Mai City。\href{https://arxiv.org/html/2411.01725v1}{原始来源}\\
+\textbf{机制：}以沿射线条件反射率及生存概率构造多峰返回距离分布，使用累积分布损失，避免多回波被均方误差平均成虚假表面。\\
+\textbf{对本项目的意义：}直接覆盖首事件/生存概率场这一组成机制；其逐场景建图与当前单扫描块外条件预测不同，不等于覆盖完整异常分割组合。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R072．Volumetrically Consistent 3D Gaussian Rasterization}\\
+2025；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}方法与实验；§4.2 式15–19；§6；§7及附录A重叠限制。\href{https://arxiv.org/html/2412.03378v2}{原始来源}\\
+\textbf{机制：}将各向异性三维高斯沿射线化为一维高斯并解析积分，替换近似透明度计算；评价新视角合成和断层成像。\\
+\textbf{对本项目的意义：}当前射线高斯均值、宽度和积分均已有等价数学先例；其颜色合成保留非重叠/排序假设，而当前纯密度和可允许重叠，但这一积分线性性质本身仍非新发明。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R073．3DGEER: 3D Gaussian Rendering Made Exact and Efficient for Generic Cameras}\\
+2026；ICLR；正式发表已核验。\\
+\textbf{阅读与定位：}方法与实验；§3.1 式1–5；§3.2–3.3；§4表2–3；ICLR正式题名与早期预印本题名不同，计一篇。\href{https://arxiv.org/html/2505.24053v3}{原始来源}\\
+\textbf{机制：}通过规范空间变换解析求高斯射线积分，并以粒子包围视锥和双极等角投影加速通用相机渲染。\\
+\textbf{对本项目的意义：}进一步限制把解析积分、精确射线投影当成贡献的空间；其跨相机实验启发传感器泛化验证，但不做异常检测。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R074．LiDAR-RT: Gaussian-based Ray Tracing for Dynamic LiDAR Re-simulation}\\
+2025；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}方法与实验；§3.2–3.5；§5.1；表1–2。\href{https://arxiv.org/html/2412.15199v1}{原始来源}\\
+\textbf{机制：}三维高斯动态场景表示配合硬件射线追踪，联合预测距离、强度和回波丢失，并区分场景和传感器相关丢失。\\
+\textbf{对本项目的意义：}高斯表示与LiDAR观测组合已有成熟先例；需要多帧、位姿和动态框逐场景优化，区别于当前单帧条件正常参照。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R075．LiDAR-NeRF: Novel LiDAR View Synthesis via Neural Radiance Fields}\\
+2024；ACM MM；作者主页核验正式发表；内容核对预印本及项目页。\\
+\textbf{阅读与定位：}摘要；arXiv摘要；作者项目页Method和Results；作者发表列表。\href{https://arxiv.org/abs/2304.10406}{原始来源}\\
+\textbf{机制：}把点云转成射线对应的距离图，以神经场联合学习几何、强度和回波丢失，利用结构正则保留局部几何。\\
+\textbf{对本项目的意义：}明确射线关系和端到端距离观测模型并不新；为当前场预测的观测定义和结构基线提供依据。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R076．Neural LiDAR Fields for Novel View Synthesis}\\
+2023；ICCV；正式发表已核验。\\
+\textbf{阅读与定位：}方法与实验；§3.2；§4.1–4.4，特别式10–14；§5表1–3。\href{https://nv-tlabs.github.io/nfl/assets/nfl_main.pdf}{原始来源}\\
+\textbf{机制：}考虑主动传感的双程透射、光束发散、峰值提取、二次返回和回波丢失，从多帧构建可渲染场。\\
+\textbf{对本项目的意义：}当前有效首事件密度不包含真实接收器峰值和双程功率，不能据此宣称完整传感器物理或自然跨传感器不变。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R077．LiDAR4D: Dynamic Neural Fields for Novel Space-time View LiDAR Synthesis}\\
+2024；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；摘要；CVPR官方论文及作者项目页。\href{https://arxiv.org/abs/2404.02742}{原始来源}\\
+\textbf{机制：}多平面和网格混合四维表示，加点云几何时间约束与回波丢失全局优化，学习动态LiDAR场。\\
+\textbf{对本项目的意义：}场表示需结合采样与丢失过程；支持讨论当前单扫描正常场的适用范围，不能用动态渲染成绩替代异常识别证据。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R078．LiDAR-GS: Real-time LiDAR Re-Simulation using Gaussian Splatting}\\
+2026；CVM；作者发表列表标注CVM 2026；内容核对预印本。\\
+\textbf{阅读与定位：}摘要；摘要；\href{https://tangtaogo.github.io/publications/}{作者出版目录}。\href{https://arxiv.org/abs/2410.05111}{原始来源}\\
+\textbf{机制：}LiDAR激光束投影与神经高斯场表征视角相关属性，并分解动态实例，实现距离、强度、回波丢失再仿真。\\
+\textbf{对本项目的意义：}高斯几何加视角相关观测属性的组合已存在；传感器相关属性不能混同于纯几何正常先验。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R079．LiDAR-GS++: Improving LiDAR Gaussian Reconstruction via Diffusion Priors}\\
+2026；AAAI；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；AAAI40(4)摘要，2026-03-14，2975–2983。\href{https://ojs.aaai.org/index.php/AAAI/article/view/37289}{原始来源}\\
+\textbf{机制：}用受粗渲染条件控制的LiDAR扩散模型补充几何一致扫描，再蒸馏至高斯场，改善外推视角。\\
+\textbf{对本项目的意义：}生成先验辅助高斯重建不是空白；直接换成扩散模型也不能自动带来异常分割新颖性。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R080．LiDARsim: Realistic LiDAR Simulation by Leveraging the Real World}\\
+2020；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；摘要及CVPR官方论文导言。\href{https://arxiv.org/abs/2006.09348}{原始来源}\\
+\textbf{机制：}从真实扫描建立静态场景和动态物体库，物理射线投射后学习传感器偏差，生成可编辑扫描。\\
+\textbf{对本项目的意义：}真实几何和学习观测联合仿真已有基础；合成异常应审查插入物体后的遮挡和采样，而不是只移动已有点。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R081．UniSim: A Neural Closed-Loop Sensor Simulator}\\
+2023；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；CVPR官方摘要；arXiv:2308.01898。\href{https://openaccess.thecvf.com/content/CVPR2023/html/Yang_UniSim_A_Neural_Closed-Loop_Sensor_Simulator_CVPR_2023_paper.html}{原始来源}\\
+\textbf{机制：}由单段驾驶记录建立静态背景和动态物体神经特征网格，支持改变轨迹和物体后合成相机及LiDAR观测。\\
+\textbf{对本项目的意义：}可编辑条件场景和可见性合成已有强先例；当前方法若声称反事实世界模型，必须区别于仅局部条件预测。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R082．NeuRAD: Neural Rendering for Autonomous Driving}\\
+2024；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；CVPR官方摘要；五个自动驾驶数据集。\href{https://openaccess.thecvf.com/content/CVPR2024/html/Tonderski_NeuRAD_Neural_Rendering_for_Autonomous_Driving_CVPR_2024_paper.html}{原始来源}\\
+\textbf{机制：}联合建模动态场景和相机/LiDAR传感器，包括滚动快门、光束发散及回波丢失。\\
+\textbf{对本项目的意义：}支撑跨数据集时需分离场景和传感器效应的判断；当前仅用距离密度不能视为完整物理模型。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R083．NeRF-LiDAR: Generating Realistic LiDAR Point Clouds with Neural Radiance Fields}\\
+2024；AAAI；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；AAAI官方摘要；arXiv:2304.14811；与LiDAR-NeRF为两篇不同论文。\href{https://ojs.aaai.org/index.php/AAAI/article/view/28546}{原始来源}\\
+\textbf{机制：}结合真实图像和LiDAR学习场景、扫描生成和标签渲染，以合成数据训练点云语义分割器。\\
+\textbf{对本项目的意义：}说明下游分割收益可来自训练数据真实性；检测模型贡献需要固定合成来源的对照。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R084．LiDAR Data Synthesis with Denoising Diffusion Probabilistic Models}\\
+2024；ICRA；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；IEEE官方摘要及元数据；R2DM。\href{https://doi.org/10.1109/ICRA57147.2024.10611480}{原始来源}\\
+\textbf{机制：}用距离与反射强度的等角图像表示训练去噪扩散模型，并研究表示、损失和空间归纳偏置，支持点云补全。\\
+\textbf{对本项目的意义：}正常LiDAR分布学习及补全已有高容量替代；生成质量不直接说明异常排序质量。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R085．RangeLDM: Fast Realistic LiDAR Point Cloud Generation}\\
+2024；ECCV；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；摘要；ECVA官方全文及作者代码页。\href{https://arxiv.org/abs/2403.10094}{原始来源}\\
+\textbf{机制：}校正距离图投影分布，使用变分编码与潜在扩散，并以距离约束判别器保持三维结构。\\
+\textbf{对本项目的意义：}提示源数据投影统计影响生成与迁移；将当前正常分支升级为扩散模型需单独证明必要性。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R086．LidarDM: Generative LiDAR Simulation in a Generated World}\\
+2025；ICRA；作者项目页核验正式发表。\\
+\textbf{阅读与定位：}摘要；作者项目页摘要及ICRA2025全文入口；arXiv:2404.02903。\href{https://zyrianov.org/lidardm/}{原始来源}\\
+\textbf{机制：}先生成三维场景，组合动态物体，再进行传感器采样，获得布局条件和时间一致的LiDAR序列。\\
+\textbf{对本项目的意义：}潜在几何与观测过程分开的路线已有先例；可为合成异常真实性提供设计参照，但工程成本明显大于当前模型。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R087．Learning to Generate Realistic LiDAR Point Clouds}\\
+2022；ECCV；作者代码页核验正式发表。\\
+\textbf{阅读与定位：}摘要；摘要；作者代码页BibTeX；LiDARGen。\href{https://arxiv.org/abs/2209.03954}{原始来源}\\
+\textbf{机制：}在等角距离图上通过分数匹配的随机去噪过程学习扫描分布，支持条件生成和增密。\\
+\textbf{对本项目的意义：}正常观测生成和无需重训的条件补全均已有先例；不能仅凭预测正常扫描的描述建立新颖性。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R088．Learning Compact Representations for LiDAR Completion and Generation}\\
+2023；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；CVPR官方摘要；UltraLiDAR，arXiv:2311.01448为同作题名变体，不重复计数。\href{https://openaccess.thecvf.com/content/CVPR2023/html/Xiong_Learning_Compact_Representations_for_LiDAR_Completion_and_Generation_CVPR_2023_paper.html}{原始来源}\\
+\textbf{机制：}离散三维码本压缩场景几何，支持稀疏到密集补全、先验生成与可控编辑。\\
+\textbf{对本项目的意义：}传感器密度变化可通过表示学习处理，但补全模型的点云真实性和未知异常保持能力需区别评价。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R089．U4D: Uncertainty-Aware 4D World Modeling from LiDAR Sequences}\\
+2026；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；CVPR官方论文；arXiv:2512.02982；2606.02510近同题与同方法不另计。\href{https://openaccess.thecvf.com/content/CVPR2026/papers/Xu_U4D_Uncertainty-Aware_4D_World_Modeling_from_LiDAR_Sequences_CVPR_2026_paper.pdf}{原始来源}\\
+\textbf{机制：}由预训练分割器估计不确定区域，先生成困难区域，再条件补全其他区域，以时空混合模块保持序列一致。\\
+\textbf{对本项目的意义：}不确定性引导的条件正常场景生成也不是空白；不能把分割不确定性等同于异常概率。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R090．GS-LiDAR: Generating Realistic LiDAR Point Clouds with Panoramic Gaussian Splatting}\\
+2025；ICLR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；ICLR官方摘要；与LiDAR-GS为不同论文。\href{https://proceedings.iclr.cc/paper_files/paper/2025/hash/8e86fd925dda476f574689f4ce748193-Abstract-Conference.html}{原始来源}\\
+\textbf{机制：}周期运动二维高斯配合显式射线与表面交点，以全景LiDAR监督学习距离、强度和回波丢失。\\
+\textbf{对本项目的意义：}高斯加LiDAR射线几何已在ICLR发表；当前需说明连续体密度和共享正常假设对检测的额外价值。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R091．SaLF: Sparse Local Fields for Multi-Sensor Rendering in Real-Time}\\
+2026；ICRA；作者预印本元数据核验会议发表。\\
+\textbf{阅读与定位：}摘要；arXiv v2摘要与Comments: ICRA2026。\href{https://arxiv.org/abs/2507.18713}{原始来源}\\
+\textbf{机制：}用稀疏体素内的局部隐式场解耦表示与渲染，兼容光栅化和射线追踪，支持旋转LiDAR和非针孔相机。\\
+\textbf{对本项目的意义：}局部场本身是成熟表示；当前价值应在条件正常分布如何支持源域外异常判断。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R092．Masked Autoencoders for Point Cloud Self-supervised Learning}\\
+2022；ECCV；作者代码页核验正式发表。\\
+\textbf{阅读与定位：}摘要；摘要及官方实现；Point-MAE。\href{https://arxiv.org/abs/2203.06604}{原始来源}\\
+\textbf{机制：}高比例遮挡局部点块，非对称编码解码器从可见块恢复遮挡点，处理位置信息泄漏。\\
+\textbf{对本项目的意义：}目标块不可见和上下文重建是已有范式；当前防泄漏是正确性必要条件，不能单独算主要新颖性。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R093．Point-M2AE: Multi-scale Masked Autoencoders for Hierarchical Point Cloud Pre-training}\\
+2022；NeurIPS；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；摘要；NeurIPS官方论文ad1d7a4df30a9c0c46b387815a774a84。\href{https://arxiv.org/abs/2205.14401}{原始来源}\\
+\textbf{机制：}跨尺度一致遮挡与分层编码解码，从全局到局部恢复几何，兼顾细节和语义。\\
+\textbf{对本项目的意义：}多尺度留出及一致的信息边界已有先例；当前三个角尺度需证明针对异常的独特价值。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R094．Point-BERT: Pre-training 3D Point Cloud Transformers with Masked Point Modeling}\\
+2022；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；摘要及CVPR2022官方论文。\href{https://arxiv.org/abs/2111.14819}{原始来源}\\
+\textbf{机制：}局部点块离散编码后随机遮挡，预测被遮挡的几何标记以预训练点云Transformer。\\
+\textbf{对本项目的意义：}上下文预测点云局部结构已有先例；当前需区分分布参照与通用特征预训练。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R095．Masked Discrimination for Self-Supervised Learning on Point Clouds}\\
+2022；ECCV；作者官方代码页核验正式发表。\\
+\textbf{阅读与定位：}摘要；摘要及WisconsinAIVision/MaskPoint；MaskPoint。\href{https://arxiv.org/abs/2203.11183}{原始来源}\\
+\textbf{机制：}将遮挡点云预测转成真实物体点与采样噪声点之间的二分类，占据判别降低点采样方差。\\
+\textbf{对本项目的意义：}遮挡加判别式几何学习已有组合；应与当前合成异常监督和兼容性头区分。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R096．Occupancy-MAE: Self-supervised Pre-training Large-scale LiDAR Point Clouds with Masked Occupancy Autoencoders}\\
+2022；arXiv；已核验预印本；期刊版本信息本轮未独立核验。\\
+\textbf{阅读与定位：}摘要；当前摘要；早期名Voxel-MAE为同一arXiv记录，不额外计数。\href{https://arxiv.org/abs/2206.09900}{原始来源}\\
+\textbf{机制：}按距离控制体素遮挡，预测大规模户外场景占据结构，服务检测、分割和跟踪。\\
+\textbf{对本项目的意义：}稀疏LiDAR中距离感知的掩码和正常几何学习已有实现；需控制点数和距离统计造成的伪收益。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R097．Masked Autoencoder for Self-Supervised Pre-training on Lidar Point Clouds}\\
+2023；WACV Workshops；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；摘要及WACVW2023官方论文；Hess等Voxel-MAE，与Min等不是同篇。\href{https://arxiv.org/abs/2207.00531}{原始来源}\\
+\textbf{机制：}面向稀疏驾驶扫描恢复遮挡体素，并区分空/非空体素，预训练三维检测器。\\
+\textbf{对本项目的意义：}点密度不均和掩码重建在nuScenes上已有专门研究；直接从小规模均匀点云方法迁移不充分。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R098．GeoMAE: Masked Geometric Target Prediction for Self-supervised Point Cloud Pre-Training}\\
+2023；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；摘要及Comments: Accepted to CVPR2023；排除同名交通流GeoMAE。\href{https://arxiv.org/abs/2305.08808}{原始来源}\\
+\textbf{机制：}从遮挡点云同时预测占据、质心、法向和曲率，学习细粒度几何。\\
+\textbf{对本项目的意义：}共享几何预训练目标可能直接改善检测；当前概率场收益需超过同预算普通几何辅助任务。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R099．MAELi: Masked Autoencoder for Large-Scale LiDAR Point Clouds}\\
+2024；WACV；正式发表已核验。\\
+\textbf{阅读与定位：}方法与实验；§3.3–3.4；§4.1；WACV2024正式全文。\href{https://arxiv.org/html/2212.07207v2}{原始来源}\\
+\textbf{机制：}基于射线区分占据、自由和未知空间；球面采样遮挡及稀疏重建学习场景几何，不惩罚未观测区域。\\
+\textbf{对本项目的意义：}传感器感知掩码和未知空间处理已有先例；当前不能把未记录方向当正常空闲，并须检查真实返回机制是否支持首返回近似。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R100．Multi-Scale Neighborhood Occupancy Masked Autoencoder for Self-Supervised Learning in LiDAR Point Clouds}\\
+2025；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}方法与实验；§3.2–3.5；§4.5–4.6，表3–5及图5；NOMAE。\href{https://openaccess.thecvf.com/content/CVPR2025/papers/Abdelsamad_Multi-Scale_Neighborhood_Occupancy_Masked_Autoencoder_for_Self-Supervised_Learning_in_LiDAR_CVPR_2025_paper.pdf}{原始来源}\\
+\textbf{机制：}只在可见体素邻域恢复多尺度占据，避免将被遮挡体素位置泄露给解码器，并使用分层掩码。\\
+\textbf{对本项目的意义：}严格防泄漏、多尺度邻域预测已存在；其nuScenes和Waymo最佳掩码率不同，直接提示传感器点密度改变预测任务。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R101．PiMAE: Point Cloud and Image Interactive Masked Autoencoders for 3D Object Detection}\\
+2023；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；CVPR官方摘要；arXiv:2303.08129；排除同缩写显微成像论文。\href{https://openaccess.thecvf.com/content/CVPR2023/html/Chen_PiMAE_Point_Cloud_and_Image_Interactive_Masked_Autoencoders_for_3D_CVPR_2023_paper.html}{原始来源}\\
+\textbf{机制：}点云与图像互补遮挡，通过共享解码器及跨模态重建促进几何表示学习。\\
+\textbf{对本项目的意义：}说明不同输入支路的信息泄漏需要共同控制；当前仅LiDAR无需引入相机，但不能把双分支本身当创新。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R102．PointGPT: Auto-regressively Generative Pre-training from Point Clouds}\\
+2023；NeurIPS；作者官方代码页核验正式发表。\\
+\textbf{阅读与定位：}摘要；摘要及CGuangyan-BIT/PointGPT官方项目。\href{https://arxiv.org/abs/2305.11487}{原始来源}\\
+\textbf{机制：}把空间相近点块排为序列，通过双重掩码的自回归预测学习条件几何表示。\\
+\textbf{对本项目的意义：}条件几何生成已有自回归替代；为评估共享场约束相较自由条件预测的价值提供参照。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R103．UniPAD: A Universal Pre-training Paradigm for Autonomous Driving}\\
+2024；CVPR；正式发表已核验。\\
+\textbf{阅读与定位：}方法与实验；§3.1输入先遮挡；§3.3式2–4；§4表1–4。\href{https://arxiv.org/html/2310.08370v2}{原始来源}\\
+\textbf{机制：}遮挡LiDAR或图像后编码三维体特征，用隐式有符号距离场及可微射线渲染恢复深度/颜色，预训练自动驾驶表示。\\
+\textbf{对本项目的意义：}直接覆盖遮挡输入→三维场→传感器渲染这一宽泛组合；区别在当前多假设条件距离分布、正常辅助学习和异常兼容性判别，必须给相同数据预算的简化对照。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R104．Ponder: Point Cloud Pre-training via Neural Rendering}\\
+2023；ICCV；正式发表已核验。\\
+\textbf{阅读与定位：}摘要；ICCV官方摘要及作者项目页；arXiv:2301.00157。\href{https://openaccess.thecvf.com/content/ICCV2023/papers/Huang_Ponder_Point_Cloud_Pre-training_via_Neural_Rendering_ICCV_2023_paper.pdf}{原始来源}\\
+\textbf{机制：}由点云编码三维特征，通过可微神经渲染恢复多视角RGB-D，用观测重建学习可迁移表示。\\
+\textbf{对本项目的意义：}几何场经观测重建来改进下游分割已有明确先例；当前训练目标需显示超出一般渲染预训练的任务价值。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R105．PonderV2: Pave the Way for 3D Foundation Model with A Universal Pre-training Paradigm}\\
+2025；IEEE TPAMI；作者官方代码页核验正式发表。\\
+\textbf{阅读与定位：}摘要；摘要及OpenGVLab/PonderV2官方项目。\href{https://arxiv.org/abs/2310.08586}{原始来源}\\
+\textbf{机制：}用体积神经渲染统一学习室内外三维表示，支持检测、分割、重建和图像合成等任务。\\
+\textbf{对本项目的意义：}进一步削弱把渲染辅助分割泛称新范式的空间；当前应把贡献集中到跨传感器条件正常性与异常排序的可验证联系。
+
+
+\subsection*{域泛化、数据与骨干}
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R106．nuScenes: A multimodal dataset for autonomous driving}\\
+2020；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/1903.11027}{原始来源}\\
+\textbf{机制：}车辆多传感器驾驶数据与检测、跟踪评价。\\
+\textbf{对本项目的意义：}限定新路线的唯一真实训练来源；数据集本身不是异常任务贡献。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R107．SemanticKITTI: A Dataset for Semantic Scene Understanding of LiDAR Sequences}\\
+2019；ICCV；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/1904.01416}{原始来源}\\
+\textbf{机制：}逐点语义标注、单帧与多帧分割及场景补全基准。\\
+\textbf{对本项目的意义：}可作冻结后额外检验来源；正常语义分割指标不能替代真实异常分割。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R108．SemanticPOSS: A Point Cloud Dataset with Large Quantity of Dynamic Instances}\\
+2020；arXiv；本轮未核实会议；仅核实公开稿；正式发表状态未独立核验。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2002.09147}{原始来源}\\
+\textbf{机制：}包含较多动态实例的室外点云语义基准。\\
+\textbf{对本项目的意义：}提示正常人车的困难样本需要保留；将动态物体视为异常会改变任务。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R109．3D Semantic Segmentation in the Wild: Learning Generalized Models for Adverse-Condition Point Clouds}\\
+2023；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2304.00690}{原始来源}\\
+\textbf{机制：}提出SemanticSTF及几何风格随机化PointDR，分别评价域适应与域泛化。\\
+\textbf{对本项目的意义：}只用源域训练有明确先例；天气扰动与未知物体异常须分别评价。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R110．Robo3D: Towards Robust and Reliable 3D Perception against Corruptions}\\
+2023；ICCV；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://openaccess.thecvf.com/content/ICCV2023/papers/Kong_Robo3D_Towards_Robust_and_Reliable_3D_Perception_against_Corruptions_ICCV_2023_paper.pdf}{原始来源}\\
+\textbf{机制：}八类环境和传感器扰动，密度不敏感训练与灵活体素化。\\
+\textbf{对本项目的意义：}可检验异常分数是否误把传感器扰动当物体异常，不能将损坏点统一贴异常标签。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R111．Instant Domain Augmentation for LiDAR Semantic Segmentation}\\
+2023；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://openaccess.thecvf.com/content/CVPR2023/papers/Ryu_Instant_Domain_Augmentation_for_LiDAR_Semantic_Segmentation_CVPR_2023_paper.pdf}{原始来源}\\
+\textbf{机制：}聚合源域扫描后按随机传感器配置重新采样，并考虑运动及遮挡。\\
+\textbf{对本项目的意义：}通过射线采样增强调节传感器差异已有先例；普通重采样增强不够成为新的核心方法。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R112．Single Domain Generalization for LiDAR Semantic Segmentation}\\
+2023；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://openaccess.thecvf.com/content/CVPR2023/html/Kim_Single_Domain_Generalization_for_LiDAR_Semantic_Segmentation_CVPR_2023_paper.html}{原始来源}\\
+\textbf{机制：}源域随机稀疏化并施加稀疏不变特征及语义相关一致性。\\
+\textbf{对本项目的意义：}多密度视图一致性已有先例；需要验证当前三维场约束超过这类简单方法。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R113．Rethinking LiDAR Domain Generalization: Single Source as Multiple Density Domains}\\
+2024；ECCV；已发表。\\
+\textbf{阅读与定位：}方法与实验；§3–4。\href{https://arxiv.org/html/2312.12098}{原始来源}\\
+\textbf{机制：}由束配置与距离估计局部密度，密度软截断与注意调制，配合密度增强。\\
+\textbf{对本项目的意义：}明确覆盖传感器条件与密度感知；当前角块、池化、强度输入不会因连续场输出而自动传感器无关。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R114．Towards Explicit Geometry-Reflectance Collaboration for Generalized LiDAR Segmentation in Adverse Weather}\\
+2025；CVPR；已发表。\\
+\textbf{阅读与定位：}方法与实验；§3–4。\href{https://arxiv.org/html/2506.02396}{原始来源}\\
+\textbf{机制：}分开编码几何和反射强度，用信息约束及局部、全局融合抵抗异质漂移。\\
+\textbf{对本项目的意义：}当前正常分支把强度与坐标直接拼接，强度跨设备变化是需要源域扰动诊断的风险。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R115．Domain-aware Category-level Geometry Learning Segmentation for 3D Point Clouds}\\
+2025；ICCV；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2508.11265}{原始来源}\\
+\textbf{机制：}类别级几何嵌入与几何一致性学习，强化跨域稳定几何。\\
+\textbf{对本项目的意义：}仅声称几何有利于域泛化已不新；当前需要论证正常观测分布对异常的特定价值。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R116．Rethinking Data Augmentation for Robust LiDAR Semantic Segmentation in Adverse Weather}\\
+2024；arXiv；本轮未核实会议；仅核实公开稿；正式发表状态未独立核验。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2407.02286}{原始来源}\\
+\textbf{机制：}选择性抖动及学习型点丢弃分别模拟几何扰动与缺失。\\
+\textbf{对本项目的意义：}删除束和丢点增强的机制先例；不能用删除正常点合成未知物体而不区分标签含义。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R117．UniMix: Towards Domain Adaptive and Generalizable LiDAR Semantic Segmentation in Adverse Weather}\\
+2024；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2404.05145}{原始来源}\\
+\textbf{机制：}物理天气模拟形成桥接域，按空间、强度与语义混合，教师学生训练。\\
+\textbf{对本项目的意义：}物理约束增强加一致性并非新概念；需区分使用目标数据的适应设置与源域泛化设置。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R118．Complete \& Label: A Domain Adaptation Approach to Semantic Segmentation of LiDAR Point Clouds}\\
+2021；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2007.08488}{原始来源}\\
+\textbf{机制：}先恢复稀疏观测背后的三维表面，再在规范几何上进行语义分割。\\
+\textbf{对本项目的意义：}重建正常几何以降低传感器差异已有先例；此文使用域适应协议，不能直接当零目标训练公平基线。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R119．Robust LIDAR Sensor-to-Sensor Domain Generalization via Accumulated-Point Scene Completion}\\
+2026；IEEE IV；已发表。\\
+\textbf{阅读与定位：}摘要；馆藏摘要；全文禁运至2027-01-30。\href{https://repository.tudelft.nl/record/uuid\%3A863500dd-4252-41ad-9375-d099c82205e0}{原始来源}\\
+\textbf{机制：}仅源域多帧聚合形成占据监督，单帧模型增加补全辅助目标，推理可去除辅助头。\\
+\textbf{对本项目的意义：}直接限制源域正常场辅助监督促泛化的宽泛创新主张；全文仍在馆藏禁运，仅摘要核验。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R120．Mix3D: Out-of-Context Data Augmentation for 3D Scenes}\\
+2021；3DV；作者机构馆藏确认；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2110.02210}{原始来源}\\
+\textbf{机制：}将两场景混合，减弱对固定全局上下文的依赖。\\
+\textbf{对本项目的意义：}当前上下文正常先验可能误伤合法但罕见布局；需检验真实几何增益与上下文捷径。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R121．PolarMix: A General Data Augmentation Technique for LiDAR Point Clouds}\\
+2022；NeurIPS；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://proceedings.neurips.cc/paper_files/paper/2022/hash/475b85eb74d201bead9927807e713e95-Abstract-Conference.html}{原始来源}\\
+\textbf{机制：}面向LiDAR的扫描级与实例级混合增强。\\
+\textbf{对本项目的意义：}合成异常器之外的增强也可能带来增益；比较正常场贡献时必须使用相同增强。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R122．LaserMix for Semi-Supervised LiDAR Semantic Segmentation}\\
+2023；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://openaccess.thecvf.com/content/CVPR2023/html/Kong_LaserMix_for_Semi-Supervised_LiDAR_Semantic_Segmentation_CVPR_2023_paper.html}{原始来源}\\
+\textbf{机制：}混合不同扫描的激光束，要求混合前后预测一致且置信。\\
+\textbf{对本项目的意义：}按扫描结构混合不是新的射线学习机制；涉及半监督，不等同异常合成监督。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R123．Point Transformer V2: Grouped Vector Attention and Partition-based Pooling}\\
+2022；NeurIPS；作者提交信息；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2210.05666}{原始来源}\\
+\textbf{机制：}分组向量注意、位置编码乘子与分区池化。\\
+\textbf{对本项目的意义：}可帮助区分注意骨干能力与额外正常场价值，不应堆叠更多注意模块充当创新。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R124．Point Transformer V3: Simpler Faster Stronger}\\
+2024；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://openaccess.thecvf.com/content/CVPR2024/html/Wu_Point_Transformer_V3_Simpler_Faster_Stronger_CVPR_2024_paper.html}{原始来源}\\
+\textbf{机制：}序列化邻域与扩大感受野提高效率和表示能力。\\
+\textbf{对本项目的意义：}强骨干及预训练范围必须匹配，旧弱骨干上的相对提升不能归因新正常场。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R125．LitePT: Lighter Yet Stronger Point Transformer}\\
+2026；CVPR；作者官方仓库确认；已发表。\\
+\textbf{阅读与定位：}方法与实验；§3–4。\href{https://arxiv.org/html/2512.13689}{原始来源}\\
+\textbf{机制：}浅层卷积、深层注意及无参数PointROPE，降低开销。\\
+\textbf{对本项目的意义：}当前骨干直接源于此方法，13M参数主体不是自有创新；应保留其直接异常头作核心对照。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R126．Sonata: Self-Supervised Learning of Reliable Point Representations}\\
+2025；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://openaccess.thecvf.com/content/CVPR2025/html/Wu_Sonata_Self-Supervised_Learning_of_Reliable_Point_Representations_CVPR_2025_paper.html}{原始来源}\\
+\textbf{机制：}遮蔽空间捷径并加强输入特征依赖，以自蒸馏学习可迁移点表示。\\
+\textbf{对本项目的意义：}提示重建几何不自动带来语义表示；外部多数据预训练权重不符合严格nuScenes-only。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R127．Towards Large-scale 3D Representation Learning with Multi-dataset Point Prompt Training}\\
+2024；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2308.09718}{原始来源}\\
+\textbf{机制：}数据域提示归一化与语言辅助类别协调，缓解多数据联合预训练负迁移。\\
+\textbf{对本项目的意义：}多数据权重提高性能会混淆方法贡献；只用nuScenes须核查预训练来源。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R128．4D Spatio-Temporal ConvNets: Minkowski Convolutional Neural Networks}\\
+2019；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://openaccess.thecvf.com/content_CVPR_2019/html/Choy_4D_Spatio-Temporal_ConvNets_Minkowski_Convolutional_Neural_Networks_CVPR_2019_paper.html}{原始来源}\\
+\textbf{机制：}广义稀疏卷积及稀疏张量实现三维与时空感知。\\
+\textbf{对本项目的意义：}大量异常竞争方法所用骨干来源，公平重现时需要明确骨干差别。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R129．Cylindrical and Asymmetrical 3D Convolution Networks for LiDAR Segmentation}\\
+2021；CVPR；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2011.10033}{原始来源}\\
+\textbf{机制：}柱坐标划分及非对称卷积处理室外不均匀点密度。\\
+\textbf{对本项目的意义：}传感器几何相关表示已有基础；坐标划分变化本身不能支撑新正常场机制。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R130．SCPNet: Semantic Scene Completion on Point Cloud}\\
+2023；arXiv；本轮未独立核实会议；仅核实公开稿；正式发表状态未独立核验。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2303.06884}{原始来源}\\
+\textbf{机制：}多尺度补全、密集到稀疏知识蒸馏和动态标签修正。\\
+\textbf{对本项目的意义：}若重构时引入多帧正常监督，必须处理移动物体拖影；补全辅助分割本身已有先例。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R131．Domain Generalization-Aware Uncertainty Introspective Learning for 3D Point Clouds Segmentation}\\
+2024；公开投稿稿；最终版本本轮未读取；仅核实公开稿；正式发表状态未独立核验。\\
+\textbf{阅读与定位：}主源摘要索引；公开投稿稿原始摘要。\href{https://openreview.net/pdf?id=zoMT1Czqv3}{原始来源}\\
+\textbf{机制：}潜在点不确定性增强及动量内省学习处理域差异。\\
+\textbf{对本项目的意义：}不确定性增强已有先例；本条仅公开稿摘要索引，不用其结果支持性能判断。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R132．GBlobs: Explicit Local Structure via Gaussian Blobs for Improved Cross-Domain LiDAR-based 3D Object Detection}\\
+2025；arXiv；本轮未独立核实会议；仅核实公开稿；正式发表状态未独立核验。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2503.08639}{原始来源}\\
+\textbf{机制：}用无额外参数的高斯团编码局部点结构，减少绝对位置捷径。\\
+\textbf{对本项目的意义：}高斯局部几何促跨域的宽泛概念已覆盖；其目标为物体检测，不是条件正常回波似然。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R133．Exploring Single Domain Generalization of LiDAR-based Semantic Segmentation under Imperfect Labels}\\
+2025；arXiv；本轮未核实会议；仅核实公开稿；正式发表状态未独立核验。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://arxiv.org/abs/2510.09035}{原始来源}\\
+\textbf{机制：}研究标签噪声下源域泛化，以强弱双视图一致性及置信过滤训练。\\
+\textbf{对本项目的意义：}nuScenes监督语义和合成异常标签质量影响迁移，不能只检查字段正确。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R134．BeyondSparse: Facilitating Mamba to Enhance Cross-Domain 3D Semantic Segmentation in Adverse Weather}\\
+2026；AAAI；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://ojs.aaai.org/index.php/AAAI/article/view/38058}{原始来源}\\
+\textbf{机制：}域特征解耦、Mamba全局建模和词元风格增强。\\
+\textbf{对本项目的意义：}更强跨域特征方法也是替代解释；但不能据此无实验依据更换当前骨干。
+
+
+\Needspace{5\baselineskip}
+\noindent\textbf{R135．Domain Generalization of 3D Semantic Segmentation in Autonomous Driving}\\
+2023；ICCV；已发表。\\
+\textbf{阅读与定位：}摘要；原始摘要。\href{https://openaccess.thecvf.com/content/ICCV2023/html/Sanchez_Domain_Generalization_of_3D_Semantic_Segmentation_in_Autonomous_Driving_ICCV_2023_paper.html}{原始来源}\\
+\textbf{机制：}建立驾驶点云域泛化基准，3DLabelProp利用几何与序列在部分累积点云传播标签。\\
+\textbf{对本项目的意义：}几何与源域学习后跨传感器迁移已是研究任务；单帧推理与序列方法需要分开。
+
+\end{document}
