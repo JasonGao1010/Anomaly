@@ -454,3 +454,113 @@ def test_sequence_rejects_fixed_placement_when_a_later_frame_collides(tmp_path, 
     assert report["status"] == "no_sequence_placement"
     assert report["failures"] == {"annotated_object_collision": report["attempts"]}
     assert report["attempts"] > 0 and not list(tmp_path.iterdir())
+
+
+def test_temporal_road_support_never_adds_receiver_rays():
+    x, y = np.meshgrid([40.2, 40.4, 40.6], [-.2, 0., .2])
+    support = np.column_stack((x.ravel(), y.ravel(), np.full(9, -1.5)))
+    raw = np.array([[60., 0., -1.2, 90., 0.], [60., 0., 8., 90., 0.],
+                    [2., 0., -.04, 90., 0.]], dtype=np.float32)
+    donor = dict(xyz=np.array([[-.2, -.5, .2], [-.2, .5, .2], [-.2, .5, 1.2], [-.2, -.5, 1.2]]),
+                 triangles=np.array([[0, 1, 2], [0, 2, 3]]), intensity=np.full(4, .4), range=5.,
+                 sensor_local=np.array([-5., 0., 1.5]))
+    inputs = (raw, np.zeros(3), dict(pose=np.eye(4)), donor, 1)
+    assert transplant(*inputs, np.random.default_rng(0), distance_bin=4) is None
+    result = transplant(*inputs, np.random.default_rng(0), distance_bin=4, support_road=support)
+    assert result is not None
+    slots, xyzi, placement = result
+    np.testing.assert_array_equal(slots, [0])
+    np.testing.assert_allclose(xyzi[:, :3] / np.linalg.norm(xyzi[:, :3], axis=1)[:, None],
+                               raw[slots, :3] / np.linalg.norm(raw[slots, :3], axis=1)[:, None], atol=1e-7)
+    assert placement["scale"] == 1. and 40. <= placement["range"] <= 50.
+
+
+
+def test_dense_temporal_support_cannot_hide_disagreement_with_current_road():
+    x, y = np.meshgrid([40.2, 40.4, 40.6], [-.2, 0., .2])
+    current = np.column_stack((x.ravel(), y.ravel(), np.full(9, -1.5)))
+    raw = np.column_stack((current, np.full(9, 90.), np.zeros(9))).astype(np.float32)
+    # The pooled 90th percentile alone misses the displaced current scan.
+    support = np.repeat(current + [0., 0., .3], 20, axis=0)
+    donor = dict(xyz=np.array([[-.2, -.5, .2], [-.2, .5, .2], [-.2, .5, 1.2], [-.2, -.5, 1.2]]),
+                 triangles=np.array([[0, 1, 2], [0, 2, 3]]), intensity=np.full(4, .4), range=5.)
+    diagnostics = {}
+    result = transplant(raw, np.ones(9), dict(pose=np.eye(4)), donor, 1, np.random.default_rng(0),
+                        distance_bin=4, support_road=support, diagnostics=diagnostics)
+    assert result is None
+    assert sum(diagnostics["attempt_failures"].values()) == diagnostics["attempts"]
+    assert set(diagnostics["attempt_failures"]) <= {"support_anchor_disagreement", "support_current_disagreement"}
+
+
+
+def test_temporal_interior_support_does_not_require_a_current_road_return():
+    x, y = np.meshgrid(np.linspace(38., 43., 26), np.linspace(-2., 2., 21))
+    support = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, -1.5)))
+    raw = np.array([[60., 0., -1.2, 90., 0.], [60., 0., 8., 90., 0.],
+                    [2., 0., -.04, 90., 0.]], np.float32)
+    donor = dict(xyz=np.array([[-.2, -.5, .2], [-.2, .5, .2], [-.2, .5, 1.2], [-.2, -.5, 1.2]]),
+                 triangles=np.array([[0, 1, 2], [0, 2, 3]]), intensity=np.full(4, .4), range=5.,
+                 sensor_local=np.array([-5., 0., 1.5]))
+    original = raw.copy()
+    inputs = (raw, np.zeros(3), dict(pose=np.eye(4)), donor, 1)
+    assert transplant(*inputs, np.random.default_rng(0), distance_bin=4, interior=True) is None
+    slots, xyzi, placement = transplant(*inputs, np.random.default_rng(0), distance_bin=4,
+                                        interior=True, support_road=support)
+    np.testing.assert_array_equal(slots, [0])
+    np.testing.assert_array_equal(raw, original)
+    np.testing.assert_allclose(xyzi[:, :3] / np.linalg.norm(xyzi[:, :3], axis=1)[:, None],
+                               raw[slots, :3] / np.linalg.norm(raw[slots, :3], axis=1)[:, None], atol=1e-7)
+    assert placement["scale"] == 1.
+
+
+
+def test_reviewed_normals_are_point_specific_and_foreground_overrides_them(tmp_path):
+    import pytest
+    from src.data import read_nuscenes
+
+    raw = np.array([[5., 0., 0., 100., 0.], [6., 0., 0., 90., 1.],
+                    [7., 0., 0., 80., 2.]], np.float32)
+    scan, label = tmp_path / 'scan.bin', tmp_path / 'label.bin'
+    raw.tofile(scan)
+    np.array([0, 0, 1], np.uint8).tofile(label)
+    mapping = [dict(raw=0, name='static.manmade', target=0),
+               dict(raw=1, name='flat.driveable_surface', target=1)]
+    record = dict(scan=str(scan), label=str(label), token='native', frame=0, normal_slots=[0])
+    np.testing.assert_array_equal(read_nuscenes(record, mapping).labels, [1, 0, 1])
+    delta = tmp_path / 'delta.npz'
+    np.savez(delta, token=np.asarray('native'), slots=np.array([0]),
+             xyzi=np.array([[4., 0., 0., .3]], np.float32), labels=np.array([2], np.uint32))
+    np.testing.assert_array_equal(read_nuscenes(dict(record, delta=str(delta)), mapping).labels, [2, 0, 1])
+    for slots in ([2], [0, 0], [-1], [3]):
+        with pytest.raises(ValueError, match='supplemental normal'):
+            read_nuscenes(dict(record, normal_slots=slots), mapping)
+
+
+
+def test_sequence_writer_discards_only_effectively_unchanged_observations(tmp_path):
+    from src.nuscenes import _write_sequences
+
+    raw = np.array([[5., 0., 0., 100., 0.], [6., 0., 0., 90., 1.]], np.float32)
+    scan, label = tmp_path / 'scan.bin', tmp_path / 'label.bin'
+    raw.tofile(scan)
+    np.array([0, 1], np.uint8).tofile(label)
+    mapping = [dict(raw=0, name='noise', target=0), dict(raw=1, name='flat.driveable_surface', target=1)]
+    directory = tmp_path / 'train'
+    directory.mkdir()
+    original = dict(token='native', frame=0, scene='scene', subset='train', log_token='log',
+                    scan=str(scan), label=str(label), role='original', normal=1, anomaly=0, eligible=False)
+    rows = [original]
+    for index, role in enumerate(('sequence', 'control')):
+        delta = directory / f'{role}.npz'
+        xyzi = raw[index:index + 1, :4].copy()
+        xyzi[:, 3] /= 255.
+        np.savez(delta, slots=np.array([index]), labels=np.array([0], np.uint32),
+                 xyzi=xyzi, token=np.asarray('native'))
+        rows.append(dict(original, role=role, normal=1 - index, delta=str(delta),
+                         visible_points=0, uncertain_points=1, point_histogram=[0]*5, instance=role))
+    report = dict(scenes=[dict(scene='scene', subset='train', kind='anomaly', status='placed', frames=[])], surfaces={})
+    result = _write_sequences(tmp_path, tmp_path, mapping, report, {'train': rows}, 0.)['train']
+    assert [r['role'] for r in result['records']] == ['original', 'control']
+    assert result['recipe']['summary']['discarded_unchanged'] == 1
+    assert not (directory / 'sequence.npz').exists()
+    assert (directory / 'control.npz').exists()

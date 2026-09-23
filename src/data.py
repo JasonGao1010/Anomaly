@@ -799,6 +799,20 @@ def nuscenes_rays(record):
     return rays, diagnostics
 
 
+def nuscenes_truth(record, labels, mapping):
+    """Apply reviewed point labels before any synthetic foreground replacement."""
+    truth = np.asarray([row["target"] for row in mapping], np.uint32)[labels]
+    if "normal_slots" in record:
+        slots = np.asarray(record["normal_slots"])
+        raw_id = next(row["raw"] for row in mapping if row["name"] == "static.manmade")
+        if (slots.ndim != 1 or slots.dtype.kind not in "iu" or not len(slots)
+                or np.any(slots < 0) or np.any(slots >= len(labels))
+                or np.any(np.diff(slots) <= 0) or np.any(labels[slots] != raw_id)):
+            raise ValueError("supplemental normal points do not match the reviewed native category")
+        truth[slots] = 1
+    return truth
+
+
 def read_nuscenes(record, mapping):
     """Keep one native sweep; only convert the sensor's fixed intensity units."""
     raw = np.fromfile(record["scan"], dtype="<f4")
@@ -813,7 +827,7 @@ def read_nuscenes(record, mapping):
     xyzi = raw[:, :4].copy()
     # This is the official LitePT nuScenes input convention, not per-frame scaling.
     xyzi[:, 3] /= 255.
-    truth = np.asarray([row["target"] for row in mapping], np.uint32)[labels]
+    truth = nuscenes_truth(record, labels, mapping)
     if "delta" in record:
         with np.load(record["delta"], allow_pickle=False) as delta:
             if str(delta["token"]) != record["token"]:
@@ -1349,17 +1363,20 @@ def main():
     parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
     parser.add_argument("--background-only", action="store_true", help="nuScenes: split original backgrounds without extracting or inserting objects")
     parser.add_argument("--objects", type=Path, help="nuScenes: reviewed object catalog for one fixed placement per sequence")
+    parser.add_argument("--normal-annotations", type=Path, help="nuScenes: reviewed native point labels; unresolved points remain ignored")
     args = parser.parse_args()
     if args.background_only and args.operation != "nuscenes":
         parser.error("--background-only is only supported by the nuscenes operation")
     if args.objects is not None and (args.operation != "nuscenes" or args.background_only):
         parser.error("--objects requires nuscenes without --background-only")
+    if args.normal_annotations is not None and (args.operation != "nuscenes" or not (args.background_only or args.objects)):
+        parser.error("--normal-annotations requires nuScenes backgrounds or reviewed object sequences")
     if args.operation == "nuscenes":
         if args.output is None:
             parser.error("nuscenes requires an explicit new --output directory")
         from .nuscenes import build
         build(args.nuscenes_root, args.output, args.workers,
-              background_only=args.background_only, objects=args.objects)
+              background_only=args.background_only, objects=args.objects, normal_annotations=args.normal_annotations)
         return
     if args.output is None:
         args.output = Path("results/data")

@@ -18,7 +18,7 @@ import numpy as np
 from scipy.spatial import ConvexHull, Delaunay, QhullError
 from scipy.spatial.transform import Rotation
 
-from .data import SOURCE_VERSION, identity, nuscenes_mapping, write_json
+from .data import SOURCE_VERSION, identity, nuscenes_mapping, nuscenes_truth, write_json
 
 
 RECIPE = dict(
@@ -121,10 +121,10 @@ def _read(record):
     return raw, labels
 
 
-def _counts(raw, labels, mapping):
+def _counts(raw, truth):
     distance = np.linalg.norm(raw[:, :3], axis=1)
     actual = np.any(raw[:, :3] != 0, axis=1)
-    normal = (mapping[labels] == 1) & actual & (distance >= 2.5) & (distance <= 50.)
+    normal = (truth == 1) & actual & (distance >= 2.5) & (distance <= 50.)
     return dict(points=int(actual.sum()), slots=len(raw), normal=int(normal.sum()), anomaly=0, eligible=False)
 
 
@@ -138,12 +138,13 @@ def _background_scene(task):
         raw, labels = _read(record)
         if np.any(labels >= len(lookup)):
             raise ValueError("unknown original lidarseg label")
-        row = dict(record, role="original", **_counts(raw, labels, lookup))
+        truth = nuscenes_truth(record, labels, mapping)
+        row = dict(record, role="original", **_counts(raw, truth))
         rows.append(row)
         actual = np.any(raw[:, :3] != 0, axis=1)
         distance = np.linalg.norm(raw[:, :3], axis=1)
         valid = actual & (distance >= 2.5) & (distance <= 50.)
-        normal = valid & (lookup[labels] == 1)
+        normal = valid & (truth == 1)
         counts.update({key: row[key] for key in ("points", "slots", "normal")})
         counts.update(ignored_in_range=int((valid & ~normal).sum()),
                       outside_range=int((actual & ~valid).sum()), empty_slots=int((~actual).sum()))
@@ -173,6 +174,8 @@ def _backgrounds(root, output, workers, records, mapping):
         assert counts["points"] == counts["normal"] + counts["ignored_in_range"] + counts["outside_range"]
         summary = dict(frames=len(rows), scenes=len(scenes), logs=len({r["log_token"] for r in rows}),
                        **counts, anomaly=0, raw_class_points=categories.tolist(),
+                       supplemental_normal_frames=sum("normal_slots" in r for r in rows),
+                       supplemental_normal_points=sum(len(r.get("normal_slots", [])) for r in rows),
                        normal_distance_edges_m=[2.5, 10., 20., 30., 40., 50.],
                        normal_distance_points=ranges.tolist(),
                        location_frames=dict(Counter(logs[r["log_token"]] for r in rows)))
@@ -182,6 +185,7 @@ def _backgrounds(root, output, workers, records, mapping):
             recipe=dict(stage="background", partition="Official nuScenes train/val scenes; disjoint acquisition logs",
                 input="Complete original measured returns; no point removal by semantic label or supervision range",
                 supervision=f"{sum(r['target'] == 1 for r in mapping)} admitted normal classes within 2.5-50 m; unresolved categories ignored; no positive labels",
+                supplemental_normals="Exact reviewed native point indices only; no category-wide or temporal label propagation",
                 validation="Normal-field and false-positive analysis only; anomaly metrics require later positive examples"),
             summary=summary)
         manifest["sha256"] = identity(manifest)
@@ -317,7 +321,7 @@ def _scene_donors(task):
         raw, labels = _read(record)
         if np.any(labels >= len(lookup)):
             raise ValueError("unknown original lidarseg category")
-        rows.append(dict(record, **_counts(raw, labels, lookup)))
+        rows.append(dict(record, **_counts(raw, nuscenes_truth(record, labels, mapping))))
         rows[-1]["road_histogram"] = np.histogram(np.linalg.norm(raw[labels == names["flat.driveable_surface"], :3], axis=1),
                                                 RECIPE["distance_edges"])[0].tolist()
         transform = np.asarray(record["pose"])
@@ -506,13 +510,20 @@ def _road_clearance(road, center):
     return float(np.min(-planes[:, -1] / np.linalg.norm(planes[:, :2], axis=1)))
 
 
-
-def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diagnostics=None, match=None, interior=False):
+def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diagnostics=None, match=None,
+               support_road=None, interior=False):
     """Return a sparse foreground replacement, or None for unsupported placement."""
     transform = np.asarray(record["pose"])
     world = raw[:, :3].astype(float) @ transform[:3, :3].T + transform[:3, 3]
     road_mask = labels == road_id
-    road = world[road_mask]
+    current_road = world[road_mask]
+    road = current_road
+    if support_road is not None:
+        support_road = np.asarray(support_road, dtype=float)
+        if support_road.ndim != 2 or support_road.shape[1] != 3 or not np.isfinite(support_road).all():
+            raise ValueError("supplemental road support must contain finite world-coordinate points")
+        # Temporal road observations support placement, never create receiver rays.
+        road = np.concatenate((road, support_road))
     diagnostics = {} if diagnostics is None else diagnostics
     diagnostics.update(reason="no_road", attempts=0, attempt_failures={})
     failures = diagnostics["attempt_failures"]
@@ -550,6 +561,12 @@ def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diag
         if abs(plane[2] - road[candidate, 2]) > RECIPE["support_residual_m"]:
             reject("support_anchor_disagreement")
             continue
+        if support_road is not None:
+            current = current_road[np.linalg.norm(current_road[:, :2] - center, axis=1) <= radius + .5]
+            residual = abs((current[:, :2] - center) @ plane[:2] + plane[2] - current[:, 2])
+            if len(residual) and np.quantile(residual, .9) > RECIPE["support_residual_m"]:
+                reject("support_current_disagreement")
+                continue
         vector = center - origin_sensor[:2]
         vector /= np.linalg.norm(vector)
         basis = _basis(vector, plane)
@@ -789,6 +806,7 @@ def _selected_surfaces(root, records, mapping, catalog):
             if not np.array_equal(d["slots"], x["point_slots"]):
                 raise ValueError("surface extraction changed the reviewed point selection")
             d.update(review_id=x["review_id"], appearance=x["appearance"],
+                     exposure_family=x["object_group"],
                      box_rotation_local=np.asarray(d["basis"]).T @ _pose(x["box"])[:3, :3])
         donors.extend(extracted)
         rejected.update(failures)
@@ -841,7 +859,6 @@ def _control_surfaces(root, records, mapping, workers):
     return donors, dict(rejected)
 
 
-
 def _object_admission(catalog):
     """Public definitions constrain auxiliary exposure, not hidden target labels."""
     candidates = catalog["selected"] + catalog.get("excluded", [])
@@ -873,7 +890,6 @@ def _object_admission(catalog):
     catalog["source_categories"] = {r["category"]: r["raw_label"] for r in rows}
     catalog["limits"][0] = "当前数量是不同官方实例标识，不保证跨场景绝对不同实体，也不代表独立几何类别。"
     return catalog
-
 
 
 def _box_entry(directions, sensor, rotation, size):
@@ -924,7 +940,6 @@ def _sequence_collision(frames, donor, origin, basis, boxes, road_id):
 
 def _sequence(task):
     records, donor, mapping, boxes, output = task
-    lookup = np.array([r["target"] for r in mapping], np.uint32)
     road_id = next(r["raw"] for r in mapping if r["name"] == "flat.driveable_surface")
     frames, original = [], []
     for record in records:
@@ -932,9 +947,14 @@ def _sequence(task):
         pose = np.asarray(record["pose"])
         world = raw[:, :3].astype(float) @ pose[:3, :3].T + pose[:3, 3]
         frames.append((record, raw, labels, world))
-        original.append(dict(record, role="original", **_counts(raw, labels, lookup)))
+        original.append(dict(record, role="original", **_counts(raw, nuscenes_truth(record, labels, mapping))))
     scene = records[0]["scene"]
     kind = donor["kind"]
+    # Pool measured road support, retaining actual points rather than voxel centres.
+    support_road = np.concatenate([world[labels == road_id] for _, _, labels, world in frames])
+    if len(support_road):
+        _, kept = np.unique(np.floor(support_road / .1).astype(np.int64), axis=0, return_index=True)
+        support_road = support_road[np.sort(kept)]
     result = dict(scene=scene, subset=records[0]["subset"], donor=donor["id"], kind=kind,
                   instance=donor["instance"], attempts=0, failures={}, frames=[])
     placement = None
@@ -947,7 +967,7 @@ def _sequence(task):
             diagnostics = {}
             candidate = transplant(raw, labels, record, donor, road_id,
                 np.random.default_rng(_seed(("sequence", scene, donor["id"], index, attempt))),
-                diagnostics=diagnostics, interior=True)
+                diagnostics=diagnostics, interior=True, support_road=support_road)
             if candidate is None:
                 reason = diagnostics["reason"]
             else:
@@ -955,7 +975,7 @@ def _sequence(task):
                 origin, basis = np.array(proposed["position_world"]), np.array(proposed["basis_world"])
                 reason = _sequence_collision(frames, donor, origin, basis, boxes, road_id)
                 if reason is None:
-                    anchor_road = frames[index][3][labels == road_id]
+                    anchor_road = np.concatenate((frames[index][3][labels == road_id], support_road))
                     proposed["measured_road_clearance_m"] = _road_clearance(anchor_road, origin[:2])
                     placement = proposed
                     result["anchor_token"] = record["token"]
@@ -1011,7 +1031,7 @@ def _sequence(task):
         replacement_labels = np.zeros(len(changed), np.uint32)
         where = np.searchsorted(changed, slots)
         replacement[where], replacement_labels[where] = xyzi, 1 if kind == "control" else 2
-        truth = lookup[labels].copy()
+        truth = nuscenes_truth(record, labels, mapping)
         truth[changed] = replacement_labels
         observed = raw[:, :4].copy()
         observed[changed, :3] = replacement[:, :3]
@@ -1031,7 +1051,7 @@ def _sequence(task):
             point_range_median=float(np.median(positive)) if len(positive) else None)
         if len(changed):
             row["delta"] = str(Path(output) / record["subset"] / filename)
-        # A zero-change timeline entry is not a second training observation.
+        # The writer removes candidates with no effective input or target change.
         if len(changed):
             generated.append(row)
         status.update(status=reason, supported=True, segment=segment, visible_points=len(slots),
@@ -1060,7 +1080,7 @@ def _sequences(root, output, workers, records, mapping, objects):
         normal_surface_failures=control_failures,
         semantic_sources=catalog["sources"], semantic_mapping=mapping,
         normal_controls="One separate fixed normal-object sequence per receiver scene; identical rendering and admission rules, independently sampled placement; not geometry-matched causal pairs",
-        road_interior="Both roles: anchor at least 1 m inside convex hull of measured driveable-surface points within 2.5 m; local support proxy, not an annotated lane centre",
+        road_interior="Both roles: anchor at least 1 m inside local measured driveable-surface hull, pooling same-scene keyframes; current-frame road agreement required; not an annotated lane centre",
         manifest_scope="Original once, changed supported anomaly/control observations only; zero-change entries retained in timeline",
         scope="Partial measured surfaces on existing return directions; unknown occlusion ignored",
         geometry="One reviewed observation per object; no multiframe deformation or backside completion",
@@ -1071,7 +1091,7 @@ def _sequences(root, output, workers, records, mapping, objects):
     surfaces = {d["id"]: {k: (v.tolist() if isinstance(v, np.ndarray) else v)
                           for k, v in d.items()} for d in donors}
     report["surfaces"] = surfaces
-    tasks, usage = [], Counter()
+    tasks, usage, family_usage = [], Counter(), Counter()
     for split in ("train", "val"):
         (output / split).mkdir(parents=True, exist_ok=True)
         scenes = defaultdict(list)
@@ -1081,10 +1101,13 @@ def _sequences(root, output, workers, records, mapping, objects):
             available = [d for d in donors if d["subset"] == split and d["kind"] == kind]
             if not available:
                 raise ValueError(f"no surface supports {split}:{kind}")
+            instance_limit = int(np.ceil(2 * len(scenes) / len({d["instance"] for d in available})))
             for scene, rows in scenes.items():
-                donor = min((d for d in available if d["scene"] != scene),
-                            key=lambda d: (usage[d["instance"]], _seed((scene, d["id"]))))
+                donor = min((d for d in available if d["scene"] != scene and usage[d["instance"]] < instance_limit),
+                            key=lambda d: (family_usage[split, kind, d.get("exposure_family", d["category"])],
+                                           usage[d["instance"]], _seed((scene, d["id"]))))
                 usage[donor["instance"]] += 1
+                family_usage[split, kind, donor.get("exposure_family", donor["category"])] += 1
                 tasks.append((rows, donor, mapping,
                               {r["sample_token"]: boxes[r["sample_token"]] for r in rows}, str(output)))
     output_rows = {s: [] for s in records}
@@ -1095,13 +1118,43 @@ def _sequences(root, output, workers, records, mapping, objects):
             report["scenes"].append(scene)
             if (i + 1) % 25 == 0:
                 print(f"nuScenes fixed sequences {i + 1}/{len(tasks)}", flush=True)
+    return _write_sequences(root, output, mapping, report, output_rows, time.monotonic() - started)
+
+
+def _write_sequences(root, output, mapping, report, output_rows, seconds):
+    """Write reports from measured observations, including reviewed normal labels."""
+    output = Path(output).resolve()
+    report["allocation"] = "Balance semantic object groups, then source instances, before placement; cap each instance at ceil(2 * receiver scenes / available instances); failures retained; group identity is not certified geometric novelty"
+    report["auxiliary_supervision"] = "nuScenes auxiliary obstacles only; not STU target anomaly labels; ambiguous native points ignored"
     summaries, manifests = {}, {}
     for split, rows in output_rows.items():
+        retained, redundant = [], []
+        for row in rows:
+            if "delta" in row:
+                row["delta"] = str(output / split / Path(row["delta"]).name)
+                if row["visible_points"] == 0:
+                    raw, labels = _read(row)
+                    truth = nuscenes_truth(row, labels, mapping)
+                    with np.load(row["delta"], allow_pickle=False) as delta:
+                        slots = delta["slots"]
+                        original = raw[slots, :4].copy()
+                        original[:, 3] /= 255.
+                        if (str(delta["token"]) != row["token"] or np.any(delta["labels"] != 0)
+                                or not np.array_equal(delta["xyzi"], original)):
+                            raise ValueError("zero-hit observation differs from its native returns")
+                        distance = np.linalg.norm(raw[slots, :3], axis=1)
+                        # Ignoring an already ignored target adds no observation.
+                        if not np.any((truth[slots] == 1) & (distance >= 2.5) & (distance <= 50.)):
+                            redundant.append(Path(row["delta"]))
+                            continue
+            retained.append(row)
+        rows = output_rows[split] = retained
         scenes = [r for r in report["scenes"] if r["subset"] == split]
         generated = [r for r in rows if r["role"] == "sequence"]
         control_rows = [r for r in rows if r["role"] == "control"]
         frames = [f for s in scenes for f in s["frames"]]
         summaries[split] = dict(scenes=len({s["scene"] for s in scenes}), attempted_sequences=len(scenes),
+            discarded_unchanged=len(redundant),
             placed_scenes=sum(s["status"] == "placed" and s["kind"] == "anomaly" for s in scenes),
             placed_controls=sum(s["status"] == "placed" and s["kind"] == "control" for s in scenes),
             control_frames=len(control_rows), control_instances=len({r["instance"] for r in control_rows}),
@@ -1115,6 +1168,18 @@ def _sequences(root, output, workers, records, mapping, objects):
             frame_states=dict(Counter(f["status"] for f in frames)),
             instances=len({r["instance"] for r in generated}),
             positive_distance_points=np.sum([r["point_histogram"] for r in generated], axis=0).tolist() if generated else [0]*5)
+        families = sorted({report["surfaces"][r["donor"]].get("exposure_family", "unknown") for r in generated})
+        summaries[split]["families"] = {}
+        for family in families:
+            members = [r for r in generated if report["surfaces"][r["donor"]].get("exposure_family", "unknown") == family]
+            summaries[split]["families"][family] = dict(
+                instances=len({r["instance"] for r in members if r["anomaly"]}),
+                positive_frames=sum(r["anomaly"] > 0 for r in members),
+                eligible_frames=sum(r["eligible"] for r in members),
+                positive_points=sum(r["anomaly"] for r in members),
+                distance_points=np.sum([r["point_histogram"] for r in members], axis=0).tolist())
+        summaries[split]["supplemental_normal_points"] = sum(len(r.get("normal_slots", [])) for r in rows if r["role"] == "original")
+        summaries[split]["supplemental_normal_frames"] = sum("normal_slots" in r for r in rows if r["role"] == "original")
         manifest = dict(version=SOURCE_VERSION, kind=split, mapping=mapping, records=rows,
             directory=str(output / split), root=str(Path(root).resolve()),
             split=dict(name=split, scenes=sorted({r["scene"] for r in rows}),
@@ -1126,14 +1191,39 @@ def _sequences(root, output, workers, records, mapping, objects):
                 limits="Instance/log-disjoint, not certified unseen geometry families; no STU data used; partial-surface observations, not complete sensor simulation"))
         manifest["sha256"] = identity(manifest)
         write_json(output / f"{split}.json", manifest, indent=None)
+        for path in redundant:
+            path.unlink()
         manifests[split] = manifest
-    report.update(summary=summaries, seconds=time.monotonic() - started)
+    report.update(summary=summaries, seconds=seconds)
     write_json(output / "sequences.json", report, indent=None)
     print(json.dumps(summaries), flush=True)
     return manifests
 
 
-def build(root, output, workers, *, background_only=False, objects=None):
+def _normal_annotations(records, mapping, path):
+    """Attach exact reviewed slots; no category-wide or cross-frame propagation."""
+    annotations = json.loads(Path(path).read_text())["records"]
+    source = {r["token"]: r for rows in records.values() for r in rows}
+    seen = set()
+    for annotation in annotations:
+        token = annotation["token"]
+        if token in seen or token not in source:
+            raise ValueError("duplicate or unknown supplemental annotation token")
+        seen.add(token)
+        record = source[token]
+        if any(record[k] != annotation[k] for k in ("scene", "subset")) or annotation["semantic"] != "building":
+            raise ValueError("supplemental annotation identity or admitted semantics differ")
+        checked = dict(record, normal_slots=annotation["point_slots"])
+        _, labels = _read(record)
+        nuscenes_truth(checked, labels, mapping)
+        for rows in records.values():
+            for row in rows:
+                if row["token"] == token:
+                    row["normal_slots"] = annotation["point_slots"]
+                    row["normal_annotation"] = str(Path(path).resolve())
+
+
+def build(root, output, workers, *, background_only=False, objects=None, normal_annotations=None):
     """Census actual surfaces, then materialize bounded source-only requests."""
     output = Path(output).resolve()
     if workers < 1:
@@ -1149,6 +1239,10 @@ def build(root, output, workers, *, background_only=False, objects=None):
         raise ValueError("output is not an existing complete nuScenes build")
     started = time.monotonic()
     records, mapping = sources(root)
+    if normal_annotations is not None:
+        if not (background_only or objects is not None):
+            raise ValueError("supplemental normals require backgrounds or reviewed sequences")
+        _normal_annotations(records, mapping, normal_annotations)
     if background_only:
         return _backgrounds(root, output, workers, records, mapping)
     if objects is not None:
@@ -1274,7 +1368,6 @@ def build(root, output, workers, *, background_only=False, objects=None):
     shutil.rmtree(staging)
     print("nuScenes completed " + json.dumps({s: census[s] for s in ("train", "val")}), flush=True)
     return manifests
-
 
 
 def group_geometry(donors):
