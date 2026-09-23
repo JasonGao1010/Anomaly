@@ -1,0 +1,41 @@
+{
+  "version": "AJAE-V4-NDP",
+  "seed": 0,
+  "method": "field",
+  "complete": true,
+  "epochs": 10,
+  "updates": 562,
+  "best_epoch": 1,
+  "best_metrics": {
+    "AP": 75.69002925892964,
+    "FPR95": 1.0859606670991913,
+    "AUROC": 99.80342420330608,
+    "threshold": -4.944190502166748
+  },
+  "best_update": 562,
+  "final_metrics": {
+    "AP": 75.69002925892964,
+    "FPR95": 1.0859606670991913,
+    "AUROC": 99.80342420330608,
+    "threshold": -4.944190502166748
+  },
+  "objective": "metrics",
+  "branch": null,
+  "start_update": 0,
+  "additional_updates": null,
+  "parent_updates": 0,
+  "cumulative_updates": 562,
+  "gradient_steps": 562,
+  "clipped_steps": 537,
+  "gradient_norm_sum": 7218.643720239401,
+  "gradient_norm_max": 103.77194213867188,
+  "training_seconds": 32608.961238659336,
+  "validation_seconds": 1258.5818479210138,
+  "planned_updates": 562,
+  "successful_updates": 562,
+  "overflows": 0,
+  "parameters": 13208962,
+  "train_manifest_sha256": "950ae5b141baed3108fd141322ac9823c9402e5adf1e7d8627bb9fe405139371",
+  "val_manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "validation_improved_from_epoch0": null
+}
