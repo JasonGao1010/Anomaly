@@ -577,11 +577,12 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 normal_reduction="mean of point-normalized block joint NLLs, then scales, then eligible normal scans"),
             normal_field=dict(scales=SCALES, hypotheses=HYPOTHESES, kernels=KERNELS,
                 ray_chunk=RAY_CHUNK, range_m=[LOWER, UPPER], ray_origin="scan reference origin approximation",
+                compatibility="within-hypothesis kernels, then complete hypotheses with conditional log density and context log prior",
                 precision="FP32 field, ray density, compatibility and output head", normal_pretraining=False),
             model_precision="FP32 including backbone; at most two full attention patches per chunk, recomputed in backward",
             gradient_cache=dict(microbatch=2, score_atol=1e-5, score_rtol=1e-5,
                 forwards="one score pass plus one replay; per-scan activation release; BN advances once"),
-            validation="val19 development; checkpoint selection permitted; no independent final-test claim")
+            validation="explicit development manifest; checkpoint selection permitted; not an independent final test")
         if train["version"] == NDP_VERSION:
             result.update(data_recipe=train["recipe"], normal_source_visits=visits,
                 comparison=dict(reference="NDP-EE, arXiv:2604.09232v2 Table 1",
@@ -1246,9 +1247,9 @@ def preflight(args, train, val, device, config, resources, method="field"):
 
 def main():
     parser = argparse.ArgumentParser(description="Train the complete observation-constrained normal-field segmentor.")
-    parser.add_argument("--train-manifest", type=Path, default=Path("results/data/ndp/train.json"))
-    parser.add_argument("--val-manifest", type=Path, default=Path("assets/val.json"))
-    parser.add_argument("--output", type=Path, default=Path("results/train/ndp"))
+    parser.add_argument("--train-manifest", type=Path, required=True, help="training data for this run")
+    parser.add_argument("--val-manifest", type=Path, required=True, help="development data used for model selection")
+    parser.add_argument("--output", type=Path, required=True, help="experiment output directory")
     parser.add_argument("--initial", type=Path, default=Path("assets/nuscenes.pth"))
     parser.add_argument("--epochs", type=int, required=True, help="explicit complete training-data passes")
     parser.add_argument("--eval-every", type=int, help="updates between development evaluations; default: endpoint only")

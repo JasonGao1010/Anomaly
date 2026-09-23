@@ -299,11 +299,12 @@ def prediction_metrics(model, sample):
 
 
 class Compatibility(nn.Module):
-    """Learn pointwise compatibility from the context prior, never a target posterior."""
+    """Compare complete context hypotheses before learning a pointwise decision."""
 
     def __init__(self):
         super().__init__()
-        self.tokens = network(4, 16, 64)
+        self.tokens = network(3, 16, 64)
+        self.hypotheses = network(34, 64, 64)
         self.scale = nn.Parameter(torch.randn(len(SCALES), 64) * .02)
         self.query = nn.Linear(64, 32)
         self.range = network(1, 16, 32)
@@ -319,15 +320,22 @@ class Compatibility(nn.Module):
             mu, tau, log_h = ray_parameters(field, group, observation["origins"][begin:end],
                                             observation["directions"][begin:end])
             weights = field["log_weights"][group]
-            parameters = torch.stack((mu / UPPER, (tau / UPPER).log(), log_h + math.log(UPPER),
-                                      weights[..., None].expand_as(mu)), -1)
-            tokens = self.tokens(parameters).flatten(1, 2) + self.scale[index]
-            key, value = (part.reshape(-1, HYPOTHESES * KERNELS, 4, 8) for part in tokens.chunk(2, -1))
-            attention = ((query[:, None] * key).sum(-1) / math.sqrt(8)).softmax(1)
-            features.append((attention[..., None] * value).sum(1).flatten(1))
+            parameters = torch.stack((mu / UPPER, (tau / UPPER).log(), log_h + math.log(UPPER)), -1)
+            tokens = self.tokens(parameters) + self.scale[index]
+            key, value = (part.reshape(-1, HYPOTHESES, KERNELS, 4, 8) for part in tokens.chunk(2, -1))
+            # Kernels coexist within a hypothesis; never pool across hypotheses here.
+            attention = ((query[:, None, None] * key).sum(-1) / math.sqrt(8)).softmax(2)
+            context = (attention[..., None] * value).sum(2).flatten(2)
             # Outside protocol support, keep point logits but provide no density
             # evidence. Such returns remain context and are never NLL targets.
             prob = ray_log_prob(mu, tau, log_h, distance.clamp(LOWER, UPPER))
+            density = torch.where(valid[:, None], prob, 0.)
+            hypotheses = self.hypotheses(torch.cat((context, density[..., None], weights[..., None]), -1))
+            key, value = (part.reshape(-1, HYPOTHESES, 4, 8) for part in hypotheses.chunk(2, -1))
+            # This is learned evidence aggregation, not a posterior update of the
+            # normal field. Shared maps make both kernel and hypothesis order arbitrary.
+            attention = ((query[:, None] * key).sum(-1) / math.sqrt(8)).softmax(1)
+            features.append((attention[..., None] * value).sum(1).flatten(1))
             marginals.append(torch.where(valid, torch.logsumexp(weights + prob, -1), 0.))
             probabilities.append(prob)
         return torch.cat((state.float(), *features, torch.stack(marginals, -1)), -1), torch.stack(probabilities, 1)

@@ -12,7 +12,8 @@ from torch import nn
 from torch.nn import functional as F
 
 from src.normal import (NormalField, Compatibility, angular_observation, joint_nll,
-                        ray_parameters, ray_log_prob, log_normal_mass, SCALES, LOWER, UPPER)
+                        ray_parameters, ray_log_prob, log_normal_mass, SCALES, LOWER, UPPER,
+                        HYPOTHESES, KERNELS)
 from src.model import Segmentor, balanced_loss, ranking_loss, to_device
 from src.train import cached_backward, seed_all, rng_state, restore_rng
 
@@ -161,7 +162,117 @@ def test_point_compatibility_never_reweights_prior_with_target_peer_ranges():
     torch.testing.assert_close(before[1:], after[1:], atol=0, rtol=0)
     assert not torch.equal(before[0], after[0])
     after.square().mean().backward()
-    assert decoder.tokens[0].weight.grad.abs().sum() > 0
+    gradients = [p.grad for p in decoder.parameters() if p.grad is not None]
+    assert gradients and all(torch.isfinite(g).all() for g in gradients)
+    assert sum(float(g.abs().sum()) for g in gradients) > 0
+
+
+@pytest.mark.parametrize("permuted", ["kernels", "hypotheses"])
+def test_compatibility_is_invariant_to_kernel_and_hypothesis_names(permuted):
+    seed_all(43)
+    xyzi, _ = angular_scan()
+    observation = angular_observation(xyzi[:32])
+    fields = NormalField(recompute=False)(observation)
+    decoder = Compatibility().eval()
+    state = torch.randn(32, 64)
+    permutation = torch.randperm(KERNELS if permuted == "kernels" else HYPOTHESES)
+    reordered = {}
+    for size, field in fields.items():
+        reordered[size] = {
+            name: value[:, permutation] if permuted == "hypotheses"
+            else value if name == "log_weights" else value[:, :, permutation]
+            for name, value in field.items()}
+    before, probability = decoder(state, observation, fields, 0, len(state))
+    after, changed_probability = decoder(state, observation, reordered, 0, len(state))
+    torch.testing.assert_close(after, before, atol=2e-6, rtol=2e-6)
+    expected = probability[..., permutation] if permuted == "hypotheses" else probability
+    torch.testing.assert_close(changed_probability, expected, atol=2e-6, rtol=2e-6)
+
+
+def test_compatibility_distinguishes_hypothesis_grouping_at_equal_marginal_density():
+    seed_all(29)
+    middle = (LOWER + UPPER) / 2
+    observation = angular_observation(np.array([[middle, 0., 0., .4]], dtype=np.float32))
+    center = torch.zeros(1, HYPOTHESES, KERNELS, 3)
+    center[:, :HYPOTHESES // 2, :, 0] = middle - 8
+    center[:, HYPOTHESES // 2:, :, 0] = middle + 8
+    field = dict(center=center, inverse=torch.eye(3).expand(1, HYPOTHESES, KERNELS, 3, 3) / 4,
+                 log_amplitude=torch.full((1, HYPOTHESES, KERNELS), -20.),
+                 log_weights=torch.full((1, HYPOTHESES), -math.log(HYPOTHESES)))
+    count = HYPOTHESES * KERNELS
+    order = torch.stack((torch.arange(count // 2), torch.arange(count // 2, count)), 1).flatten()
+    # The same kernel multiset becomes four identical near/far hypotheses.
+    regrouped = {name: value if name == "log_weights"
+                 else value.flatten(1, 2)[:, order].reshape_as(value) for name, value in field.items()}
+    fields = {str(size): field for size in SCALES}
+    changed = {str(size): regrouped for size in SCALES}
+    state, decoder = torch.zeros(1, 64), Compatibility().eval()
+    before, probability = decoder(state, observation, fields, 0, 1)
+    after, changed_probability = decoder(state, observation, changed, 0, 1)
+    # Symmetry and the low-rate limit keep density evidence equal to FP32 tolerance.
+    # A flat kernel pool cannot distinguish these sets; the learned features must.
+    torch.testing.assert_close(probability, changed_probability, atol=1e-6, rtol=0)
+    torch.testing.assert_close(before[:, -len(SCALES):], after[:, -len(SCALES):], atol=1e-6, rtol=0)
+    assert (before[:, 64:-len(SCALES)] - after[:, 64:-len(SCALES)]).abs().max() > 1e-5
+
+
+def test_compatibility_chunks_preserve_scores_and_outside_support_has_no_density(monkeypatch):
+    seed_all(61)
+    distances = np.array([1., LOWER, 8., 15., UPPER, 60.], dtype=np.float32)
+    xyzi = np.column_stack((distances, np.zeros((len(distances), 2)), np.full(len(distances), .4)))
+    observation = angular_observation(xyzi.astype(np.float32))
+    fields = NormalField(recompute=False)(observation)
+    decoder, state = Compatibility().eval(), torch.randn(len(distances), 64)
+    whole, probability = decoder(state, observation, fields, 0, len(state))
+    parts = [decoder(state[start:start + 2], observation, fields, start, start + 2)
+             for start in range(0, len(state), 2)]
+    torch.testing.assert_close(torch.cat([part[0] for part in parts]), whole, atol=2e-6, rtol=2e-6)
+    torch.testing.assert_close(torch.cat([part[1] for part in parts]), probability, atol=2e-6, rtol=2e-6)
+    assert whole.shape == (len(distances), 163) and probability.shape == (len(distances), len(SCALES), HYPOTHESES)
+    torch.testing.assert_close(whole[:, :64], state, atol=0, rtol=0)
+    assert torch.isfinite(whole).all() and torch.isfinite(probability).all()
+    assert torch.count_nonzero(whole[[0, -1], -len(SCALES):]) == 0
+    def changed_boundary_density(mu, tau, log_h, measured):
+        probability = ray_log_prob(mu, tau, log_h, measured)
+        boundary = (measured == LOWER) | (measured == UPPER)
+        return probability + boundary[:, None] * (7 + 2 * torch.arange(HYPOTHESES))
+    monkeypatch.setattr("src.normal.ray_log_prob", changed_boundary_density)
+    altered, _ = decoder(state, observation, fields, 0, len(state))
+    # An out-of-range point is internally evaluated at a clipped endpoint. Even
+    # changing that density must leave both its learned and scalar evidence intact.
+    torch.testing.assert_close(altered[[0, -1]], whole[[0, -1]], atol=0, rtol=0)
+    assert not torch.equal(altered[[1, -2], -len(SCALES):], whole[[1, -2], -len(SCALES):])
+
+
+@pytest.mark.parametrize("sharp_and_low_prior", [False, True])
+def test_detection_gradient_through_hypothesis_features_reaches_field_and_prior(sharp_and_low_prior):
+    seed_all(83)
+    xyzi, _ = angular_scan()
+    observation = angular_observation(xyzi[:32])
+    model, decoder = NormalField(recompute=False), Compatibility()
+    fields = model(observation)
+    for field in fields.values():
+        if sharp_and_low_prior:
+            field["inverse"] = field["inverse"] * 1000
+            field["log_weights"] = (field["log_weights"] - 1000 * torch.arange(HYPOTHESES)).log_softmax(-1)
+        for value in field.values():
+            value.retain_grad()
+    hidden, _ = decoder(torch.randn(32, 64), observation, fields, 0, 32)
+    assert torch.isfinite(hidden).all()
+    # Isolate the learned hypothesis path: neither actual features nor marginal
+    # log densities can supply this classification gradient.
+    score = nn.Linear(32 * len(SCALES), 1)(hidden[:, 64:-len(SCALES)]).flatten()
+    loss = F.binary_cross_entropy_with_logits(score, (torch.arange(32) % 2).float())
+    assert torch.isfinite(loss)
+    loss.backward()
+    for name in ("center", "inverse", "log_amplitude", "log_weights"):
+        gradients = [field[name].grad for field in fields.values()]
+        assert all(g is not None and torch.isfinite(g).all() for g in gradients), name
+        assert sum(float(g.abs().sum()) for g in gradients) > 0, name
+    for module in (model.encoder, model.parameters_out, model.weights, decoder):
+        gradients = [p.grad for p in module.parameters() if p.grad is not None]
+        assert gradients and all(torch.isfinite(g).all() for g in gradients)
+        assert sum(float(g.abs().sum()) for g in gradients) > 0
 
 
 def test_clean_companion_likelihood_matches_shared_prediction_and_gradients():
@@ -317,7 +428,7 @@ def test_real_complete_model_gradients_maximum_pair_and_checkpoint_reload(tmp_pa
     data = PreparedScans(manifest, normal=True)
     indices = [max((i for i, row in enumerate(manifest["records"]) if row["group"] == group),
                    key=lambda i: manifest["records"][i]["points"])
-               for group in ("anomaly_stu", "normal_stu")]
+               for group in ("anomaly_nuscenes", "normal_nuscenes")]
     samples = [data[i] for i in indices]
     assert [s["normal_training"] for s in samples] == [False, True]
     seed_all(17)
