@@ -263,3 +263,176 @@ def test_out_of_supervision_range_foreground_still_occludes_background():
     assert np.any(distance < 2.5) and np.all(distance < original_distance)
     np.testing.assert_allclose(xyzi[:, :3] / distance[:, None],
                                raw[slots, :3] / original_distance[:, None], atol=1e-7)
+
+
+def test_fixed_surface_world_hits_survive_sensor_translation_and_rotation():
+    from src.nuscenes import _render_surface
+
+    donor = dict(xyz=np.array([[0., -1., -1.], [0., 1., -1.], [0., 1., 1.], [0., -1., 1.]]),
+                 triangles=np.array([[0, 1, 2], [0, 2, 3]]), intensity=np.full(4, .4),
+                 sensor_local=np.array([-5., 0., 0.]))
+    origin = np.array([12., 3., .5])
+    basis = Rotation.from_euler("z", 25, degrees=True).as_matrix()
+    original_basis, original_vertices = basis.copy(), donor["xyz"].copy()
+    targets = np.array([[0., -.3, .2], [0., .4, -.4]]) @ basis.T + origin
+    for yaw, translation in ((0., [0., -2., 0.]), (53., [3., 2., .5])):
+        transform = np.eye(4)
+        transform[:3, :3] = Rotation.from_euler("z", yaw, degrees=True).as_matrix()
+        transform[:3, 3] = translation
+        sensor_targets = (targets - transform[:3, 3]) @ transform[:3, :3]
+        # Background returns lie behind known surface points on the same rays.
+        xyz = np.vstack((2 * sensor_targets, -sensor_targets[0]))
+        raw = np.column_stack((xyz, np.full(3, 90.), np.arange(3))).astype(np.float32)
+        original_raw, original_transform = raw.copy(), transform.copy()
+        slots, xyzi, reason = _render_surface(raw, transform, donor, origin, basis)
+        assert reason == "visible"
+        np.testing.assert_array_equal(slots, [0, 1])
+        assert slots.dtype == np.int32 and xyzi.dtype == np.float32
+        world_hits = xyzi[:, :3] @ transform[:3, :3].T + transform[:3, 3]
+        np.testing.assert_allclose(world_hits, targets, atol=2e-6)
+        np.testing.assert_array_equal(raw, original_raw)
+        np.testing.assert_array_equal(transform, original_transform)
+    np.testing.assert_array_equal(basis, original_basis)
+    np.testing.assert_array_equal(donor["xyz"], original_vertices)
+
+
+def test_fixed_surface_distinguishes_occlusion_missing_rays_and_unknown_back():
+    from src.nuscenes import _render_surface
+
+    donor = dict(xyz=np.array([[0., -1., -1.], [0., 1., -1.], [0., -1., 1.]]),
+                 triangles=np.array([[0, 1, 2]]), intensity=np.full(3, .4),
+                 sensor_local=np.array([-5., 0., 0.]))
+    origin, basis = np.array([10., 0., 0.]), np.eye(3)
+    backside = np.eye(4)
+    backside[0, 3] = 20.
+    cases = (([5., -.15, -.15], np.eye(4), "surface_occluded"),
+             ([0., 20., 0.], np.eye(4), "no_receiver_ray_in_cone"),
+             ([20., .8, .8], np.eye(4), "no_surface_intersection"),
+             ([-20., 0., 0.], backside, "unobserved_surface_side"))
+    for xyz, transform, expected in cases:
+        raw = np.array([[*xyz, 90., 0.]], dtype=np.float32)
+        slots, xyzi, reason = _render_surface(raw, transform, donor, origin, basis)
+        assert reason == expected
+        assert slots.shape == (0,) and slots.dtype == np.int32
+        assert xyzi.shape == (0, 4) and xyzi.dtype == np.float32
+
+
+def test_fixed_surface_outside_supervision_still_replaces_only_existing_rays():
+    from src.nuscenes import _render_surface
+
+    donor = dict(xyz=np.array([[0., -1., -1.], [0., 1., -1.], [0., 1., 1.], [0., -1., 1.]]),
+                 triangles=np.array([[0, 1, 2], [0, 2, 3]]), intensity=np.full(4, .4),
+                 sensor_local=np.array([-5., 0., 0.]))
+    raw = np.array([[80., 0., 0., 90., 0.], [20., .1, 0., 60., 1.],
+                    [80., 0., 40., 50., 2.], [0., 0., 0., 0., 3.]], dtype=np.float32)
+    original = raw.copy()
+    slots, xyzi, reason = _render_surface(raw, np.eye(4), donor, np.array([55., 0., 0.]), np.eye(3))
+    assert reason == "visible"
+    np.testing.assert_array_equal(slots, [0])
+    np.testing.assert_allclose(xyzi, [[55., 0., 0., .4]], atol=1e-7)
+    hit_range = np.linalg.norm(xyzi[:, :3], axis=1)
+    old_range = np.linalg.norm(raw[slots, :3], axis=1)
+    assert np.all(hit_range > 50.) and np.all(hit_range < old_range)
+    np.testing.assert_allclose(xyzi[:, :3] / hit_range[:, None], raw[slots, :3] / old_range[:, None])
+    np.testing.assert_array_equal(raw, original)
+
+
+def test_oriented_box_entry_handles_parallel_rays_and_returns_inside_box():
+    from src.nuscenes import _box_entry
+
+    rotation = Rotation.from_euler("z", 90, degrees=True).as_matrix()
+    # The rotated box spans world x in [-2,2], y in [-1,1].
+    directions = np.array([[1., 0., 0.], [-1., 0., 0.], [0., 1., 0.]])
+    entry = _box_entry(directions, np.array([-5., 0., 0.]), rotation, np.array([2., 4., 2.]))
+    np.testing.assert_allclose(entry[0], 3., atol=1e-12)
+    assert np.isinf(entry[1:]).all()
+    assert np.isinf(_box_entry(directions[:1], np.array([-5., 2., 0.]), rotation, [2., 4., 2.])).all()
+    np.testing.assert_array_equal(_box_entry(directions, np.zeros(3), rotation, [2., 4., 2.]), [0., 0., 0.])
+    # A return inside the box is already uncertain; it need not pass its exit.
+    return_ranges = np.array([2., 3.5, 8.])
+    np.testing.assert_array_equal(entry[0] < return_ranges - 1e-4, [False, True, True])
+
+
+def test_sequence_keeps_supported_zero_hits_and_outside_changes_but_excludes_back(tmp_path, monkeypatch):
+    import src.nuscenes as source
+
+    mapping = [dict(raw=0, target=0, name="noise"), dict(raw=1, target=1, name="flat.driveable_surface")]
+    donor = dict(id="one-view", instance="one-object", scene="source", range=5.,
+                 xyz=np.array([[0., -1., -1.], [0., 1., -1.], [0., -1., 1.]]),
+                 triangles=np.array([[0, 1, 2]]), intensity=np.full(3, .4),
+                 sensor_local=np.array([-5., 0., 0.]), object_center_local=np.zeros(3),
+                 box_rotation_local=np.eye(3), size=np.array([1., 2., 2.]))
+    placement = dict(position_world=[10., 0., 0.], basis_world=np.eye(3).tolist(), range=10., scale=1.)
+    clouds = (np.array([[80., -.2, -.2, 90., 0.]], np.float32),
+              np.array([[0., 20., 0., 90., 0.]], np.float32),
+              np.array([[10., .6, .6, 90., 0.], [5., 0., 0., 90., 1.]], np.float32),
+              np.array([[-20., 0., 0., 90., 0.]], np.float32),
+              np.array([[20., -.2, -.2, 90., 0.]], np.float32))
+    records = []
+    for index, sensor_x in enumerate((-50., 0., 0., 20., 0.)):
+        pose = np.eye(4)
+        pose[0, 3] = sensor_x
+        records.append(dict(token=str(index), sample_token=str(index), timestamp=index,
+                            scene="receiver", subset="train", pose=pose.tolist()))
+    monkeypatch.setattr(source, "_read", lambda record:
+                        (clouds[int(record["token"])], np.ones(len(clouds[int(record["token"])]), np.uint8)))
+    monkeypatch.setattr(source, "transplant", lambda *args, **kwargs:
+                        (np.empty(0, np.int32), np.empty((0, 4), np.float32), placement))
+    # Placement validity is isolated here; collision rejection is tested below.
+    monkeypatch.setattr(source, "_sequence_collision", lambda *args: None)
+    (tmp_path / "train").mkdir()
+    original, generated, report = source._sequence((records, donor, mapping, {}, str(tmp_path)))
+    assert len(original) == len(report["frames"]) == 5
+    assert [row["token"] for row in generated] == ["0", "1", "2", "4"]
+    assert [row["segment"] for row in generated] == [0, 0, 0, 1]
+    assert report["segments"] == 2
+    assert all(row["placement"] == placement and row["donor"] == donor["id"] for row in generated)
+    assert generated[0]["anomaly"] == 0 and generated[0]["visible_points"] == 1
+    with np.load(generated[0]["delta"]) as delta:
+        assert np.linalg.norm(delta["xyzi"][0, :3]) > 50.
+        np.testing.assert_array_equal(delta["slots"], [0])
+        np.testing.assert_array_equal(delta["labels"], [2])
+    assert generated[1]["anomaly"] == generated[1]["visible_points"] == 0
+    assert "delta" not in generated[1]
+    assert report["frames"][1]["status"] == "no_receiver_ray_in_cone"
+    # Keep a possible unknown surface's old context, but never its normal label.
+    assert generated[2]["uncertain_points"] == 1 and generated[2]["normal"] == 1
+    assert report["frames"][2]["uncertain_supervised_points"] == 1
+    with np.load(generated[2]["delta"]) as delta:
+        np.testing.assert_array_equal(delta["slots"], [0])
+        np.testing.assert_array_equal(delta["labels"], [0])
+        np.testing.assert_array_equal(delta["xyzi"][:, :3], clouds[2][:1, :3])
+    assert report["frames"][3]["status"] == "unobserved_surface_side"
+    assert not report["frames"][3]["supported"]
+    assert generated[3]["anomaly"] == 1
+    assert not (tmp_path / "train" / "3.npz").exists()
+
+
+def test_sequence_rejects_fixed_placement_when_a_later_frame_collides(tmp_path, monkeypatch):
+    import src.nuscenes as source
+
+    mapping = [dict(raw=0, target=0, name="noise"), dict(raw=1, target=1, name="flat.driveable_surface")]
+    donor = dict(id="one-view", instance="one-object", object_center_local=np.array([0., 0., .5]),
+                 box_rotation_local=np.eye(3), size=np.ones(3))
+    origin, basis = np.array([10., 0., -1.5]), np.eye(3)
+    raw = np.array([[20., 0., -1.5, 90., 0.]], np.float32)
+    labels = np.ones(1, np.uint8)
+    records = [dict(token=str(i), sample_token=str(i), timestamp=i, scene="receiver", subset="train",
+                    pose=np.eye(4).tolist()) for i in range(2)]
+    frames = [(record, raw, labels, raw[:, :3]) for record in records]
+    boxes = {"1": [dict(translation=[10., 0., -1.], rotation=[1., 0., 0., 0.], size=[1., 1., 1.])]}
+    assert source._sequence_collision(frames, donor, origin, basis, {}, 1) is None
+    assert source._sequence_collision(frames[:1], donor, origin, basis, boxes, 1) is None
+    assert source._sequence_collision(frames, donor, origin, basis, boxes, 1) == "annotated_object_collision"
+    monkeypatch.setattr(source, "_read", lambda record: (raw, labels))
+    placement = dict(position_world=origin.tolist(), basis_world=basis.tolist(), range=10., scale=1.)
+    monkeypatch.setattr(source, "transplant", lambda *args, **kwargs:
+                        (np.empty(0, np.int32), np.empty((0, 4), np.float32), placement))
+    def reject_render(*args):
+        raise AssertionError("A conflicting fixed placement must be rejected before rendering")
+    monkeypatch.setattr(source, "_render_surface", reject_render)
+    original, generated, report = source._sequence((records, donor, mapping, boxes, str(tmp_path)))
+    assert len(original) == 2 and not generated
+    assert report["status"] == "no_sequence_placement"
+    assert report["failures"] == {"annotated_object_collision": report["attempts"]}
+    assert report["attempts"] > 0 and not list(tmp_path.iterdir())

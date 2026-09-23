@@ -275,16 +275,25 @@ def _triangles(xyz, rings, beam_rank, azimuth_step):
     return triangles[valid & (area > 1e-5)].astype(np.int32)
 
 
-def _ground(points, center, radius):
+def _ground(points, center, radius, diagnostics=None):
+    diagnostics = {} if diagnostics is None else diagnostics
     selected = points[np.linalg.norm(points[:, :2] - center, axis=1) <= radius]
+    diagnostics["support_points"] = len(selected)
     if len(selected) < 8:
+        diagnostics["reason"] = "support_too_sparse"
         return None
     design = np.column_stack((selected[:, :2] - center, np.ones(len(selected))))
     plane, _, rank, _ = np.linalg.lstsq(design, selected[:, 2], rcond=None)
-    if rank < 3 or np.quantile(abs(design @ plane - selected[:, 2]), .9) > RECIPE["support_residual_m"]:
+    if rank < 3:
+        diagnostics["reason"] = "support_rank_deficient"
+        return None
+    if np.quantile(abs(design @ plane - selected[:, 2]), .9) > RECIPE["support_residual_m"]:
+        diagnostics["reason"] = "support_nonplanar"
         return None
     if np.linalg.norm(plane[:2]) > .3:
+        diagnostics["reason"] = "support_slope"
         return None
+    diagnostics["reason"] = "supported"
     return plane
 
 
@@ -426,6 +435,51 @@ def _intersections(directions, vertices, triangles, intensities):
     return nearest, intensity
 
 
+def _render_surface(raw, transform, donor, origin, basis):
+    """Resample one fixed world surface on the receiver's measured directions.
+
+    World placement never follows the receiver. Empty hits distinguish unknown
+    surface sides from real foreground occlusion; supervision range is irrelevant.
+    """
+    empty = np.empty(0, dtype=np.int32), np.empty((0, 4), dtype=np.float32)
+    local = np.asarray(donor["xyz"], dtype=float)
+    transform, origin, basis = np.asarray(transform), np.asarray(origin), np.asarray(basis)
+    origin_sensor = transform[:3, 3]
+    vertices = (local @ basis.T + origin - origin_sensor) @ transform[:3, :3]
+    distance = np.linalg.norm(raw[:, :3], axis=1)
+    directions = np.divide(raw[:, :3], distance[:, None], out=np.zeros((len(raw), 3), float),
+                           where=distance[:, None] > 0)
+    centroid = vertices.mean(axis=0)
+    extent = np.linalg.norm(vertices - centroid, axis=1).max()
+    center_range = np.linalg.norm(centroid)
+    covered = np.ones(len(raw), dtype=bool)
+    if extent < center_range:
+        cone = np.sqrt(max(0., 1 - (extent / center_range) ** 2))
+        covered = directions @ (centroid / center_range) >= cone
+    slots = np.flatnonzero((distance > 0) & covered)
+    if not len(slots):
+        return *empty, "no_receiver_ray_in_cone"
+    triangles = donor["triangles"]
+    if "sensor_local" in donor:
+        face = local[triangles]
+        normals = np.cross(face[:, 1] - face[:, 0], face[:, 2] - face[:, 0])
+        midpoint = face.mean(axis=1)
+        current_sensor = (origin_sensor - origin) @ basis
+        original_side = np.einsum("ij,ij->i", normals, donor["sensor_local"] - midpoint)
+        target_side = np.einsum("ij,ij->i", normals, current_sensor - midpoint)
+        triangles = triangles[(original_side * target_side) > 0]
+    if not len(triangles):
+        return *empty, "unobserved_surface_side"
+    hit, intensity = _intersections(directions[slots], vertices, triangles, donor["intensity"])
+    visible = (hit > 0) & (hit < distance[slots] - 1e-4)
+    if not visible.any():
+        reason = "surface_occluded" if np.isfinite(hit).any() else "no_surface_intersection"
+        return *empty, reason
+    slots, hit, intensity = slots[visible], hit[visible], intensity[visible]
+    xyzi = np.column_stack((directions[slots] * hit[:, None], intensity)).astype(np.float32)
+    return slots.astype(np.int32), xyzi, "visible"
+
+
 def _visible_attributes(xyzi):
     distance = np.linalg.norm(xyzi[:, :3], axis=1)
     points = xyzi[(distance >= 2.5) & (distance <= 50.)]
@@ -443,11 +497,14 @@ def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diag
     """Return a sparse foreground replacement, or None for unsupported placement."""
     transform = np.asarray(record["pose"])
     world = raw[:, :3].astype(float) @ transform[:3, :3].T + transform[:3, 3]
-    distance = np.linalg.norm(raw[:, :3], axis=1)
     road_mask = labels == road_id
     road = world[road_mask]
     diagnostics = {} if diagnostics is None else diagnostics
-    diagnostics.update(reason="no_road", attempts=0)
+    diagnostics.update(reason="no_road", attempts=0, attempt_failures={})
+    failures = diagnostics["attempt_failures"]
+    def reject(reason):
+        failures[reason] = failures.get(reason, 0) + 1
+        diagnostics["reason"] = reason
     if len(road) < 8:
         return None
     center_distance = np.linalg.norm(road - transform[:3, 3], axis=1)
@@ -463,13 +520,18 @@ def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diag
     lower, upper = local.min(axis=0), local.max(axis=0)
     radius = max(.75, float(np.linalg.norm(local[:, :2], axis=1).max()) + .5)
     origin_sensor = transform[:3, 3]
-    directions = np.divide(raw[:, :3], distance[:, None], out=np.zeros((len(raw), 3), float), where=distance[:, None] > 0)
-    diagnostics["reason"] = "no_valid_support_or_collision"
+    diagnostics["reason"] = "placement_exhausted"
     for candidate in rng.permutation(candidates)[:RECIPE["placement_attempts"]]:
         diagnostics["attempts"] += 1
         center = road[candidate, :2]
-        plane = _ground(road, center, radius + .5)
+        support = {}
+        plane = _ground(road, center, radius + .5, support)
         if plane is None:
+            reject(support["reason"])
+            continue
+        # The fitted road must support the chosen anchor, not just nearby points.
+        if abs(plane[2] - road[candidate, 2]) > RECIPE["support_residual_m"]:
+            reject("support_anchor_disagreement")
             continue
         vector = center - origin_sensor[:2]
         vector /= np.linalg.norm(vector)
@@ -479,6 +541,7 @@ def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diag
         placed_range = float(np.linalg.norm(object_center - origin_sensor))
         if (placed_range < max(lower_range, donor["range"]) or placed_range > upper_range
                 or (upper_range != 50. and placed_range == upper_range)):
+            reject("object_center_outside_range")
             continue
         # Normal and anomalous donors share the same footprint collision rule.
         nearby = np.linalg.norm(world[:, :2] - center, axis=1) <= radius
@@ -488,40 +551,12 @@ def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diag
         occupied &= (relative[:, 2] > -RECIPE["support_residual_m"]) & (relative[:, 2] <= upper[2] + margin)
         occupied &= ~road_mask[nearby]
         if occupied.any():
+            reject("footprint_collision")
             continue
-        placed_world = local @ basis.T + origin
-        vertices = (placed_world - origin_sensor) @ transform[:3, :3]
-        centroid = vertices.mean(axis=0)
-        extent = np.linalg.norm(vertices - centroid, axis=1).max()
-        center_range = np.linalg.norm(centroid)
-        covered = np.ones(len(raw), dtype=bool)
-        if extent < center_range:
-            cone = np.sqrt(max(0., 1 - (extent / center_range) ** 2))
-            covered = directions @ (centroid / center_range) >= cone
-        slots = np.flatnonzero((distance > 0) & covered)
-        if not len(slots):
+        slots, xyzi, reason = _render_surface(raw, transform, donor, origin, basis)
+        if reason != "visible":
+            reject(reason)
             continue
-        triangles = donor["triangles"]
-        if "sensor_local" in donor:
-            face = local[triangles]
-            normals = np.cross(face[:, 1] - face[:, 0], face[:, 2] - face[:, 0])
-            midpoint = face.mean(axis=1)
-            current_sensor = (origin_sensor - origin) @ basis
-            original_side = np.einsum("ij,ij->i", normals, donor["sensor_local"] - midpoint)
-            target_side = np.einsum("ij,ij->i", normals, current_sensor - midpoint)
-            triangles = triangles[(original_side * target_side) > 0]
-        if not len(triangles):
-            diagnostics["reason"] = "unobserved_surface_side"
-            continue
-        hit, intensity = _intersections(directions[slots], vertices, triangles, donor["intensity"])
-        # Visibility precedes supervision: an out-of-range foreground still
-        # occludes its background and remains part of the observed point cloud.
-        visible = (hit > 0) & (hit < distance[slots] - 1e-4)
-        slots, hit, intensity = slots[visible], hit[visible], intensity[visible]
-        if not len(slots):
-            diagnostics["reason"] = "no_visible_return"
-            continue
-        xyzi = np.column_stack((directions[slots] * hit[:, None], intensity)).astype(np.float32)
         diagnostics["reason"] = "visible"
         # The request keeps its donor; bounded matching never swaps to an easier object.
         supervised = (np.linalg.norm(xyzi[:, :3], axis=1) >= 2.5) & (np.linalg.norm(xyzi[:, :3], axis=1) <= 50.)
@@ -702,13 +737,285 @@ def _catalog(donors):
                           object_center_local=d["object_center_local"].tolist()) for d in donors}
 
 
-def build(root, output, workers, *, background_only=False):
+def _selected_surfaces(root, records, mapping, catalog):
+    """Use exactly the reviewed observations, not an unreviewed frame union."""
+    selected = {(x["sample_token"], x["instance"]): x for x in catalog["selected"]}
+    source = {r["token"]: r for rows in records.values() for r in rows}
+    wanted = {x["sample_token"] for x in selected.values()}
+    names = {r["name"]: r["raw"] for r in mapping}
+    meta = Path(root) / "v1.0-trainval"
+    categories = {r["token"]: r["name"] for r in _rows(meta / "category.json")}
+    instances = {r["token"]: categories[r["category_token"]] for r in _rows(meta / "instance.json")}
+    annotations, collision_boxes = defaultdict(list), defaultdict(list)
+    for row in _rows(meta / "sample_annotation.json"):
+        box = {k: row[k] for k in ("translation", "rotation", "size")}
+        collision_boxes[row["sample_token"]].append(box)
+        if row["sample_token"] in wanted:
+            x = selected.get((row["sample_token"], row["instance_token"]))
+            annotations[row["sample_token"]].append(dict(row,
+                category=names[instances[row["instance_token"]]], kind="anomaly",
+                extract=x is not None, family=x["appearance"] if x else "unused"))
+    scenes = defaultdict(dict)
+    for x in selected.values():
+        r = source[x["token"]]
+        if any(r[k] != x[k] for k in ("sample_token", "scene", "subset", "log_token", "scan", "label", "pose")):
+            raise ValueError("selected object provenance differs from the original background")
+        if names[x["category"]] != x["raw_label"]:
+            raise ValueError("selected object category differs from original lidarseg")
+        scenes[r["scene"]][r["token"]] = r
+    donors, rejected = [], Counter()
+    for scene in scenes.values():
+        _, extracted, failures = _scene_donors((list(scene.values()), mapping, annotations))
+        for d in extracted:
+            x = selected[d["sample_token"], d["instance"]]
+            if not np.array_equal(d["slots"], x["point_slots"]):
+                raise ValueError("surface extraction changed the reviewed point selection")
+            d.update(review_id=x["review_id"], appearance=x["appearance"],
+                     box_rotation_local=np.asarray(d["basis"]).T @ _pose(x["box"])[:3, :3])
+        donors.extend(extracted)
+        rejected.update(failures)
+    return donors, collision_boxes, dict(rejected)
+
+
+def _box_entry(directions, sensor, rotation, size):
+    """Distance to a rigid box from a ray origin, all in one coordinate frame."""
+    rays = directions @ rotation
+    start = sensor @ rotation
+    half = np.asarray(size) * .5
+    parallel = abs(rays) < 1e-12
+    lo = np.divide(-half - start, rays, out=np.zeros_like(rays), where=~parallel)
+    hi = np.divide(half - start, rays, out=np.zeros_like(rays), where=~parallel)
+    inside = abs(start) <= half
+    near = np.where(parallel, np.where(inside, -np.inf, np.inf), np.minimum(lo, hi)).max(axis=1)
+    far = np.where(parallel, np.where(inside, np.inf, -np.inf), np.maximum(lo, hi)).min(axis=1)
+    return np.where(far >= np.maximum(near, 0.), np.maximum(near, 0.), np.inf)
+
+
+def _sequence_collision(frames, donor, origin, basis, boxes, road_id):
+    """Reject discrete scene conflicts before rendering any sequence fragment."""
+    center = origin + donor["object_center_local"] @ basis.T
+    rotation = basis @ donor["box_rotation_local"]
+    half = donor["size"] * .5
+    margin = RECIPE["collision_margin_m"]
+    world_half = abs(rotation) @ half
+    low, high = center - world_half - margin, center + world_half + margin
+    poses = np.array([np.asarray(r["pose"])[:3, 3] for r, _, _, _ in frames])
+    relative = (poses - center) @ rotation
+    # A conservative near-field clearance, not a calibrated ego vehicle model.
+    if np.any(np.linalg.norm(np.maximum(abs(relative) - half, 0.), axis=1) < 2.5):
+        return "ego_clearance"
+    for record, raw, labels, world in frames:
+        road = world[(labels == road_id) &
+                     (np.linalg.norm(world[:, :2] - origin[:2], axis=1) <= np.linalg.norm(half[:2]) + .5)]
+        if len(road) and np.quantile(abs((road - origin) @ basis[:, 2]), .9) > RECIPE["support_residual_m"]:
+            return "sequence_road_disagreement"
+        near = np.all((world >= low) & (world <= high), axis=1)
+        local = (world[near] - center) @ rotation
+        occupied = np.all(abs(local) <= half + margin, axis=1) & (labels[near] != road_id)
+        if occupied.any():
+            return "observed_object_collision"
+        for box in boxes.get(record["sample_token"], ()):
+            extent = abs(_pose(box)[:3, :3]) @ (np.asarray(box["size"])[[1, 0, 2]] * .5)
+            other = np.asarray(box["translation"])
+            # Enclosing world boxes are conservative under rotation and slope.
+            if np.all(other + extent >= low) and np.all(other - extent <= high):
+                return "annotated_object_collision"
+    return None
+
+
+def _sequence(task):
+    records, donor, mapping, boxes, output = task
+    lookup = np.array([r["target"] for r in mapping], np.uint32)
+    road_id = next(r["raw"] for r in mapping if r["name"] == "flat.driveable_surface")
+    frames, original = [], []
+    for record in records:
+        raw, labels = _read(record)
+        pose = np.asarray(record["pose"])
+        world = raw[:, :3].astype(float) @ pose[:3, :3].T + pose[:3, 3]
+        frames.append((record, raw, labels, world))
+        original.append(dict(record, role="original", **_counts(raw, labels, lookup)))
+    scene = records[0]["scene"]
+    result = dict(scene=scene, subset=records[0]["subset"], donor=donor["id"],
+                  instance=donor["instance"], attempts=0, failures={}, frames=[])
+    placement = None
+    # The source is assigned before placement; failed scenes never swap donors.
+    anchors = np.linspace(0, len(frames) - 1, min(8, len(frames)), dtype=int)
+    for index in anchors:
+        record, raw, labels, _ = frames[index]
+        for attempt in range(4):
+            result["attempts"] += 1
+            diagnostics = {}
+            candidate = transplant(raw, labels, record, donor, road_id,
+                np.random.default_rng(_seed(("sequence", scene, donor["id"], index, attempt))),
+                diagnostics=diagnostics)
+            if candidate is None:
+                reason = diagnostics["reason"]
+            else:
+                proposed = candidate[2]
+                origin, basis = np.array(proposed["position_world"]), np.array(proposed["basis_world"])
+                reason = _sequence_collision(frames, donor, origin, basis, boxes, road_id)
+                if reason is None:
+                    placement = proposed
+                    result["anchor_token"] = record["token"]
+                    break
+            result["failures"][reason] = result["failures"].get(reason, 0) + 1
+        if placement is not None:
+            break
+    if placement is None:
+        result["status"] = "no_sequence_placement"
+        result["frames"] = [dict(token=r["token"], timestamp=r["timestamp"], supported=False,
+                                 status="no_sequence_placement") for r in records]
+        return original, [], result
+    result.update(status="placed", placement=placement)
+    origin, basis = np.array(placement["position_world"]), np.array(placement["basis_world"])
+    center = origin + donor["object_center_local"] @ basis.T
+    rotation = basis @ donor["box_rotation_local"]
+    facets = donor["xyz"][donor["triangles"]].astype(float)
+    normals = np.cross(facets[:, 1] - facets[:, 0], facets[:, 2] - facets[:, 0])
+    midpoint = facets.mean(axis=1)
+    source_side = np.einsum("ij,ij->i", normals, donor["sensor_local"] - midpoint)
+    source_direction = donor["sensor_local"] - donor["object_center_local"]
+    generated, segment, previous_supported = [], -1, False
+    for (record, raw, labels, _), background in zip(frames, original):
+        pose = np.asarray(record["pose"])
+        sensor = (pose[:3, 3] - origin) @ basis
+        current_side = np.einsum("ij,ij->i", normals, sensor - midpoint)
+        distance_to_center = float(np.linalg.norm(center - pose[:3, 3]))
+        status = dict(token=record["token"], timestamp=record["timestamp"], range=distance_to_center)
+        # These frames remain in the timeline, not as false zero-anomaly samples.
+        same_halfspace = source_direction @ (sensor - donor["object_center_local"]) > 0
+        reason = ("closer_than_source" if distance_to_center + 1e-6 < donor["range"] else
+                  "unobserved_surface_side" if not same_halfspace or
+                  not np.any(source_side * current_side > 0) else None)
+        if reason:
+            status.update(status=reason, supported=False)
+            result["frames"].append(status)
+            previous_supported = False
+            continue
+        if not previous_supported:
+            segment += 1
+        previous_supported = True
+        slots, xyzi, reason = _render_surface(raw, pose, donor, origin, basis)
+        distance = np.linalg.norm(raw[:, :3], axis=1)
+        direction = np.divide(raw[:, :3], distance[:, None], out=np.zeros((len(raw), 3), float),
+                              where=distance[:, None] > 0)
+        entry = _box_entry(direction @ pose[:3, :3].T, pose[:3, 3] - center, rotation, donor["size"])
+        uncertain = (entry < distance - 1e-4) & (distance > 0)
+        uncertain[slots] = False
+        ignored = np.flatnonzero(uncertain)
+        changed = np.sort(np.concatenate((slots, ignored))).astype(np.int32)
+        replacement = raw[changed, :4].copy()
+        replacement[:, 3] /= 255.
+        replacement_labels = np.zeros(len(changed), np.uint32)
+        where = np.searchsorted(changed, slots)
+        replacement[where], replacement_labels[where] = xyzi, 2
+        truth = lookup[labels].copy()
+        truth[changed] = replacement_labels
+        observed = raw[:, :4].copy()
+        observed[changed, :3] = replacement[:, :3]
+        ranges = np.linalg.norm(observed[:, :3], axis=1)
+        supervised = (ranges >= 2.5) & (ranges <= 50.) & np.any(observed[:, :3] != 0, axis=1)
+        positive = ranges[(truth == 2) & supervised]
+        histogram = np.histogram(positive, RECIPE["distance_edges"])[0].tolist()
+        filename = f"{record['token']}.npz"
+        if len(changed):
+            np.savez_compressed(Path(output) / record["subset"] / filename,
+                slots=changed, xyzi=replacement, labels=replacement_labels, token=np.asarray(record["token"]))
+        row = dict(background, group="anomaly_nuscenes", role="sequence", donor=donor["id"],
+            instance=donor["instance"], source_scene=donor["scene"], segment=segment,
+            normal=int(((truth == 1) & supervised).sum()), anomaly=len(positive), eligible=len(positive) >= 5,
+            point_histogram=histogram, visible_points=len(slots), uncertain_points=len(ignored),
+            range=distance_to_center, placement=placement)
+        if len(changed):
+            row["delta"] = str(Path(output) / record["subset"] / filename)
+        generated.append(row)
+        status.update(status=reason, supported=True, segment=segment, visible_points=len(slots),
+                      anomaly=len(positive), uncertain_points=len(ignored),
+                      uncertain_supervised_points=int((uncertain & supervised).sum()),
+                      point_histogram=histogram)
+        result["frames"].append(status)
+    result["segments"] = segment + 1
+    if not generated:
+        result["status"] = "no_supported_interval"
+    return original, generated, result
+
+
+def _sequences(root, output, workers, records, mapping, objects):
+    """One fixed placement per scene; supported time intervals keep their identity."""
+    catalog = json.loads(Path(objects).read_text())
+    donors, boxes, rejected = _selected_surfaces(root, records, mapping, catalog)
+    report = dict(stage="fixed_sequence", objects=str(Path(objects).resolve()),
+        selected_objects=len(catalog["selected"]), surfaces=len(donors), surface_failures=rejected,
+        scope="Partial measured surfaces on existing return directions; unknown occlusion ignored",
+        geometry="One reviewed observation per object; no multiframe deformation or backside completion",
+        collision="All labeled keyframes: observed points and conservative annotation bounds; ego clearance 2.5 m",
+        view_support="Source viewing halfspace and at least one front-facing measured facet; target center no closer than source",
+        unknown_occlusion="Original context kept but label ignored behind an unmeasured possible box surface",
+        intensity="Measured vertex interpolation, not a calibrated range/material response", scenes=[])
+    surfaces = {d["id"]: {k: (v.tolist() if isinstance(v, np.ndarray) else v)
+                          for k, v in d.items()} for d in donors}
+    report["surfaces"] = surfaces
+    tasks, usage = [], Counter()
+    for split in ("train", "val"):
+        (output / split).mkdir(parents=True, exist_ok=True)
+        scenes = defaultdict(list)
+        for row in records[split]:
+            scenes[row["scene"]].append(row)
+        available = [d for d in donors if d["subset"] == split]
+        if not available:
+            raise ValueError(f"no reviewed surface supports {split}")
+        for scene, rows in scenes.items():
+            donor = min((d for d in available if d["scene"] != scene),
+                        key=lambda d: (usage[d["instance"]], _seed((scene, d["id"]))))
+            usage[donor["instance"]] += 1
+            tasks.append((rows, donor, mapping,
+                          {r["sample_token"]: boxes[r["sample_token"]] for r in rows}, str(output)))
+    output_rows = {s: [] for s in records}
+    started = time.monotonic()
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for i, (original, generated, scene) in enumerate(executor.map(_sequence, tasks, chunksize=1)):
+            output_rows[scene["subset"]].extend(original + generated)
+            report["scenes"].append(scene)
+            if (i + 1) % 25 == 0:
+                print(f"nuScenes fixed sequences {i + 1}/{len(tasks)}", flush=True)
+    summaries, manifests = {}, {}
+    for split, rows in output_rows.items():
+        scenes = [r for r in report["scenes"] if r["subset"] == split]
+        generated = [r for r in rows if r["role"] == "sequence"]
+        frames = [f for s in scenes for f in s["frames"]]
+        summaries[split] = dict(scenes=len(scenes), placed_scenes=sum(s["status"] == "placed" for s in scenes),
+            originals=sum(r["role"] == "original" for r in rows), generated=len(generated),
+            eligible=sum(r["eligible"] for r in generated), zero_positive=sum(r["anomaly"] == 0 for r in generated),
+            one_to_four_points=sum(0 < r["anomaly"] < 5 for r in generated),
+            positive_points=sum(r["anomaly"] for r in generated),
+            changed_returns=sum(r["visible_points"] for r in generated),
+            uncertain_points=sum(r["uncertain_points"] for r in generated),
+            frame_states=dict(Counter(f["status"] for f in frames)),
+            instances=len({r["instance"] for r in generated}),
+            positive_distance_points=np.sum([r["point_histogram"] for r in generated], axis=0).tolist() if generated else [0]*5)
+        manifest = dict(version=SOURCE_VERSION, kind=split, mapping=mapping, records=rows,
+            directory=str(output / split), root=str(Path(root).resolve()),
+            split=dict(name=split, scenes=sorted({r["scene"] for r in rows}),
+                       logs=sorted({r["log_token"] for r in rows})),
+            recipe=dict(stage="fixed_sequence", report=str(output / "sequences.json"), summary=summaries[split]))
+        manifest["sha256"] = identity(manifest)
+        write_json(output / f"{split}.json", manifest, indent=None)
+        manifests[split] = manifest
+    report.update(summary=summaries, seconds=time.monotonic() - started)
+    write_json(output / "sequences.json", report, indent=None)
+    print(json.dumps(summaries), flush=True)
+    return manifests
+
+
+def build(root, output, workers, *, background_only=False, objects=None):
     """Census actual surfaces, then materialize bounded source-only requests."""
     output = Path(output).resolve()
     if workers < 1:
         raise ValueError("workers must be positive")
-    if background_only and output.exists() and any(output.iterdir()):
-        raise ValueError("background split requires an empty output directory")
+    if (background_only or objects is not None) and output.exists() and any(output.iterdir()):
+        raise ValueError("background or sequence construction requires an empty output directory")
+    if background_only and objects is not None:
+        raise ValueError("background-only and object placement are mutually exclusive")
     staging = output / ".building"
     if staging.exists():
         raise ValueError("an unfinished build exists; inspect it before replacement")
@@ -718,6 +1025,8 @@ def build(root, output, workers, *, background_only=False):
     records, mapping = sources(root)
     if background_only:
         return _backgrounds(root, output, workers, records, mapping)
+    if objects is not None:
+        return _sequences(root, output, workers, records, mapping, objects)
     annotations, instances = _annotations(root, records, mapping)
     print(f"nuScenes selected candidate instances {dict(Counter((d['subset'] + ':' + d['kind']) for d in instances.values()))}", flush=True)
     original, donors, failures = {}, [], {}

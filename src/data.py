@@ -1328,14 +1328,18 @@ def main():
     parser.add_argument("--val", type=Path, default=Path("assets/val.json"))
     parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
     parser.add_argument("--background-only", action="store_true", help="nuScenes: split original backgrounds without extracting or inserting objects")
+    parser.add_argument("--objects", type=Path, help="nuScenes: reviewed object catalog for one fixed placement per sequence")
     args = parser.parse_args()
     if args.background_only and args.operation != "nuscenes":
         parser.error("--background-only is only supported by the nuscenes operation")
+    if args.objects is not None and (args.operation != "nuscenes" or args.background_only):
+        parser.error("--objects requires nuscenes without --background-only")
     if args.operation == "nuscenes":
         if args.output is None:
             parser.error("nuscenes requires an explicit new --output directory")
         from .nuscenes import build
-        build(args.nuscenes_root, args.output, args.workers, background_only=args.background_only)
+        build(args.nuscenes_root, args.output, args.workers,
+              background_only=args.background_only, objects=args.objects)
         return
     if args.output is None:
         args.output = Path("results/data")
