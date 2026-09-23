@@ -1,5 +1,8 @@
 # Validated Python 3.13 environment; CUDA binaries must match the installed PyTorch.
 # This host uses /home/jasongao/Study/AJAE/.venv/bin/python with torch 2.12.0+cu130.
+# nuScenes official scene names use the installed nuscenes-devkit==1.2.0.
+# Install it separately with --no-deps: its full SDK declares NumPy < 2,
+# while this project only imports its fixed scene split lists.
 torch==2.12.0
 numpy==2.4.6
 scipy==1.17.1

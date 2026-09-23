@@ -239,6 +239,41 @@ class PointModule(nn.Module):
         super().__init__(*args, **kwargs)
 
 
+class SubMConv3d(spconv.SubMConv3d):
+    """The same KRSC convolution with a fixed kernel-offset reduction order."""
+
+    def forward(self, input):
+        key = ("ordered_subm", self.indice_key, tuple(self.kernel_size),
+               tuple(self.stride), tuple(self.padding), tuple(self.dilation))
+        neighbors = input.indice_dict.get(key)
+        if neighbors is None:
+            _, pairs, counts = spconv.ops.get_indice_pairs(
+                input.indices, input.batch_size, input.spatial_shape,
+                spconv.ConvAlgo.Native, self.kernel_size, self.stride,
+                self.padding, self.dilation, self.output_padding, subm=True)
+            counts = counts.cpu().tolist()
+            center = len(counts) // 2
+            # Native pairs store the second half's counts by mirror symmetry.
+            neighbors = []
+            for index in range(len(counts)):
+                count = counts[min(index, len(counts) - index - 1)]
+                if index != center and count:
+                    neighbors.append((index, pairs[0, index, :count].long(),
+                                      pairs[1, index, :count].long()))
+            input.indice_dict[key] = neighbors
+        weight = self.weight.reshape(self.out_channels, -1, self.in_channels)
+        features = input.features
+        output = nn.functional.linear(features, weight[:, weight.shape[1] // 2].contiguous())
+        for index, source, target in neighbors:
+            # Each offset has unique output indices: no unordered atomic reduction.
+            value = nn.functional.linear(features[source], weight[:, index].contiguous())
+            output.index_add_(0, target, value)
+        # Add bias on every path, including scans with no noncentral neighbors.
+        if self.bias is not None:
+            output = output + self.bias
+        return input.replace_feature(output)
+
+
 class PointSequential(PointModule):
     r"""A sequential container.
     Modules will be added to it in the order they are passed in the constructor.
@@ -581,6 +616,7 @@ class Embedding(PointModule):
         embed_channels,
         norm_layer=None,
         act_layer=None,
+        fp32_attention=False,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -588,7 +624,7 @@ class Embedding(PointModule):
 
         # TODO: check remove spconv
         self.stem = PointSequential(
-            conv=spconv.SubMConv3d(
+            conv=(SubMConv3d if fp32_attention else spconv.SubMConv3d)(
                 in_channels,
                 embed_channels,
                 kernel_size=5,
@@ -663,7 +699,7 @@ class Block(PointModule):
 
         if self.enable_conv:
             self.conv = PointSequential(
-                spconv.SubMConv3d(
+                (SubMConv3d if fp32_attention else spconv.SubMConv3d)(
                     channels,
                     channels,
                     kernel_size=3,
@@ -800,6 +836,7 @@ class LitePT(PointModule):
             embed_channels=enc_channels[0],
             norm_layer=bn_layer,
             act_layer=act_layer,
+            fp32_attention=fp32_attention,
         )
 
         # encoder

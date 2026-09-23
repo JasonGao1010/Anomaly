@@ -392,6 +392,83 @@ def test_ndp_complete_passes_keep_sparse_anomalies_and_pair_original_geometry():
         assert not (reference["targets"] == 1).any()
 
 
+@pytest.fixture
+def source_manifest(tmp_path):
+    """Small native-format observations; no generated corpus or real data required."""
+    from src.data import SOURCE_VERSION, NUSCENES_NORMAL, nuscenes_mapping
+    categories = [dict(index=i, name=f"ignored-{i}") for i in range(32)]
+    categories[10]["name"], categories[24]["name"] = "movable_object.debris", "flat.driveable_surface"
+    available = [i for i in range(32) if i not in (10, 24)]
+    for index, name in zip(available, sorted(NUSCENES_NORMAL - {"flat.driveable_surface"})):
+        categories[index]["name"] = name
+    (tmp_path / "lidarseg").mkdir()
+    (tmp_path / "lidarseg/category.json").write_text(json.dumps(categories))
+    mapping = nuscenes_mapping(tmp_path)
+    assert mapping[10]["target"] == 0
+    raw = np.column_stack((np.arange(10, 42), np.zeros(32), np.full(32, -1),
+                           np.full(32, 127.5), np.arange(32))).astype(np.float32)
+    labels = np.full(32, 24, dtype=np.uint8)
+    labels[0] = 10
+    scan, label = tmp_path / "scan.bin", tmp_path / "label.bin"
+    raw.tofile(scan)
+    labels.tofile(label)
+    records = []
+    for count in (None, 0, 1, 4, 5):
+        record = dict(source="nuscenes", scan=str(scan), label=str(label), token="source-token", frame=0,
+                      group="normal_nuscenes", points=32, slots=32,
+                      normal=31 - (count or 0), anomaly=count or 0, eligible=(count or 0) >= 5)
+        if count is not None:
+            slots = np.arange(1, max(count, 1) + 1)
+            xyzi = raw[slots, :4].copy()
+            xyzi[:, 3] /= 255
+            xyzi[:, 2] = 2
+            delta = tmp_path / f"delta-{count}.npz"
+            np.savez(delta, slots=slots, xyzi=xyzi, token=record["token"],
+                     labels=np.full(len(slots), 2 if count else 1, dtype=np.uint32))
+            record.update(delta=str(delta), group="anomaly_nuscenes" if count else "control_nuscenes")
+        records.append(record)
+    return dict(version=SOURCE_VERSION, kind="train", mapping=mapping, records=records, sha256="fixture"), raw
+
+
+def test_source_sparse_targets_and_normal_controls_use_unchanged_reference(source_manifest):
+    from src.evaluate import PreparedScans
+    manifest, raw = source_manifest
+    dataset = PreparedScans(manifest, normal=True, voxel=False)
+    expected_distance = torch.from_numpy(np.linalg.norm(raw[:, :3].astype(np.float64), axis=1).astype(np.float32))
+    for index, count in enumerate((None, 0, 1, 4, 5)):
+        sample = dataset[index]
+        assert int((sample["targets"] == 1).sum()) == (count or 0)
+        assert int((sample["targets"] == 0).sum()) == 31 - (count or 0)
+        assert sample["targets"][0] == -1
+        if count is None:
+            assert sample["normal_training"] and "normal_reference" not in sample
+        else:
+            reference = sample["normal_reference"]
+            assert not sample["normal_training"] and reference["normal_training"]
+            assert reference["targets"][0] == -1 and (reference["targets"][1:] == 0).all()
+            torch.testing.assert_close(reference["observation"]["distance"], expected_distance, atol=0, rtol=0)
+            assert not torch.equal(sample["observation"]["distance"], expected_distance)
+
+
+def test_source_development_uses_official_population_without_auxiliary_reference(source_manifest):
+    from src.evaluate import evaluate
+    manifest, _ = source_manifest
+    development = dict(manifest, kind="val")
+    incorrect = dict(development, records=[dict(manifest["records"][2], eligible=True)])
+    with pytest.raises(ValueError, match="five-point"):
+        Scans(incorrect)[0]
+    seen = []
+    class Score(nn.Module):
+        normal = True
+        def forward(self, sample):
+            assert "observation" in sample and "normal_reference" not in sample
+            seen.append(sample["index"])
+            return sample["xyzi"][:, 2]
+    result = evaluate(Score(), development, torch.device("cpu"), workers=0)
+    assert seen == [4] and result["scans"] == 1 and result["points"] == 31
+    assert {"AP", "AUROC", "FPR95"} <= result["metrics"].keys()
+
+
 def test_conditional_interaction_learns_from_sampling_and_each_context_scale():
     torch.manual_seed(41)
     layer = Conditional()

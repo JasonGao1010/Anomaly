@@ -10,8 +10,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION,
-                   load_manifest, make_real_manifest, point_targets, read_scan, write_json)
+from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION,
+                   load_manifest, make_real_manifest, point_targets, read_scan, read_nuscenes, write_json)
 from .model import Segmentor, prepare_scan, scatter_scores, to_device
 from .normal import angular_observation, prediction_metrics, SCALES
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
@@ -27,10 +27,11 @@ def normal_record(record):
 
 
 class PreparedScans(Scans):
-    def __init__(self, manifest, *, relations=False, normal=False, voxel=True):
+    def __init__(self, manifest, *, relations=False, normal=False, voxel=True, normal_reference=True):
         super().__init__(manifest)
         self.relations = relations
         self.normal, self.voxel = normal, voxel
+        self.normal_reference = normal_reference
 
     def __getitem__(self, index):
         sample = super().__getitem__(index)
@@ -40,10 +41,18 @@ class PreparedScans(Scans):
         if self.normal:
             result["observation"] = angular_observation(sample["xyzi"])
             # Only unmodified real-normal sources anchor the auxiliary task.
-            result["normal_training"] = normal_record(self.records[index])
-            if self.manifest["version"] == NDP_VERSION:
-                original = self._source(self.records[index]["frame"])
-                # The paired likelihood never sees the Perlin-modified coordinates.
+            record = self.records[index]
+            source_only = self.manifest["version"] == SOURCE_VERSION
+            result["normal_training"] = not bool(record.get("delta")) if source_only else normal_record(record)
+            original = None
+            if self.normal_reference and self.manifest["version"] == NDP_VERSION:
+                original = self._source(record["frame"])
+            elif self.normal_reference and source_only and record.get("delta"):
+                original = read_nuscenes({key: value for key, value in record.items() if key != "delta"},
+                                        self.manifest["mapping"])
+            if original is not None:
+                # The auxiliary target is the unchanged source, never a pasted
+                # point relabeled as normal. Original ignored classes stay ignored.
                 result["normal_reference"] = dict(normal_training=True,
                     observation=angular_observation(original.xyzi[original.actual]),
                     targets=torch.from_numpy(point_targets(original)[original.actual].copy()))
@@ -55,7 +64,7 @@ def evaluate_normal(model, manifest, device, workers=2):
     if model.normal is None:
         raise ValueError("this checkpoint has no normal return field")
     indices = [i for i, row in enumerate(manifest["records"])
-               if normal_record(row) or manifest["version"] == NDP_VERSION]
+               if normal_record(row) or manifest["version"] in (NDP_VERSION, SOURCE_VERSION)]
     if not indices:
         raise ValueError("manifest has no reliable unmodified normal scans")
     data = PreparedScans(manifest, normal=True, voxel=False)
@@ -107,17 +116,17 @@ def better(metrics, previous):
 def evaluate(model, manifest, device, workers=4, score_path=None, record_points=False):
     """Call the pinned official implementation once across the complete valid set."""
     if manifest["kind"] not in ("val", "test"):
-        raise ValueError("evaluation requires a real held-out STU manifest")
+        raise ValueError("evaluation requires a held-out validation or test manifest")
     indices = [i for i, row in enumerate(manifest["records"]) if row["eligible"]]
     count = sum(manifest["records"][i]["normal"] + manifest["records"][i]["anomaly"] for i in indices)
     if not count:
-        raise ValueError("no eligible STU evaluation points")
+        raise ValueError("no eligible evaluation points")
     # Budget sklearn's exact sorting, targets and cumulative sums; never use swap.
     required = 64 * count + 1_000_000_000
     if memory_available() < required:
         raise RuntimeError(f"official metrics require about {required / 1e9:.1f} GB free RAM")
     dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
-                            normal=getattr(model, "normal", None) is not None)
+                            normal=getattr(model, "normal", None) is not None, normal_reference=False)
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),
@@ -197,7 +206,7 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION):
+    if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION):
         raise ValueError("checkpoint does not belong to a supported V4 experiment")
     model = Segmentor(saved["mode"])
     model.load_state_dict(saved["model"], strict=True)

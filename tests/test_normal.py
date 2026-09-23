@@ -416,42 +416,46 @@ def test_real_complete_model_gradients_maximum_pair_and_checkpoint_reload(tmp_pa
     import subprocess
     import sys
     import time
-    from src.data import load_manifest, NATIVE_VERSION
+    from src.data import load_manifest, SOURCE_VERSION
     from src.evaluate import PreparedScans, autocast, load_model
     from src.model import balanced_loss
     from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
-    manifest_path = Path("results/data/native/train.json")
+    manifest_path = Path("results/data/nuscenes/train.json")
     if not manifest_path.exists() or not Path("assets/nuscenes.pth").exists():
         pytest.skip("local real data and official initialization are required")
     device = torch.device("cuda")
     manifest = load_manifest(manifest_path, "train")
+    assert manifest["version"] == SOURCE_VERSION
     data = PreparedScans(manifest, normal=True)
-    indices = [max((i for i, row in enumerate(manifest["records"]) if row["group"] == group),
+    indices = [max((i for i, row in enumerate(manifest["records"]) if row["group"] == group
+                    and (group == "normal_nuscenes" or row["anomaly"] >= 5)),
                    key=lambda i: manifest["records"][i]["points"])
                for group in ("anomaly_nuscenes", "normal_nuscenes")]
     samples = [data[i] for i in indices]
     assert [s["normal_training"] for s in samples] == [False, True]
+    assert samples[0]["normal_reference"]["normal_training"] and "normal_reference" not in samples[1]
+    assert all((s.get("normal_reference", s)["targets"] == 0).any() for s in samples)
     seed_all(17)
     model = Segmentor().to(device).train()
     model.load_pretrained("assets/nuscenes.pth")
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
     sample = to_device(samples[0], device)
     with autocast(device):
-        score, auxiliary = model(sample, normal_loss=True)
-    assert score.dtype == torch.float32 and auxiliary.item() == 0
+        score = model(sample)
+    assert score.dtype == torch.float32
     counts = torch.stack([(sample["targets"] == label).sum() for label in (0, 1)])
     balanced_loss(score, sample["targets"], counts).backward()
     for module in (model.normal.encoder, model.normal.parameters_out, model.normal.weights,
-                   model.compatibility, model.backbone):
+                   model.compatibility, model.head, model.backbone):
         gradients = [p.grad for p in module.parameters() if p.grad is not None]
         assert gradients and all(torch.isfinite(g).all() for g in gradients)
         assert sum(float(g.abs().sum()) for g in gradients) > 0
     optimizer.zero_grad(set_to_none=True)
-    del score, auxiliary, sample
+    del score, sample
     torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
     loss, detail = cached_backward(model, samples, device, rank_weight=1., rank_seed=73)
-    assert detail["normal_scans"] == 1 and detail["replay_max_abs"] <= 1e-5
+    assert detail["normal_scans"] == 2 and detail["replay_max_abs"] <= 1e-5
     assert torch.isfinite(loss)
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
     assert torch.isfinite(norm) and norm > 0
@@ -469,7 +473,7 @@ def test_real_complete_model_gradients_maximum_pair_and_checkpoint_reload(tmp_pa
         before = model(sample).cpu()
     assert torch.isfinite(before).all() and len(before) == len(sample["xyzi"])
     path = tmp_path / "field.pt"
-    torch.save(dict(version=NATIVE_VERSION, mode="field", model=model.state_dict()), path)
+    torch.save(dict(version=manifest["version"], mode="field", model=model.state_dict()), path)
     del model
     torch.cuda.empty_cache()
     restored, _ = load_model(path, device)
@@ -491,7 +495,7 @@ torch.set_num_threads(2)
 torch.set_num_interop_threads(1)
 device = torch.device("cuda")
 model, _ = load_model(Path(sys.argv[1]), device)
-data = PreparedScans(load_manifest(Path(sys.argv[2]), "train"), normal=True)
+data = PreparedScans(load_manifest(Path(sys.argv[2]), "train"), normal=True, normal_reference=False)
 sample = to_device(data[int(sys.argv[3])], device)
 with torch.no_grad(), autocast(device):
     scores = model(sample).cpu().numpy()
@@ -541,3 +545,71 @@ def test_normal_diagnostics_use_all_valid_normals_and_reject_synthetic_targets()
     sample["normal_training"] = False
     with pytest.raises(ValueError, match="unmodified real-normal"):
         prediction_metrics(NormalField(), sample)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="sparse indices require CUDA")
+@pytest.mark.parametrize("kernel", [3, 5])
+@pytest.mark.parametrize("isolated", [False, True])
+def test_ordered_sparse_convolution_matches_dense_values_and_gradients(kernel, isolated):
+    from vendor.litept.model import SubMConv3d
+    import spconv.pytorch as spconv
+
+    generator = torch.Generator().manual_seed(912)
+    if isolated:
+        coordinates = [[0, 2, 2, 2]]
+    else:
+        # Holes, boundaries, mirrored offsets and separate batches expose index errors.
+        coordinates = [[0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0], [0, 1, 0, 0],
+                       [0, 1, 1, 1], [0, 2, 0, 0], [0, 0, 0, 2], [0, 3, 2, 1],
+                       [0, 3, 2, 3], [0, 4, 4, 4], [1, 0, 0, 0], [1, 1, 0, 0],
+                       [1, 3, 3, 3], [1, 4, 3, 3]]
+    indices = torch.tensor(coordinates, dtype=torch.int32, device="cuda")
+    batches, width = 1 if isolated else 2, 5
+    features = torch.randn(len(indices), 3, generator=generator).cuda().requires_grad_()
+    # Submanifold indexing centers the kernel, including the backbone's original padding values.
+    padding = 1 if kernel == 5 else 0
+    layers = [SubMConv3d(3, 4, kernel, padding=padding, bias=True, indice_key="shared").cuda(),
+              SubMConv3d(4, 2, kernel, padding=padding, bias=True, indice_key="shared").cuda()]
+    for layer in layers:
+        with torch.no_grad():
+            layer.weight.copy_(torch.randn(layer.weight.shape, generator=generator).to("cuda") * .1)
+            layer.bias.copy_(torch.randn(layer.bias.shape, generator=generator).to("cuda") * .1 + .2)
+    reference_input = features.detach().double().requires_grad_()
+    reference_features = reference_input
+    reference_parameters = [(layer.weight.detach().double().requires_grad_(),
+                             layer.bias.detach().double().requires_grad_()) for layer in layers]
+    sparse = spconv.SparseConvTensor(features, indices, [width] * 3, batches)
+    flat = ((indices[:, 0].long() * width + indices[:, 1]) * width + indices[:, 2]) * width + indices[:, 3]
+
+    def dense_reference(values, weight, bias):
+        # Reset inactive sites between layers: submanifold convolution keeps only active outputs.
+        dense = values.new_zeros((batches * width ** 3, values.shape[1])).index_copy(0, flat, values)
+        dense = dense.reshape(batches, width, width, width, values.shape[1]).permute(0, 4, 1, 2, 3)
+        result = F.conv3d(dense, weight.permute(0, 4, 1, 2, 3).contiguous(), bias, padding=kernel // 2)
+        return result.permute(0, 2, 3, 4, 1).reshape(-1, weight.shape[0])[flat]
+
+    actual, expected = [], []
+    cached = None
+    for layer, (weight, bias) in zip(layers, reference_parameters):
+        sparse = layer(sparse)
+        torch.testing.assert_close(sparse.indices, indices, atol=0, rtol=0)
+        if cached is None:
+            cached = dict(sparse.indice_dict)
+            assert cached
+        else:
+            assert sparse.indice_dict.keys() == cached.keys()
+            assert all(sparse.indice_dict[key] is value for key, value in cached.items())
+        reference_features = dense_reference(reference_features, weight, bias)
+        torch.testing.assert_close(sparse.features.double(), reference_features, atol=1e-5, rtol=1e-5)
+        probe = torch.randn(sparse.features.shape, generator=generator).cuda()
+        actual.append((sparse.features * probe).sum())
+        expected.append((reference_features * probe.double()).sum())
+    # The independent dense graph uses FP64; gradients verify both index direction and weight layout.
+    sum(actual).backward()
+    sum(expected).backward()
+    assert torch.isfinite(features.grad).all()
+    torch.testing.assert_close(features.grad.double(), reference_input.grad, atol=1e-5, rtol=1e-5)
+    for layer, (weight, bias) in zip(layers, reference_parameters):
+        for observed, reference in ((layer.weight.grad, weight.grad), (layer.bias.grad, bias.grad)):
+            assert torch.isfinite(observed).all()
+            torch.testing.assert_close(observed.double(), reference, atol=1e-5, rtol=1e-5)

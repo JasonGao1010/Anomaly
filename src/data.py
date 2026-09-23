@@ -35,6 +35,7 @@ PILOT_VERSION = "AJAE-V4-P1"
 CONTINUATION_VERSION = "AJAE-V4-P2"
 NATIVE_VERSION = "AJAE-V4-N1"
 NDP_VERSION = "AJAE-V4-NDP"
+SOURCE_VERSION = "AJAE-V4-NS"
 # R2 changes the training budget; retain the exact R1 observations and manifests.
 MANIFEST_VERSION = "AJAE-V4-F240-R1"
 DATA_ROOT = Path("/home/jasongao/Data/STU")
@@ -614,7 +615,7 @@ def make_real_manifest(directory, *, partition="val", workers=4):
 def load_manifest(path, kind):
     value = json.loads(Path(path).read_text())
     expected = value.pop("sha256")
-    if identity(value) != expected or value["version"] not in (MANIFEST_VERSION, PILOT_VERSION, NATIVE_VERSION, NDP_VERSION) or value["kind"] != kind:
+    if identity(value) != expected or value["version"] not in (MANIFEST_VERSION, PILOT_VERSION, NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION) or value["kind"] != kind:
         raise ValueError(f"invalid {kind} manifest identity: {path}")
     value["sha256"] = expected
     return value
@@ -1230,7 +1231,10 @@ class Scans:
         self.records = manifest["records"]
         self.cache_size = cache_size
         self.cache = OrderedDict()
-        self.sequence = STUSequence(manifest["data_root"]) if "sources" in manifest else None
+        if manifest["version"] == SOURCE_VERSION and any(r.get("source") != "nuscenes" for r in self.records):
+            raise ValueError("source-only records must identify raw nuScenes scans")
+        self.sequence = (STUSequence(manifest["data_root"])
+                         if "sources" in manifest and manifest["version"] != SOURCE_VERSION else None)
         if self.sequence is not None:
             for name, expected in (("calib.txt", manifest["calibration_sha256"]),
                                    ("poses.txt", manifest["poses_sha256"])):
@@ -1292,11 +1296,17 @@ class Scans:
             frame = read_scan(record["scan"], record["label"], partition=self.manifest["kind"],
                               expected=(record["scan_sha256"], record["label_sha256"]))
         target = point_targets(frame)
+        # Source training retains sparse anomalies and unmodified normal scans;
+        # the official five-point rule selects evaluation frames only.
         selected = (Supervision(target, int((target == 0).sum()), int((target == 1).sum()), True)
-                    if self.manifest["version"] == NDP_VERSION else
+                    if self.manifest["version"] in (NDP_VERSION, SOURCE_VERSION) else
                     supervision(frame, allow_normal=self.manifest["version"] in (PILOT_VERSION, NATIVE_VERSION)))
-        if self.manifest["kind"] == "train" and self.manifest["version"] != NDP_VERSION and not selected.eligible:
+        if (self.manifest["kind"] == "train" and self.manifest["version"] not in (NDP_VERSION, SOURCE_VERSION)
+                and not selected.eligible):
             raise ValueError("training scan is ineligible under the frame rule")
+        if (self.manifest["version"] == SOURCE_VERSION and self.manifest["kind"] != "train"
+                and record["eligible"] != (selected.anomaly_count >= 5)):
+            raise ValueError("source development eligibility must follow the official five-point rule")
         observed = (int(frame.actual.sum()), selected.normal_count, selected.anomaly_count, len(frame.xyzi))
         expected = tuple(record[k] for k in ("points", "normal", "anomaly", "slots"))
         if observed != expected:
@@ -1308,9 +1318,9 @@ class Scans:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Prepare labeled normal sources or mix the pilot training set.")
-    parser.add_argument("operation", choices=("normal", "expand", "mix", "native", "legacy", "ndp"))
-    parser.add_argument("--output", type=Path, default=Path("results/data"))
+    parser = argparse.ArgumentParser(description="Prepare nuScenes source data or historical experiment manifests.")
+    parser.add_argument("operation", choices=("normal", "expand", "mix", "native", "legacy", "ndp", "nuscenes"))
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--nuscenes-root", type=Path, default=NUSCENES_ROOT)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
     parser.add_argument("--pool-root", type=Path, default=POOL_ROOT)
@@ -1318,6 +1328,14 @@ def main():
     parser.add_argument("--val", type=Path, default=Path("assets/val.json"))
     parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
     args = parser.parse_args()
+    if args.operation == "nuscenes":
+        if args.output is None:
+            parser.error("nuscenes requires an explicit new --output directory")
+        from .nuscenes import build
+        build(args.nuscenes_root, args.output, args.workers)
+        return
+    if args.output is None:
+        args.output = Path("results/data")
     if args.operation == "ndp":
         make_ndp_manifest(args.data_root, args.output)
         return
