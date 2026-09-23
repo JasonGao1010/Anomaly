@@ -558,9 +558,74 @@ def test_sequence_writer_discards_only_effectively_unchanged_observations(tmp_pa
                  xyzi=xyzi, token=np.asarray('native'))
         rows.append(dict(original, role=role, normal=1 - index, delta=str(delta),
                          visible_points=0, uncertain_points=1, point_histogram=[0]*5, instance=role))
+    # Extra already-ignored slots do not make a second effective observation.
+    duplicate = directory / 'control_r3.npz'
+    xyzi = raw[:, :4].copy()
+    xyzi[:, 3] /= 255.
+    np.savez(duplicate, slots=np.array([0, 1]), labels=np.array([0, 0], np.uint32),
+             xyzi=xyzi, token=np.asarray('native'))
+    rows.append(dict(rows[-1], delta=str(duplicate), uncertain_points=2))
     report = dict(scenes=[dict(scene='scene', subset='train', kind='anomaly', status='placed', frames=[])], surfaces={})
     result = _write_sequences(tmp_path, tmp_path, mapping, report, {'train': rows}, 0.)['train']
     assert [r['role'] for r in result['records']] == ['original', 'control']
     assert result['recipe']['summary']['discarded_unchanged'] == 1
+    assert result['recipe']['summary']['discarded_repeated_ignore_observations'] == 1
     assert not (directory / 'sequence.npz').exists()
+    assert not duplicate.exists()
     assert (directory / 'control.npz').exists()
+
+
+def test_reviewed_identity_exclusions_survive_repeated_catalog_admission():
+    from src.nuscenes import _object_admission
+
+    common = dict(category='movable_object.pushable_pullable', raw_label=19,
+                  appearance='container', object_group='container', points=8)
+    catalog = dict(selected=[dict(common, review_id=1, subset='train'),
+                            dict(common, review_id=2, subset='val',
+                                 identity_review=dict(excluded=True, reason='Suspected shared physical object'))],
+                   excluded=[], deferred=[], limits=[''])
+    for _ in range(2):
+        result = _object_admission(catalog)
+        assert [r['review_id'] for r in result['selected']] == [1]
+        assert result['excluded'][0]['admission_reason'] == 'Suspected shared physical object'
+        assert result['summary']['admitted_instances'] == 1
+
+
+def test_sequence_variants_preserve_native_identity_and_invalidate_changed_mapping(tmp_path, monkeypatch):
+    import src.nuscenes as source
+
+    mapping = [dict(raw=0, target=0, name='noise'), dict(raw=1, target=1, name='flat.driveable_surface')]
+    record = dict(token='native', sample_token='native', timestamp=0, scene='receiver',
+                  subset='train', pose=np.eye(4).tolist())
+    donor = dict(id='surface', instance='object', kind='anomaly', scene='source', range=5.,
+        xyz=np.array([[0., -1., -1.], [0., 1., -1.], [0., -1., 1.]]),
+        triangles=np.array([[0, 1, 2]]), intensity=np.full(3, .4), sensor_local=np.array([-5., 0., 0.]),
+        object_center_local=np.zeros(3), box_rotation_local=np.eye(3), size=np.array([1., 2., 2.]))
+    reads = []
+    def read(row):
+        reads.append(row['token'])
+        return np.array([[40., 0., 0., 90., 0.]], np.float32), np.ones(1, np.uint8)
+    def place(*args, distance_bin=None, **kwargs):
+        distance = 10. if distance_bin is None else 25.
+        return np.array([0]), np.array([[distance, 0., 0., .4]], np.float32), dict(
+            position_world=[distance, 0., 0.], basis_world=np.eye(3).tolist(), range=distance, scale=1.)
+    monkeypatch.setattr(source, '_SEQUENCE_CACHE', None)
+    monkeypatch.setattr(source, '_read', read)
+    monkeypatch.setattr(source, 'transplant', place)
+    monkeypatch.setattr(source, '_sequence_collision', lambda *args: None)
+    monkeypatch.setattr(source, '_road_clearance', lambda *args: 1.)
+    (tmp_path / 'train').mkdir()
+    task = ([record], donor, mapping, {}, str(tmp_path))
+    originals, base, _ = source._sequence((*task, None))
+    _, far, report = source._sequence((*task, 2))
+    assert reads == ['native'] and originals[0]['normal'] == 1
+    assert base[0]['token'] == far[0]['token'] == 'native'
+    assert base[0]['delta'] != far[0]['delta']
+    assert report['variant'] == 'r2' and far[0]['inserted_point_histogram'] == [0, 0, 1, 0, 0]
+    with np.load(base[0]['delta']) as a, np.load(far[0]['delta']) as b:
+        np.testing.assert_array_equal(a['slots'], b['slots'])
+        np.testing.assert_array_equal(a['xyzi'][:, 0], [10.])
+        np.testing.assert_array_equal(b['xyzi'][:, 0], [25.])
+    changed = [mapping[0], dict(mapping[1], target=0)]
+    originals, _, _ = source._sequence(([record], donor, changed, {}, str(tmp_path), None))
+    assert reads == ['native', 'native'] and originals[0]['normal'] == 0

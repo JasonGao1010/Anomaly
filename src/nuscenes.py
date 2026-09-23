@@ -48,6 +48,7 @@ RECIPE = dict(
 _DONORS = None
 _MAPPING = None
 _OUTPUT = None
+_SEQUENCE_CACHE = None
 
 
 def _rows(path):
@@ -869,6 +870,8 @@ def _object_admission(catalog):
             reason = "STU公开论文将椅子列为异常示例；无法确认此供体与目标异常类别不重叠，保守移除。"
         elif row["review_id"] in (33, 34):
             reason = "此前从真实数据提取时无法建立可靠地面支撑，不用于移植。"
+        elif row.get("identity_review", {}).get("excluded", False):
+            reason = row["identity_review"]["reason"]
         else:
             reason = None
         row["admission"] = "excluded" if reason else "auxiliary_anomaly"
@@ -939,24 +942,35 @@ def _sequence_collision(frames, donor, origin, basis, boxes, road_id):
 
 
 def _sequence(task):
-    records, donor, mapping, boxes, output = task
+    global _SEQUENCE_CACHE
+    records, donor, mapping, boxes, output = task[:5]
+    distance_bin = task[5] if len(task) == 6 else None
+    variant = "base" if distance_bin is None else f"r{distance_bin}"
     road_id = next(r["raw"] for r in mapping if r["name"] == "flat.driveable_surface")
-    frames, original = [], []
-    for record in records:
-        raw, labels = _read(record)
-        pose = np.asarray(record["pose"])
-        world = raw[:, :3].astype(float) @ pose[:3, :3].T + pose[:3, 3]
-        frames.append((record, raw, labels, world))
-        original.append(dict(record, role="original", **_counts(raw, nuscenes_truth(record, labels, mapping))))
+    # One immutable source scene per worker; variants share no rendered arrays.
+    cached = _SEQUENCE_CACHE if len(task) == 6 else None
+    if cached is not None and records == cached[0] and mapping == cached[1]:
+        frames, original, support_road = cached[2:]
+    else:
+        frames, original = [], []
+        for record in records:
+            raw, labels = _read(record)
+            pose = np.asarray(record["pose"])
+            world = raw[:, :3].astype(float) @ pose[:3, :3].T + pose[:3, 3]
+            frames.append((record, raw, labels, world))
+            original.append(dict(record, role="original", **_counts(raw, nuscenes_truth(record, labels, mapping))))
+        # Pool actual road returns, not voxel centres or invented surfaces.
+        support_road = np.concatenate([world[labels == road_id] for _, _, labels, world in frames])
+        if len(support_road):
+            _, kept = np.unique(np.floor(support_road / .1).astype(np.int64), axis=0, return_index=True)
+            support_road = support_road[np.sort(kept)]
+        if len(task) == 6:
+            _SEQUENCE_CACHE = records, mapping, frames, original, support_road
     scene = records[0]["scene"]
     kind = donor["kind"]
-    # Pool measured road support, retaining actual points rather than voxel centres.
-    support_road = np.concatenate([world[labels == road_id] for _, _, labels, world in frames])
-    if len(support_road):
-        _, kept = np.unique(np.floor(support_road / .1).astype(np.int64), axis=0, return_index=True)
-        support_road = support_road[np.sort(kept)]
     result = dict(scene=scene, subset=records[0]["subset"], donor=donor["id"], kind=kind,
-                  instance=donor["instance"], attempts=0, failures={}, frames=[])
+                  instance=donor["instance"], variant=variant, distance_bin=distance_bin,
+                  attempts=0, failures={}, frames=[])
     placement = None
     # The source is assigned before placement; failed scenes never swap donors.
     anchors = np.linspace(0, len(frames) - 1, min(8, len(frames)), dtype=int)
@@ -965,9 +979,19 @@ def _sequence(task):
         for attempt in range(4):
             result["attempts"] += 1
             diagnostics = {}
+            seed = ("sequence", scene, donor["id"], index, attempt)
+            if distance_bin is not None:
+                seed += (distance_bin,)
             candidate = transplant(raw, labels, record, donor, road_id,
-                np.random.default_rng(_seed(("sequence", scene, donor["id"], index, attempt))),
+                np.random.default_rng(_seed(seed)), distance_bin=distance_bin,
                 diagnostics=diagnostics, interior=True, support_road=support_road)
+            if candidate is not None and distance_bin is not None:
+                ranges = np.linalg.norm(candidate[1][:, :3], axis=1)
+                low, high = RECIPE["distance_edges"][distance_bin:distance_bin + 2]
+                within = (ranges >= low) & ((ranges <= high) if distance_bin == 4 else (ranges < high))
+                if not within.any():
+                    candidate = None
+                    diagnostics["reason"] = "no_observed_hit_in_requested_range"
             if candidate is None:
                 reason = diagnostics["reason"]
             else:
@@ -1039,16 +1063,21 @@ def _sequence(task):
         supervised = (ranges >= 2.5) & (ranges <= 50.) & np.any(observed[:, :3] != 0, axis=1)
         positive = ranges[(truth == 2) & supervised]
         histogram = np.histogram(positive, RECIPE["distance_edges"])[0].tolist()
-        filename = f"{record['token']}_{kind}.npz"
+        suffix = "" if distance_bin is None else f"_{variant}"
+        filename = f"{record['token']}_{kind}{suffix}.npz"
         if len(changed):
             np.savez_compressed(Path(output) / record["subset"] / filename,
                 slots=changed, xyzi=replacement, labels=replacement_labels, token=np.asarray(record["token"]))
         row = dict(background, group=f"{kind}_nuscenes", role="control" if kind == "control" else "sequence", donor=donor["id"],
-            instance=donor["instance"], source_scene=donor["scene"], segment=segment,
+            instance=donor["instance"], source_scene=donor["scene"], segment=segment, variant=variant,
             normal=int(((truth == 1) & supervised).sum()), anomaly=len(positive), eligible=len(positive) >= 5,
             point_histogram=histogram, visible_points=len(slots), uncertain_points=len(ignored),
             range=distance_to_center, placement=placement,
             point_range_median=float(np.median(positive)) if len(positive) else None)
+        inserted_range = np.linalg.norm(xyzi[:, :3], axis=1)
+        inserted_range = inserted_range[(inserted_range >= 2.5) & (inserted_range <= 50.)]
+        row["inserted_points"] = len(inserted_range)
+        row["inserted_point_histogram"] = np.histogram(inserted_range, RECIPE["distance_edges"])[0].tolist()
         if len(changed):
             row["delta"] = str(Path(output) / record["subset"] / filename)
         # The writer removes candidates with no effective input or target change.
@@ -1066,7 +1095,7 @@ def _sequence(task):
 
 
 def _sequences(root, output, workers, records, mapping, objects):
-    """One fixed placement per scene; supported time intervals keep their identity."""
+    """One fixed object per variant; all variants stay in their source split."""
     catalog = _object_admission(json.loads(Path(objects).read_text()))
     write_json(objects, catalog)
     np.savez_compressed(Path(objects).with_name("points.npz"),
@@ -1079,7 +1108,9 @@ def _sequences(root, output, workers, records, mapping, objects):
         selected_objects=catalog["summary"]["admitted_instances"], surfaces=len(donors), surface_failures=rejected,
         normal_surface_failures=control_failures,
         semantic_sources=catalog["sources"], semantic_mapping=mapping,
-        normal_controls="One separate fixed normal-object sequence per receiver scene; identical rendering and admission rules, independently sampled placement; not geometry-matched causal pairs",
+        normal_controls="Separate normal-object variants with the same requested range bands and rendering rules; independently sampled positions, not geometry-matched causal pairs",
+        variants=dict(names=["base", "r2", "r3", "r4"], requested_ranges_m=[None, [20, 30], [30, 40], [40, 50]],
+                      budget="Four versions per scene and role; a requested band requires a real anchor hit; no point-count quota, resizing or fabricated returns"),
         road_interior="Both roles: anchor at least 1 m inside local measured driveable-surface hull, pooling same-scene keyframes; current-frame road agreement required; not an annotated lane centre",
         manifest_scope="Original once, changed supported anomaly/control observations only; zero-change entries retained in timeline",
         scope="Partial measured surfaces on existing return directions; unknown occlusion ignored",
@@ -1110,11 +1141,15 @@ def _sequences(root, output, workers, records, mapping, objects):
                 family_usage[split, kind, donor.get("exposure_family", donor["category"])] += 1
                 tasks.append((rows, donor, mapping,
                               {r["sample_token"]: boxes[r["sample_token"]] for r in rows}, str(output)))
+    # Consecutive scene tasks share measured geometry inside a bounded worker cache.
+    tasks.sort(key=lambda task: (task[0][0]["subset"], task[0][0]["scene"], task[1]["kind"]))
+    tasks = [(*task, band) for task in tasks for band in (None, 2, 3, 4)]
     output_rows = {s: [] for s in records}
     started = time.monotonic()
     with ProcessPoolExecutor(max_workers=workers) as executor:
-        for i, (original, generated, scene) in enumerate(executor.map(_sequence, tasks, chunksize=1)):
-            output_rows[scene["subset"]].extend((original if scene["kind"] == "anomaly" else []) + generated)
+        for i, (original, generated, scene) in enumerate(executor.map(_sequence, tasks, chunksize=8)):
+            native = original if scene["kind"] == "anomaly" and scene["variant"] == "base" else []
+            output_rows[scene["subset"]].extend(native + generated)
             report["scenes"].append(scene)
             if (i + 1) % 25 == 0:
                 print(f"nuScenes fixed sequences {i + 1}/{len(tasks)}", flush=True)
@@ -1128,7 +1163,8 @@ def _write_sequences(root, output, mapping, report, output_rows, seconds):
     report["auxiliary_supervision"] = "nuScenes auxiliary obstacles only; not STU target anomaly labels; ambiguous native points ignored"
     summaries, manifests = {}, {}
     for split, rows in output_rows.items():
-        retained, redundant = [], []
+        retained, redundant, ignored_observations = [], [], set()
+        repeated_ignored = 0
         for row in rows:
             if "delta" in row:
                 row["delta"] = str(output / split / Path(row["delta"]).name)
@@ -1144,9 +1180,17 @@ def _write_sequences(root, output, mapping, report, output_rows, seconds):
                             raise ValueError("zero-hit observation differs from its native returns")
                         distance = np.linalg.norm(raw[slots, :3], axis=1)
                         # Ignoring an already ignored target adds no observation.
-                        if not np.any((truth[slots] == 1) & (distance >= 2.5) & (distance <= 50.)):
+                        affected = slots[(truth[slots] == 1) & (distance >= 2.5) & (distance <= 50.)]
+                        if not len(affected):
                             redundant.append(Path(row["delta"]))
                             continue
+                        # Distinct placements can mask the same native targets.
+                        key = row["token"], affected.tobytes()
+                        if key in ignored_observations:
+                            repeated_ignored += 1
+                            redundant.append(Path(row["delta"]))
+                            continue
+                        ignored_observations.add(key)
             retained.append(row)
         rows = output_rows[split] = retained
         scenes = [r for r in report["scenes"] if r["subset"] == split]
@@ -1154,9 +1198,12 @@ def _write_sequences(root, output, mapping, report, output_rows, seconds):
         control_rows = [r for r in rows if r["role"] == "control"]
         frames = [f for s in scenes for f in s["frames"]]
         summaries[split] = dict(scenes=len({s["scene"] for s in scenes}), attempted_sequences=len(scenes),
-            discarded_unchanged=len(redundant),
-            placed_scenes=sum(s["status"] == "placed" and s["kind"] == "anomaly" for s in scenes),
-            placed_controls=sum(s["status"] == "placed" and s["kind"] == "control" for s in scenes),
+            discarded_unchanged=len(redundant) - repeated_ignored,
+            discarded_repeated_ignore_observations=repeated_ignored,
+            placed_scenes=len({s["scene"] for s in scenes if s["status"] == "placed" and s["kind"] == "anomaly"}),
+            placed_controls=len({s["scene"] for s in scenes if s["status"] == "placed" and s["kind"] == "control"}),
+            placed_anomaly_versions=sum(s["status"] == "placed" and s["kind"] == "anomaly" for s in scenes),
+            placed_control_versions=sum(s["status"] == "placed" and s["kind"] == "control" for s in scenes),
             control_frames=len(control_rows), control_instances=len({r["instance"] for r in control_rows}),
             control_returns=sum(r["visible_points"] for r in control_rows),
             originals=sum(r["role"] == "original" for r in rows), generated=len(generated),
@@ -1180,6 +1227,22 @@ def _write_sequences(root, output, mapping, report, output_rows, seconds):
                 distance_points=np.sum([r["point_histogram"] for r in members], axis=0).tolist())
         summaries[split]["supplemental_normal_points"] = sum(len(r.get("normal_slots", [])) for r in rows if r["role"] == "original")
         summaries[split]["supplemental_normal_frames"] = sum("normal_slots" in r for r in rows if r["role"] == "original")
+        summaries[split]["observation_coverage"] = {}
+        for role, observed in (("anomaly", generated), ("control", control_rows)):
+            # Count scenes and source identities separately from correlated frames.
+            cells = []
+            for band, (low, high) in enumerate(zip(RECIPE["distance_edges"][:-1], RECIPE["distance_edges"][1:])):
+                present = [r for r in observed if r.get("inserted_point_histogram", r["point_histogram"])[band] > 0]
+                five = [r for r in present if r.get("inserted_point_histogram", r["point_histogram"])[band] >= 5]
+                cells.append(dict(range_m=[low, high], positive_frames=len(present),
+                    points=sum(r.get("inserted_point_histogram", r["point_histogram"])[band] for r in present),
+                    scenes=len({r["scene"] for r in present}), instances=len({r["instance"] for r in present}),
+                    five_point_frames=len(five), five_point_scenes=len({r["scene"] for r in five}),
+                    five_point_instances=len({r["instance"] for r in five})))
+            counts = [r.get("inserted_points", r["anomaly"]) for r in observed]
+            summaries[split]["observation_coverage"][role] = dict(distance=cells,
+                frame_point_count_edges=[1, 5, 10, 30, 100, None],
+                frame_point_count_histogram=np.histogram(counts, [1, 5, 10, 30, 100, np.inf])[0].tolist())
         manifest = dict(version=SOURCE_VERSION, kind=split, mapping=mapping, records=rows,
             directory=str(output / split), root=str(Path(root).resolve()),
             split=dict(name=split, scenes=sorted({r["scene"] for r in rows}),

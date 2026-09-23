@@ -25,3 +25,6 @@ __pycache__/
 !/results/data/**/*.png
 !/results/data/**/*.pdf
 /results/data/train.json
+# Regenerate large sequence indices locally from the tracked source and catalog.
+/results/data/sequence/train.json
+/results/data/sequence/val.json
