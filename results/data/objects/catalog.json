@@ -1,7 +1,7 @@
 {
   "kind": "nuscenes_selected_objects",
   "root": "/home/jasongao/Data/Nuscenes",
-  "scope": "仅选择真实异常候选物体及其原始点，不实施路面放置、合成或训练。",
+  "scope": "当前辅助异常供体目录；selected参与生成，excluded和deferred仅保存移除理由，不参与训练。",
   "review_method": "根据原始标签和实例框定位，以原始相机照片及点投影进行AI视觉复核；细分名称不是nuScenes官方细标签，也不是独立人工真值。",
   "candidate_discovery": "既有候选记录仅用于定位；本轮重新读取原始元数据、点云、逐点标签、相机原图，并独立核对身份与提取点。未使用旧合成点云。",
   "normal_classes_19": [
@@ -25,9 +25,8 @@
     "pole",
     "traffic-sign"
   ],
-  "selection_rule": "选择19类正常语义以外的可辨物体。人工搬运器具按无人乘坐、搬运物品的独立器具核定；此为本研究语义判断，不是官方跨数据集映射。",
+  "selection_rule": "按公开正常、忽略边界及静止障碍任务核定；19类名称的补集不构成异常定义。",
   "source_categories": {
-    "animal": 1,
     "movable_object.debris": 10,
     "movable_object.pushable_pullable": 11
   },
@@ -50,7 +49,7 @@
   "split_rule": "继承results/data/background/train.json和val.json的官方场景分区；各侧供体仅供自身分区使用。",
   "label_use": "入选源类别在当前原始背景监督中均为忽略；本轮未改变任何原场景点标签。只有后续明确合成的道路内障碍才可产生异常正标签。",
   "limits": [
-    "当前56个是不同官方实例标识，不保证跨场景绝对不同实体，也不代表56种独立几何。",
+    "当前数量是不同官方实例标识，不保证跨场景绝对不同实体，也不代表独立几何类别。",
     "当前仅选每实例一次真实观测，不是完整物体、多视角表面库或已验证的可移植模型。",
     "语义标签、实例框和相机投影支持点归属，但不能保证官方逐点标注完全无噪声；移动目标的相机和LiDAR并非绝对同时曝光。",
     "未完成跨分区近重复几何排查，不能据此声称开发形状全部未见。",
@@ -64,1790 +63,36 @@
     "stu_paper": "https://arxiv.org/html/2505.02148v1"
   },
   "summary": {
-    "reviewed_candidates": 70,
-    "selected_instances": 56,
+    "selected_instances": 37,
+    "admitted_instances": 37,
+    "excluded_instances": 19,
     "deferred_candidates": 14,
-    "selected_observations": 56,
-    "points": 5363,
+    "points": 4831,
     "points_per_observation_min": 8,
     "points_per_observation_max": 601,
     "by_split": {
       "train": {
-        "instances": 40,
-        "points": 2788,
-        "scenes": 35,
-        "logs": 19
+        "instances": 23,
+        "points": 2317
       },
       "val": {
-        "instances": 16,
-        "points": 2575,
-        "scenes": 14,
-        "logs": 8
+        "instances": 14,
+        "points": 2514
       }
     },
     "by_raw_category": {
-      "animal": 16,
-      "movable_object.debris": 13,
-      "movable_object.pushable_pullable": 27
+      "movable_object.debris": 11,
+      "movable_object.pushable_pullable": 26
     },
     "by_group": {
-      "动物": 16,
       "袋包": 10,
-      "垃圾容器": 22,
+      "垃圾容器": 20,
       "旅行箱": 1,
-      "办公椅": 1,
       "工具箱": 1,
       "搬运车": 5
-    },
-    "by_appearance": {
-      "犬": {
-        "train": 12,
-        "val": 0
-      },
-      "鸥类": {
-        "train": 2,
-        "val": 0
-      },
-      "公鸡": {
-        "train": 1,
-        "val": 0
-      },
-      "雁鹅类": {
-        "train": 1,
-        "val": 0
-      },
-      "软质袋或袋组": {
-        "train": 9,
-        "val": 0
-      },
-      "背包": {
-        "train": 0,
-        "val": 1
-      },
-      "大型垃圾箱": {
-        "train": 2,
-        "val": 6
-      },
-      "罩顶垃圾桶": {
-        "train": 2,
-        "val": 1
-      },
-      "平盖带轮垃圾桶": {
-        "train": 3,
-        "val": 3
-      },
-      "街旁小型垃圾桶": {
-        "train": 2,
-        "val": 1
-      },
-      "软壳拉杆旅行箱": {
-        "train": 0,
-        "val": 1
-      },
-      "无人办公转椅": {
-        "train": 1,
-        "val": 0
-      },
-      "开口塑料垃圾桶": {
-        "train": 2,
-        "val": 0
-      },
-      "带脚轮金属工具箱": {
-        "train": 1,
-        "val": 0
-      },
-      "两轮手扶搬运车": {
-        "train": 1,
-        "val": 1
-      },
-      "料斗式搬运车": {
-        "train": 1,
-        "val": 0
-      },
-      "购物小拉车": {
-        "train": 0,
-        "val": 2
-      }
     }
   },
   "selected": [
-    {
-      "review_id": 1,
-      "instance": "e007ce82f5494e0992b0c714ba5a8f49",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0764",
-      "log_token": "3a43824b84534c98bda1d07548db5817",
-      "sample_token": "a73673f56b34442eacd0b71ecb014e4c",
-      "token": "88002c29a05940fa92d70e9c72e08dfd",
-      "annotation_token": "2ccde811d0374a7bbd0eb924b88362ee",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657292048997.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/88002c29a05940fa92d70e9c72e08dfd_lidarseg.bin",
-      "pose": [
-        [
-          -0.6592503350865276,
-          0.7511651994628314,
-          0.03376149884507209,
-          709.638621285946
-        ],
-        [
-          -0.7519216606405166,
-          -0.6586839624240212,
-          -0.02737250271712166,
-          601.3442252636007
-        ],
-        [
-          0.0016768863733425078,
-          -0.043431333865718826,
-          0.9990550071396146,
-          1.8429232489675003
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          716.623,
-          605.77,
-          0.483
-        ],
-        "rotation": [
-          0.9247940834806476,
-          0.0,
-          0.0,
-          -0.3804680054343451
-        ],
-        "size": [
-          0.525,
-          1.37,
-          0.819
-        ]
-      },
-      "point_slots": [
-        1394,
-        1455,
-        1552,
-        1553,
-        1584,
-        1585,
-        1616,
-        1617,
-        1648,
-        1649,
-        1681,
-        1713,
-        1745,
-        1776,
-        1777,
-        1807,
-        1808,
-        1809,
-        1840,
-        1841,
-        1872,
-        1873,
-        1904,
-        1905,
-        1935,
-        1936,
-        1937,
-        1968,
-        1969,
-        2001,
-        2033,
-        2065,
-        2097,
-        2129,
-        2161
-      ],
-      "points": 35,
-      "box_points": 35,
-      "box_raw_class_points": {
-        "1": 35
-      },
-      "camera": {
-        "camera_token": "5a7dbf67317a45a0aba3e7088881ce63",
-        "original": "samples/CAM_FRONT_LEFT/n008-2018-08-30-15-16-55-0400__CAM_FRONT_LEFT__1535657292004799.jpg",
-        "crop": [
-          134,
-          536,
-          613,
-          773
-        ],
-        "calibrated_sensor_token": "f2321bda91034c4ea5e1ede4815572a7",
-        "ego_pose_token": "5a7dbf67317a45a0aba3e7088881ce63",
-        "timestamp": 1535657292004799
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "e007ce82f5494e0992b0c714ba5a8f49"
-    },
-    {
-      "review_id": 2,
-      "instance": "07dffbc7a71e45318784091fb0c7ffa5",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0533",
-      "log_token": "6c12081a828548b6b0a36f12d53be6ca",
-      "sample_token": "4ffa42f71f3b425da4fa89afe2c60046",
-      "token": "5c0ffa4395cf4a7593070afbe51d82a1",
-      "annotation_token": "73b17e4f97b746d08eef298654ea7362",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-52-26-0400__LIDAR_TOP__1535659117949530.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/5c0ffa4395cf4a7593070afbe51d82a1_lidarseg.bin",
-      "pose": [
-        [
-          0.6465745318396148,
-          -0.7622447602438439,
-          -0.030402306774125164,
-          641.9019932413484
-        ],
-        [
-          0.7627777604650963,
-          0.645447414389056,
-          0.03959448696895829,
-          535.2899991168566
-        ],
-        [
-          -0.01055759992780964,
-          -0.04879099034952393,
-          0.9987532109307469,
-          1.8376058635751193
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          637.466,
-          528.342,
-          0.407
-        ],
-        "rotation": [
-          0.9297443574233685,
-          0.0,
-          0.0,
-          -0.3682056895804404
-        ],
-        "size": [
-          0.461,
-          1.291,
-          0.817
-        ]
-      },
-      "point_slots": [
-        33710,
-        33742,
-        33743,
-        33775,
-        33807,
-        33838,
-        33839,
-        33840,
-        33871,
-        33872,
-        33903,
-        33904,
-        33935,
-        33936,
-        33967,
-        33968,
-        33999,
-        34000,
-        34031,
-        34032,
-        34063,
-        34064,
-        34095,
-        34096,
-        34126,
-        34127,
-        34128,
-        34158,
-        34159,
-        34160,
-        34191,
-        34192,
-        34221,
-        34223,
-        34224,
-        34253,
-        34254,
-        34256,
-        34285,
-        34286,
-        34317,
-        34318,
-        34349,
-        34381,
-        34413
-      ],
-      "points": 45,
-      "box_points": 65,
-      "box_raw_class_points": {
-        "27": 18,
-        "1": 45,
-        "26": 2
-      },
-      "camera": {
-        "camera_token": "5497f7f4c41b43749ca81a1f3e7d5f6e",
-        "original": "samples/CAM_BACK_LEFT/n008-2018-08-30-15-52-26-0400__CAM_BACK_LEFT__1535659117947405.jpg",
-        "crop": [
-          877,
-          588,
-          1258,
-          830
-        ],
-        "calibrated_sensor_token": "f9a4078b95e949c09884a0e0a984483b",
-        "ego_pose_token": "5497f7f4c41b43749ca81a1f3e7d5f6e",
-        "timestamp": 1535659117947405
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "07dffbc7a71e45318784091fb0c7ffa5"
-    },
-    {
-      "review_id": 3,
-      "instance": "9db3f2a78daa47e2a2378752275e9738",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0761",
-      "log_token": "3a43824b84534c98bda1d07548db5817",
-      "sample_token": "0bc44cd3a2da4cbe819009de41c06f2c",
-      "token": "7a9bd5d03fa04c49bc65f084076145e1",
-      "annotation_token": "4130444887b4429f93aa90f67ed6d1c0",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657199198666.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/7a9bd5d03fa04c49bc65f084076145e1_lidarseg.bin",
-      "pose": [
-        [
-          0.8815284489805936,
-          0.46932295793908546,
-          0.05141551117296686,
-          343.8783054598629
-        ],
-        [
-          -0.47112112281219976,
-          0.8815301155027512,
-          0.030814657257212427,
-          739.0658394240622
-        ],
-        [
-          -0.03086229541110441,
-          -0.05138693037159038,
-          0.9982018343546278,
-          1.834352915230435
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          352.641,
-          737.146,
-          0.466
-        ],
-        "rotation": [
-          -0.5418475740594872,
-          0.0,
-          0.0,
-          0.8404767733172931
-        ],
-        "size": [
-          0.456,
-          1.231,
-          0.862
-        ]
-      },
-      "point_slots": [
-        15316,
-        15348,
-        15442,
-        15473,
-        15474,
-        15475,
-        15505,
-        15506,
-        15507,
-        15537,
-        15538,
-        15539,
-        15569,
-        15570,
-        15571,
-        15572,
-        15601,
-        15603,
-        15604,
-        15633,
-        15635,
-        15665,
-        15667,
-        15697,
-        15698,
-        15699,
-        15729,
-        15730,
-        15731,
-        15762,
-        15763,
-        15794,
-        15795,
-        15825,
-        15826,
-        15827,
-        15857,
-        15859,
-        15889,
-        15892,
-        15923,
-        15924,
-        15956
-      ],
-      "points": 43,
-      "box_points": 49,
-      "box_raw_class_points": {
-        "26": 6,
-        "1": 43
-      },
-      "camera": {
-        "camera_token": "d6b3c75cd23043fd9ee210e1a0629295",
-        "original": "samples/CAM_FRONT_RIGHT/n008-2018-08-30-15-16-55-0400__CAM_FRONT_RIGHT__1535657199170482.jpg",
-        "crop": [
-          1036,
-          458,
-          1415,
-          691
-        ],
-        "calibrated_sensor_token": "b7aee9301bef4af59205d7ff429f379d",
-        "ego_pose_token": "d6b3c75cd23043fd9ee210e1a0629295",
-        "timestamp": 1535657199170482
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "9db3f2a78daa47e2a2378752275e9738"
-    },
-    {
-      "review_id": 4,
-      "instance": "79b7b1a356fb4ff198311bcf9408d04d",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0596",
-      "log_token": "8e0ced20b9d847608afcfbc23056460e",
-      "sample_token": "b75a7db3198f40d39d277621522372f3",
-      "token": "aec4185253544fe6b6719456977ebf66",
-      "annotation_token": "098e1ed8a7d1407ba23697d7788c767f",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-09-18-13-41-50-0400__LIDAR_TOP__1537293209649070.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/aec4185253544fe6b6719456977ebf66_lidarseg.bin",
-      "pose": [
-        [
-          -0.8755819639702116,
-          -0.48160433507686673,
-          -0.037596393513693656,
-          1447.1201256738282
-        ],
-        [
-          0.48268522024373517,
-          -0.8753356541225383,
-          -0.028327915209648426,
-          1262.7364964313406
-        ],
-        [
-          -0.0192666169403008,
-          -0.042950635117972945,
-          0.9988914057166767,
-          1.84317254482391
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          1452.301,
-          1261.698,
-          0.52
-        ],
-        "rotation": [
-          0.2933896695019586,
-          0.0,
-          0.0,
-          0.955992940261345
-        ],
-        "size": [
-          0.291,
-          0.904,
-          0.644
-        ]
-      },
-      "point_slots": [
-        32748,
-        32906,
-        32907,
-        32939,
-        32968,
-        32970,
-        32971,
-        33000,
-        33001,
-        33002,
-        33003,
-        33004,
-        33032,
-        33034,
-        33035,
-        33036,
-        33065,
-        33066,
-        33067,
-        33068,
-        33097,
-        33098,
-        33099,
-        33100,
-        33131,
-        33132,
-        33133,
-        33161,
-        33163,
-        33164,
-        33165,
-        33193,
-        33194,
-        33195,
-        33196,
-        33225
-      ],
-      "points": 36,
-      "box_points": 37,
-      "box_raw_class_points": {
-        "1": 36,
-        "26": 1
-      },
-      "camera": {
-        "camera_token": "7a6c5a43b82a47208f7ed55b1b1208fd",
-        "original": "samples/CAM_BACK_LEFT/n008-2018-09-18-13-41-50-0400__CAM_BACK_LEFT__1537293209647405.jpg",
-        "crop": [
-          646,
-          622,
-          907,
-          900
-        ],
-        "calibrated_sensor_token": "7a652698512247beb05c494c52f9105e",
-        "ego_pose_token": "7a6c5a43b82a47208f7ed55b1b1208fd",
-        "timestamp": 1537293209647405
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "79b7b1a356fb4ff198311bcf9408d04d"
-    },
-    {
-      "review_id": 5,
-      "instance": "7541b30197a342dbb0daa9ce16cdcdde",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0544",
-      "log_token": "6c12081a828548b6b0a36f12d53be6ca",
-      "sample_token": "16764683ab72412d949c752f9397a7ff",
-      "token": "8888bb482b9446578a2a6d0650d999e0",
-      "annotation_token": "e250e0e7ecbe460a8575787508ae8601",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-52-26-0400__LIDAR_TOP__1535659506947720.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/8888bb482b9446578a2a6d0650d999e0_lidarseg.bin",
-      "pose": [
-        [
-          0.7899494969537725,
-          0.6116448990289051,
-          0.043247077986872245,
-          1050.5804086678734
-        ],
-        [
-          -0.612750682086176,
-          0.7900547925245335,
-          0.01870899280941871,
-          764.6023492523959
-        ],
-        [
-          -0.022724301208361247,
-          -0.04127883599300207,
-          0.9988892149951639,
-          1.8446931175954877
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          1057.862,
-          767.57,
-          0.364
-        ],
-        "rotation": [
-          0.9154941455201643,
-          0.0,
-          0.0,
-          -0.40233129323768035
-        ],
-        "size": [
-          0.405,
-          1.116,
-          0.697
-        ]
-      },
-      "point_slots": [
-        11345,
-        11377,
-        11408,
-        11409,
-        11440,
-        11441,
-        11442,
-        11473,
-        11474,
-        11505,
-        11506,
-        11537,
-        11538,
-        11569,
-        11570,
-        11600,
-        11601,
-        11602,
-        11632,
-        11633,
-        11634,
-        11665,
-        11666,
-        11697,
-        11698,
-        11729,
-        11730,
-        11761,
-        11762,
-        11792,
-        11794,
-        11826
-      ],
-      "points": 32,
-      "box_points": 32,
-      "box_raw_class_points": {
-        "1": 32
-      },
-      "camera": {
-        "camera_token": "499c7cccbcbf4b3dbf781a43b8d5d161",
-        "original": "samples/CAM_FRONT_RIGHT/n008-2018-08-30-15-52-26-0400__CAM_FRONT_RIGHT__1535659506920482.jpg",
-        "crop": [
-          0,
-          598,
-          318,
-          791
-        ],
-        "calibrated_sensor_token": "54b720416082407b8c3df4ac2b5adb39",
-        "ego_pose_token": "499c7cccbcbf4b3dbf781a43b8d5d161",
-        "timestamp": 1535659506920482
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "7541b30197a342dbb0daa9ce16cdcdde"
-    },
-    {
-      "review_id": 6,
-      "instance": "11330dfdc86e4030a22b9d80350b0bf0",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0527",
-      "log_token": "6c12081a828548b6b0a36f12d53be6ca",
-      "sample_token": "69c7037cf1804dffb4b7a5e39feb1eae",
-      "token": "a35ae1f704204b6f8ec4bdabd3b4a8e4",
-      "annotation_token": "462cea8ca00f40188834d8fb5e231329",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-52-26-0400__LIDAR_TOP__1535658906449368.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/a35ae1f704204b6f8ec4bdabd3b4a8e4_lidarseg.bin",
-      "pose": [
-        [
-          -0.7710932097572846,
-          -0.6358353670200546,
-          -0.03359535552246888,
-          1115.1797303068174
-        ],
-        [
-          0.6367140520748364,
-          -0.7702774099709379,
-          -0.03560797072154568,
-          589.4093676431617
-        ],
-        [
-          -0.0032369363063268104,
-          -0.048847699382225954,
-          0.9988009934458478,
-          1.8376011572501907
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          1122.925,
-          582.034,
-          0.352
-        ],
-        "rotation": [
-          0.9106137480885772,
-          0.0,
-          0.0,
-          0.4132585169020394
-        ],
-        "size": [
-          0.672,
-          1.197,
-          0.718
-        ]
-      },
-      "point_slots": [
-        273,
-        400,
-        432,
-        464,
-        496,
-        561,
-        593,
-        625,
-        656,
-        657,
-        688,
-        689,
-        720,
-        721,
-        752,
-        753,
-        754,
-        784,
-        785,
-        786,
-        816,
-        818
-      ],
-      "points": 22,
-      "box_points": 22,
-      "box_raw_class_points": {
-        "1": 22
-      },
-      "camera": {
-        "camera_token": "46a4fa2121ce46478f3bac9696f940e4",
-        "original": "samples/CAM_BACK_LEFT/n008-2018-08-30-15-52-26-0400__CAM_BACK_LEFT__1535658906447405.jpg",
-        "crop": [
-          1188,
-          583,
-          1529,
-          745
-        ],
-        "calibrated_sensor_token": "2aa4de65c4e645539bc2351e8692e3f1",
-        "ego_pose_token": "46a4fa2121ce46478f3bac9696f940e4",
-        "timestamp": 1535658906447405
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "11330dfdc86e4030a22b9d80350b0bf0"
-    },
-    {
-      "review_id": 7,
-      "instance": "e70fcc9111714e38b357bfcf59f734f8",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0213",
-      "log_token": "ab1e1b004548466f86b31f879a2d9e50",
-      "sample_token": "eacb994937d845f682f1b90833dba107",
-      "token": "fcab23956f154228bee74c165bf7d08d",
-      "annotation_token": "f75432eb9074485c9e3ccc14dae1fc4c",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-07-26-12-13-50-0400__LIDAR_TOP__1532622141297218.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/fcab23956f154228bee74c165bf7d08d_lidarseg.bin",
-      "pose": [
-        [
-          -0.541173054148037,
-          0.840171184736214,
-          0.035271884030103735,
-          2072.924199272049
-        ],
-        [
-          -0.8408680376159057,
-          -0.5402437909198735,
-          -0.03282666124509379,
-          955.5741638732156
-        ],
-        [
-          -0.008524598527915418,
-          -0.04742390443089953,
-          0.9988384776871919,
-          1.8389842721489726
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          2070.358,
-          949.485,
-          0.413
-        ],
-        "rotation": [
-          0.20185255757310352,
-          0.0,
-          0.0,
-          0.9794159203327241
-        ],
-        "size": [
-          0.363,
-          0.92,
-          0.47
-        ]
-      },
-      "point_slots": [
-        15982,
-        15983,
-        16014,
-        16015,
-        16046,
-        16047,
-        16078,
-        16079,
-        16110,
-        16111,
-        16143,
-        16175,
-        16206,
-        16207,
-        16238,
-        16239,
-        16270,
-        16271,
-        16302,
-        16303,
-        16334,
-        16335,
-        16366,
-        16367,
-        16399,
-        16431,
-        16432,
-        16464
-      ],
-      "points": 28,
-      "box_points": 28,
-      "box_raw_class_points": {
-        "1": 28
-      },
-      "camera": {
-        "camera_token": "bcf3c15864484167b0f7e7cc0fcb32b0",
-        "original": "samples/CAM_FRONT_RIGHT/n008-2018-07-26-12-13-50-0400__CAM_FRONT_RIGHT__1532622141270482.jpg",
-        "crop": [
-          1294,
-          600,
-          1596,
-          766
-        ],
-        "calibrated_sensor_token": "409c9c9942ab421eb99812391d431be0",
-        "ego_pose_token": "bcf3c15864484167b0f7e7cc0fcb32b0",
-        "timestamp": 1532622141270482
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "e70fcc9111714e38b357bfcf59f734f8"
-    },
-    {
-      "review_id": 8,
-      "instance": "00134739225945f1839a372302a95a04",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0213",
-      "log_token": "ab1e1b004548466f86b31f879a2d9e50",
-      "sample_token": "07c8878f8f8c442998e93dec74829c41",
-      "token": "e18105a5fe8543c9a61764e9abddc39f",
-      "annotation_token": "0f7cec08676544bfb82c4b4bb7ccf8c7",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-07-26-12-13-50-0400__LIDAR_TOP__1532622149799538.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/e18105a5fe8543c9a61764e9abddc39f_lidarseg.bin",
-      "pose": [
-        [
-          -0.5324801878963837,
-          0.845565338417417,
-          0.03852412185723055,
-          2115.914372374033
-        ],
-        [
-          -0.8463976537684036,
-          -0.5314319167269884,
-          -0.034512745170745485,
-          928.7744596063003
-        ],
-        [
-          -0.008709833131203371,
-          -0.050984079386786584,
-          0.9986614854173103,
-          1.8354489962538874
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          2113.901,
-          923.686,
-          0.325
-        ],
-        "rotation": [
-          0.10363450056446145,
-          0.0,
-          0.0,
-          0.9946154484486729
-        ],
-        "size": [
-          0.224,
-          0.426,
-          0.397
-        ]
-      },
-      "point_slots": [
-        15915,
-        15916,
-        15947,
-        15948,
-        15979,
-        15980,
-        16011,
-        16012,
-        16043,
-        16044,
-        16075,
-        16076,
-        16107,
-        16108,
-        16139,
-        16140,
-        16171,
-        16172,
-        16173,
-        16203,
-        16204,
-        16235,
-        16237,
-        16267,
-        16299
-      ],
-      "points": 25,
-      "box_points": 25,
-      "box_raw_class_points": {
-        "1": 25
-      },
-      "camera": {
-        "camera_token": "8501a5b998f24e109be6423220659944",
-        "original": "samples/CAM_FRONT_RIGHT/n008-2018-07-26-12-13-50-0400__CAM_FRONT_RIGHT__1532622149770484.jpg",
-        "crop": [
-          1312,
-          701,
-          1579,
-          880
-        ],
-        "calibrated_sensor_token": "409c9c9942ab421eb99812391d431be0",
-        "ego_pose_token": "8501a5b998f24e109be6423220659944",
-        "timestamp": 1532622149770484
-      },
-      "object_group": "动物",
-      "appearance": "鸥类",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "00134739225945f1839a372302a95a04"
-    },
-    {
-      "review_id": 11,
-      "instance": "c3933031be6e48fbb9cceeccaa44b85e",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0871",
-      "log_token": "65629cfc47fe489fabc497ead466a313",
-      "sample_token": "af0165a369544bb28602bf036b04908b",
-      "token": "34012b27ba494430b78d5f220d4881bb",
-      "annotation_token": "c0df36d137f946869288e1368eec107f",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-09-18-14-54-39-0400__LIDAR_TOP__1537297011399131.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/34012b27ba494430b78d5f220d4881bb_lidarseg.bin",
-      "pose": [
-        [
-          -0.6552655110551672,
-          0.7550299409470113,
-          0.023598692657928338,
-          760.2919340492787
-        ],
-        [
-          -0.755293593144078,
-          -0.6543336218463879,
-          -0.03713622863049423,
-          1514.740520486243
-        ],
-        [
-          -0.012597546472174755,
-          -0.042158031203331794,
-          0.9990315321489809,
-          1.8441097817211696
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          750.189,
-          1510.655,
-          0.338
-        ],
-        "rotation": [
-          0.9067645732951441,
-          0.0,
-          0.0,
-          -0.4216372950971902
-        ],
-        "size": [
-          0.406,
-          1.26,
-          0.689
-        ]
-      },
-      "point_slots": [
-        19697,
-        19825,
-        19857,
-        19889,
-        19890,
-        19921,
-        19953,
-        19985,
-        20017,
-        20049,
-        20081,
-        20113,
-        20145
-      ],
-      "points": 13,
-      "box_points": 19,
-      "box_raw_class_points": {
-        "26": 6,
-        "1": 13
-      },
-      "camera": {
-        "camera_token": "7ebc61a1a32648d4bcc050d7f52fa44e",
-        "original": "samples/CAM_BACK_RIGHT/n008-2018-09-18-14-54-39-0400__CAM_BACK_RIGHT__1537297011378113.jpg",
-        "crop": [
-          846,
-          525,
-          1078,
-          647
-        ],
-        "calibrated_sensor_token": "15861a114cd24d1fbf908d3c7fc35714",
-        "ego_pose_token": "7ebc61a1a32648d4bcc050d7f52fa44e",
-        "timestamp": 1537297011378113
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "c3933031be6e48fbb9cceeccaa44b85e"
-    },
-    {
-      "review_id": 12,
-      "instance": "9349340c51ba47d999494e11fbea4aa7",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0370",
-      "log_token": "f8699afb7a2247e38549e4d250b4581b",
-      "sample_token": "991a62cba1b641fea2ba0cce9f3d79ad",
-      "token": "53199195cbdd44a7aeb2e7960150c633",
-      "annotation_token": "34b73c267a1f466fb8296b689d083b7f",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n015-2018-08-03-15-00-36+0800__LIDAR_TOP__1533280144200294.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/53199195cbdd44a7aeb2e7960150c633_lidarseg.bin",
-      "pose": [
-        [
-          0.549779061892208,
-          -0.8348286463383517,
-          -0.02835691023011753,
-          519.2434984297497
-        ],
-        [
-          0.8352867539252875,
-          0.5497006825822577,
-          0.01118920397331862,
-          871.8389262759484
-        ],
-        [
-          0.006246744902770122,
-          -0.029837741561237325,
-          0.9995352356753837,
-          1.8347939386585126
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          513.47,
-          871.198,
-          0.194
-        ],
-        "rotation": [
-          0.8894961384601621,
-          0.0,
-          0.0,
-          -0.456942687505184
-        ],
-        "size": [
-          0.322,
-          0.512,
-          0.417
-        ]
-      },
-      "point_slots": [
-        4973,
-        5004,
-        5005,
-        5036,
-        5037,
-        5068,
-        5069,
-        5100,
-        5101,
-        5133,
-        5165,
-        5197,
-        5198
-      ],
-      "points": 13,
-      "box_points": 17,
-      "box_raw_class_points": {
-        "1": 13,
-        "24": 4
-      },
-      "camera": {
-        "camera_token": "015b8a7759144e2db86816c29c2277d0",
-        "original": "samples/CAM_FRONT_LEFT/n015-2018-08-03-15-00-36+0800__CAM_FRONT_LEFT__1533280144154844.jpg",
-        "crop": [
-          1176,
-          708,
-          1332,
-          869
-        ],
-        "calibrated_sensor_token": "3cccbebee6064ddd9eb5ac30ac73f2ea",
-        "ego_pose_token": "015b8a7759144e2db86816c29c2277d0",
-        "timestamp": 1533280144154844
-      },
-      "object_group": "动物",
-      "appearance": "公鸡",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "9349340c51ba47d999494e11fbea4aa7"
-    },
-    {
-      "review_id": 13,
-      "instance": "37953310c094473d9fb3ecb3054652f2",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0891",
-      "log_token": "65629cfc47fe489fabc497ead466a313",
-      "sample_token": "581b52155aae4123abff0d81bb51a6d5",
-      "token": "61495fc25ff24d649a48538ceccd2e86",
-      "annotation_token": "c3b6d84f333742749bc5518037a6c101",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-09-18-14-54-39-0400__LIDAR_TOP__1537297558400199.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/61495fc25ff24d649a48538ceccd2e86_lidarseg.bin",
-      "pose": [
-        [
-          0.8216076998157552,
-          -0.5692510894191295,
-          -0.030232181505775363,
-          1184.774011865237
-        ],
-        [
-          0.5699327628777119,
-          0.8213685951295641,
-          0.023027738348876343,
-          1670.7771142979507
-        ],
-        [
-          0.011723199309144174,
-          -0.03615007787018636,
-          0.9992776083090914,
-          1.849833306035647
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          1201.805,
-          1673.819,
-          0.673
-        ],
-        "rotation": [
-          -0.6524324100867489,
-          0.0,
-          0.0,
-          0.757846917436758
-        ],
-        "size": [
-          0.654,
-          1.213,
-          0.836
-        ]
-      },
-      "point_slots": [
-        19507,
-        19539,
-        19540,
-        19571,
-        19602,
-        19603,
-        19634,
-        19635,
-        19666,
-        19667,
-        19699,
-        19731,
-        19763,
-        19795
-      ],
-      "points": 14,
-      "box_points": 14,
-      "box_raw_class_points": {
-        "1": 14
-      },
-      "camera": {
-        "camera_token": "35b226e99fef40beb31e8772b962299b",
-        "original": "samples/CAM_BACK_RIGHT/n008-2018-09-18-14-54-39-0400__CAM_BACK_RIGHT__1537297558378113.jpg",
-        "crop": [
-          797,
-          480,
-          954,
-          629
-        ],
-        "calibrated_sensor_token": "6ce54e94515341d4b5ecc0344c61799c",
-        "ego_pose_token": "35b226e99fef40beb31e8772b962299b",
-        "timestamp": 1537297558378113
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "37953310c094473d9fb3ecb3054652f2"
-    },
-    {
-      "review_id": 14,
-      "instance": "2b360adeda0943c39a786030762c765d",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0816",
-      "log_token": "246e7da6bb344941bac92be421a545e2",
-      "sample_token": "6faf0107396a42c8958a677366d87afe",
-      "token": "6c95937bd337439c9a19a327f9556bc7",
-      "annotation_token": "9c097ec76add444e9ca726d5cc863a35",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-09-18-15-26-58-0400__LIDAR_TOP__1537299235698178.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/6c95937bd337439c9a19a327f9556bc7_lidarseg.bin",
-      "pose": [
-        [
-          0.5820765226632234,
-          0.8127745099028221,
-          0.02417680327334205,
-          1819.1634064636023
-        ],
-        [
-          -0.8130229478636893,
-          0.582231114901128,
-          0.0007842754787411834,
-          1217.4179598863616
-        ],
-        [
-          -0.01343904800672051,
-          -0.02011280421068875,
-          0.9997073907376378,
-          1.8652213043014783
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          1825.42,
-          1214.035,
-          0.532
-        ],
-        "rotation": [
-          0.8886412462714912,
-          0.0,
-          0.0,
-          0.4586030259658683
-        ],
-        "size": [
-          0.496,
-          0.54,
-          0.488
-        ]
-      },
-      "point_slots": [
-        14609,
-        14640,
-        14672,
-        14704,
-        14736,
-        14768,
-        14800,
-        14832,
-        14864,
-        14896
-      ],
-      "points": 10,
-      "box_points": 21,
-      "box_raw_class_points": {
-        "26": 11,
-        "1": 10
-      },
-      "camera": {
-        "camera_token": "08f30e6d6c0c4588922490c249eb8319",
-        "original": "samples/CAM_FRONT_RIGHT/n008-2018-09-18-15-26-58-0400__CAM_FRONT_RIGHT__1537299235670482.jpg",
-        "crop": [
-          927,
-          581,
-          1095,
-          704
-        ],
-        "calibrated_sensor_token": "ef2fadb6061d4df492236f7d9645ba7a",
-        "ego_pose_token": "08f30e6d6c0c4588922490c249eb8319",
-        "timestamp": 1537299235670482
-      },
-      "object_group": "动物",
-      "appearance": "鸥类",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "2b360adeda0943c39a786030762c765d"
-    },
-    {
-      "review_id": 15,
-      "instance": "6497b7daa97c476ca2c6c282fdb97bce",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0395",
-      "log_token": "efa31cf3cd2f452789ca7f3e7541ea69",
-      "sample_token": "8533366dd0a147318186c3295846004f",
-      "token": "916ca4f3c62242108fbaad59eec1b18e",
-      "annotation_token": "ef74658906274659aaecc63ca1df2cd4",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-31-11-56-46-0400__LIDAR_TOP__1535731299146963.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/916ca4f3c62242108fbaad59eec1b18e_lidarseg.bin",
-      "pose": [
-        [
-          0.864954633098705,
-          0.49986238424441676,
-          0.044621513853427795,
-          528.3222738119712
-        ],
-        [
-          -0.5014128917597613,
-          0.8644887834918513,
-          0.035274001671098135,
-          1086.1268521501306
-        ],
-        [
-          -0.02094265165155793,
-          -0.052884213469293284,
-          0.9983810221090621,
-          1.8332841998021077
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          534.943,
-          1085.383,
-          0.256
-        ],
-        "rotation": [
-          -0.5060337641211663,
-          0.0,
-          0.0,
-          0.862513669207256
-        ],
-        "size": [
-          0.193,
-          0.548,
-          0.301
-        ]
-      },
-      "point_slots": [
-        14767,
-        14799,
-        14831,
-        14863,
-        14895,
-        14927,
-        14958,
-        14959,
-        14990,
-        14991,
-        15023
-      ],
-      "points": 11,
-      "box_points": 11,
-      "box_raw_class_points": {
-        "1": 11
-      },
-      "camera": {
-        "camera_token": "bdb372448fdf443b917810481e9b7d27",
-        "original": "samples/CAM_FRONT_RIGHT/n008-2018-08-31-11-56-46-0400__CAM_FRONT_RIGHT__1535731299120482.jpg",
-        "crop": [
-          982,
-          642,
-          1140,
-          768
-        ],
-        "calibrated_sensor_token": "bd1184788d0c4b5cb85bd8e3d224ee9c",
-        "ego_pose_token": "bdb372448fdf443b917810481e9b7d27",
-        "timestamp": 1535731299120482
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "6497b7daa97c476ca2c6c282fdb97bce"
-    },
-    {
-      "review_id": 16,
-      "instance": "646d23d87cb54d4aa882eb5cb45014cf",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0238",
-      "log_token": "3313a6a85b264e4c86ee44d6e6329cf3",
-      "sample_token": "e4606d4d8eb244f2aada8e6e96617f96",
-      "token": "17dcc42816a94845979ab6188e33d88e",
-      "annotation_token": "5accd8b61940456e8805a01ee6071a8e",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-07-27-12-07-38-0400__LIDAR_TOP__1532708631049045.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/17dcc42816a94845979ab6188e33d88e_lidarseg.bin",
-      "pose": [
-        [
-          -0.6559780798490066,
-          0.7545615297124734,
-          0.018156448870377647,
-          760.1364608019904
-        ],
-        [
-          -0.7546841051164543,
-          -0.6553216699502727,
-          -0.03170820679512326,
-          1514.9857031443673
-        ],
-        [
-          -0.012027478629665021,
-          -0.0345022719767538,
-          0.9993322435437852,
-          1.8515604759648876
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          771.544,
-          1517.519,
-          0.264
-        ],
-        "rotation": [
-          0.3469274668517982,
-          0.0,
-          0.0,
-          0.9378919621916986
-        ],
-        "size": [
-          0.416,
-          0.916,
-          0.668
-        ]
-      },
-      "point_slots": [
-        3378,
-        3410,
-        3441,
-        3442,
-        3474,
-        3506,
-        3537,
-        3538,
-        3570,
-        3602,
-        3634
-      ],
-      "points": 11,
-      "box_points": 11,
-      "box_raw_class_points": {
-        "1": 11
-      },
-      "camera": {
-        "camera_token": "d346fcbe32b44c17aff6fdd68905e69b",
-        "original": "samples/CAM_FRONT_LEFT/n008-2018-07-27-12-07-38-0400__CAM_FRONT_LEFT__1532708631004799.jpg",
-        "crop": [
-          764,
-          579,
-          917,
-          703
-        ],
-        "calibrated_sensor_token": "eba0f11a250e4aa187dff487087bec47",
-        "ego_pose_token": "d346fcbe32b44c17aff6fdd68905e69b",
-        "timestamp": 1532708631004799
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "646d23d87cb54d4aa882eb5cb45014cf"
-    },
-    {
-      "review_id": 17,
-      "instance": "893613f8e6304e3fba37d3526ffc1af8",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0389",
-      "log_token": "efa31cf3cd2f452789ca7f3e7541ea69",
-      "sample_token": "65f468715f304167b8383546ec4fda29",
-      "token": "fd4b0a3fac0f452797671a5f03b04fd3",
-      "annotation_token": "20d838ba96bb408299997f685910b7a7",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-31-11-56-46-0400__LIDAR_TOP__1535731109147013.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/fd4b0a3fac0f452797671a5f03b04fd3_lidarseg.bin",
-      "pose": [
-        [
-          -0.7642079035653977,
-          -0.6430853658189699,
-          -0.0492695889739443,
-          1151.5902574522834
-        ],
-        [
-          0.6447772539338924,
-          -0.7636145308511305,
-          -0.033987366512821256,
-          892.1141643106275
-        ],
-        [
-          -0.015766196042445443,
-          -0.05774132439154333,
-          0.9982070759716452,
-          1.828555848334129
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          1166.67,
-          887.582,
-          0.47
-        ],
-        "rotation": [
-          0.5993519699978989,
-          0.0,
-          0.0,
-          0.800485612649995
-        ],
-        "size": [
-          0.521,
-          0.938,
-          0.692
-        ]
-      },
-      "point_slots": [
-        32306,
-        32338,
-        32369,
-        32401,
-        32433,
-        32434,
-        32466,
-        32498,
-        32530,
-        32561,
-        32562
-      ],
-      "points": 11,
-      "box_points": 11,
-      "box_raw_class_points": {
-        "1": 11
-      },
-      "camera": {
-        "camera_token": "35d16bdeb02c4d898fecadf30025df6e",
-        "original": "samples/CAM_BACK_LEFT/n008-2018-08-31-11-56-46-0400__CAM_BACK_LEFT__1535731109147405.jpg",
-        "crop": [
-          620,
-          548,
-          771,
-          671
-        ],
-        "calibrated_sensor_token": "3c17f28b9a964c7791bfcca573af5e56",
-        "ego_pose_token": "35d16bdeb02c4d898fecadf30025df6e",
-        "timestamp": 1535731109147405
-      },
-      "object_group": "动物",
-      "appearance": "犬",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "893613f8e6304e3fba37d3526ffc1af8"
-    },
-    {
-      "review_id": 18,
-      "instance": "93c439d8a07244069edd19df80b98311",
-      "category": "animal",
-      "raw_label": 1,
-      "subset": "train",
-      "scene": "scene-0073",
-      "log_token": "7a0fde44c3504eaeb18f9ad83bed65bc",
-      "sample_token": "cbf9f6f096d54c669702cbbc288ed271",
-      "token": "862958fdfd904cf48129cd110c8eec5a",
-      "annotation_token": "7225716d8b40435e85c75e472d78aad1",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-01-15-52-19-0400__LIDAR_TOP__1533153677449055.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/862958fdfd904cf48129cd110c8eec5a_lidarseg.bin",
-      "pose": [
-        [
-          -0.520932507777132,
-          0.8529881973213406,
-          0.03225612455826528,
-          2101.9533143279104
-        ],
-        [
-          -0.8535070987084804,
-          -0.5199540107005514,
-          -0.03425579090670198,
-          937.176599692007
-        ],
-        [
-          -0.01244808399959791,
-          -0.04537578635022169,
-          0.99889242825133,
-          1.8409519447637683
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          2100.857,
-          926.867,
-          0.416
-        ],
-        "rotation": [
-          0.9345589083590606,
-          0.0,
-          0.0,
-          0.3558084411684481
-        ],
-        "size": [
-          0.313,
-          0.581,
-          0.399
-        ]
-      },
-      "point_slots": [
-        14674,
-        14706,
-        14738,
-        14739,
-        14771,
-        14803,
-        14835,
-        14867
-      ],
-      "points": 8,
-      "box_points": 11,
-      "box_raw_class_points": {
-        "1": 8,
-        "27": 3
-      },
-      "camera": {
-        "camera_token": "944a049470ff4f70835ace7dfaf6d6b0",
-        "original": "samples/CAM_FRONT_RIGHT/n008-2018-08-01-15-52-19-0400__CAM_FRONT_RIGHT__1533153677420482.jpg",
-        "crop": [
-          922,
-          527,
-          1057,
-          651
-        ],
-        "calibrated_sensor_token": "dba7471b5cec44278c797887fc4ac7da",
-        "ego_pose_token": "944a049470ff4f70835ace7dfaf6d6b0",
-        "timestamp": 1533153677420482
-      },
-      "object_group": "动物",
-      "appearance": "雁鹅类",
-      "selection_note": "影像支持雁鹅类鸟，未核定物种。",
-      "array_key": "93c439d8a07244069edd19df80b98311"
-    },
     {
       "review_id": 19,
       "instance": "bccf7bb1b5b147a4bcaf61f6e6c8d64a",
@@ -2032,7 +277,9 @@
       "object_group": "袋包",
       "appearance": "软质袋或袋组",
       "selection_note": "同一标注实例包含相邻软袋；按袋组保留，不声称是一个独立袋。",
-      "array_key": "bccf7bb1b5b147a4bcaf61f6e6c8d64a"
+      "array_key": "bccf7bb1b5b147a4bcaf61f6e6c8d64a",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 20,
@@ -2183,7 +430,9 @@
       "object_group": "袋包",
       "appearance": "软质袋或袋组",
       "selection_note": "袋或袋组；排除了同类别其他实例框重叠处的点。",
-      "array_key": "bef8ab2746a64cd2aa58ec20d589c009"
+      "array_key": "bef8ab2746a64cd2aa58ec20d589c009",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 21,
@@ -2302,7 +551,9 @@
       "object_group": "袋包",
       "appearance": "软质袋或袋组",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "ca7b6d3784c74450a93b37895d4e1854"
+      "array_key": "ca7b6d3784c74450a93b37895d4e1854",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 22,
@@ -2412,7 +663,9 @@
       "object_group": "袋包",
       "appearance": "软质袋或袋组",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "93ed68da7501468588abffc1b73054a7"
+      "array_key": "93ed68da7501468588abffc1b73054a7",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 23,
@@ -2510,7 +763,9 @@
       "object_group": "袋包",
       "appearance": "软质袋或袋组",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "e5bcf8099f6a4839ba4c22cbab966e6c"
+      "array_key": "e5bcf8099f6a4839ba4c22cbab966e6c",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 24,
@@ -2606,7 +861,9 @@
       "object_group": "袋包",
       "appearance": "背包",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "2614f6d41c3c41ee96050e54bde2f8fd"
+      "array_key": "2614f6d41c3c41ee96050e54bde2f8fd",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 25,
@@ -2698,7 +955,9 @@
       "object_group": "袋包",
       "appearance": "软质袋或袋组",
       "selection_note": "软质袋状物；未确定具体用途，不命名为垃圾袋。",
-      "array_key": "0282597af7184ab4911ed8318fcae16b"
+      "array_key": "0282597af7184ab4911ed8318fcae16b",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 26,
@@ -2803,7 +1062,9 @@
       "object_group": "袋包",
       "appearance": "软质袋或袋组",
       "selection_note": "袋或袋组；未逐袋分解。",
-      "array_key": "bdc5f1cd300f4490a18e107ca4048dd6"
+      "array_key": "bdc5f1cd300f4490a18e107ca4048dd6",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 27,
@@ -2896,7 +1157,9 @@
       "object_group": "袋包",
       "appearance": "软质袋或袋组",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "b9c4316dd72d480096a36b24aa9cbe75"
+      "array_key": "b9c4316dd72d480096a36b24aa9cbe75",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 28,
@@ -2986,7 +1249,9 @@
       "object_group": "袋包",
       "appearance": "软质袋或袋组",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "e1e95071f5e54ae89df384e36aa69634"
+      "array_key": "e1e95071f5e54ae89df384e36aa69634",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 29,
@@ -3385,7 +1650,9 @@
       "object_group": "垃圾容器",
       "appearance": "大型垃圾箱",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "67a656d1401944db91eedd73e647e4ca"
+      "array_key": "67a656d1401944db91eedd73e647e4ca",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 30,
@@ -3751,7 +2018,9 @@
       "object_group": "垃圾容器",
       "appearance": "大型垃圾箱",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "51b8d74908d3485d8c0e0bb2046161aa"
+      "array_key": "51b8d74908d3485d8c0e0bb2046161aa",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 31,
@@ -3877,7 +2146,9 @@
       "object_group": "垃圾容器",
       "appearance": "大型垃圾箱",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "7f4f6696b737412a92cd3ac54a139ad5"
+      "array_key": "7f4f6696b737412a92cd3ac54a139ad5",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 32,
@@ -3979,232 +2250,9 @@
       "object_group": "垃圾容器",
       "appearance": "大型垃圾箱",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "1abf9b9d975944bc9e1bb377d1c744ba"
-    },
-    {
-      "review_id": 33,
-      "instance": "763853404bb144d39782ace2c4efac51",
-      "category": "movable_object.debris",
-      "raw_label": 10,
-      "subset": "val",
-      "scene": "scene-0110",
-      "log_token": "53cf9c55dd8644bea67b9f009fc1ee38",
-      "sample_token": "4e50f9842b0745b7a969d46d1ef61143",
-      "token": "eda1da901d7a4db2ab9796a61883a35b",
-      "annotation_token": "c6f5956d08d44604adba49ddbac7988c",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-01-15-16-36-0400__LIDAR_TOP__1533151884547119.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/eda1da901d7a4db2ab9796a61883a35b_lidarseg.bin",
-      "pose": [
-        [
-          -0.5107632795551664,
-          0.8589530532561162,
-          0.036339022552171925,
-          1926.9897593547562
-        ],
-        [
-          -0.8596900643479781,
-          -0.509927372728909,
-          -0.03011756635523748,
-          1046.398828329625
-        ],
-        [
-          -0.007339313279909306,
-          -0.046623243600040734,
-          0.9988855828556097,
-          1.8397862596952281
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          1945.465,
-          1064.653,
-          1.021
-        ],
-        "rotation": [
-          -0.40305019648908547,
-          0.0,
-          0.0,
-          0.9151778729351522
-        ],
-        "size": [
-          2.135,
-          2.355,
-          2.369
-        ]
-      },
-      "point_slots": [
-        1332,
-        1333,
-        1334,
-        1335,
-        1364,
-        1365,
-        1366,
-        1367,
-        1396,
-        1397,
-        1398,
-        1399,
-        1428,
-        1429,
-        1430,
-        1431,
-        1460,
-        1461,
-        1462,
-        1463,
-        1492,
-        1524,
-        1526,
-        1527,
-        1556,
-        1557,
-        1558,
-        1559,
-        1588,
-        1589,
-        1590,
-        1591,
-        1620,
-        1621,
-        1622,
-        1623,
-        1652,
-        1653,
-        1654,
-        1655,
-        1684,
-        1686,
-        1687,
-        1716,
-        1717,
-        1718
-      ],
-      "points": 46,
-      "box_points": 46,
-      "box_raw_class_points": {
-        "10": 46
-      },
-      "camera": {
-        "camera_token": "910804d02734409fa1613c12aadfcbac",
-        "original": "samples/CAM_FRONT_LEFT/n008-2018-08-01-15-16-36-0400__CAM_FRONT_LEFT__1533151884504799.jpg",
-        "crop": [
-          269,
-          400,
-          471,
-          613
-        ],
-        "calibrated_sensor_token": "106cacbd3d7444f38c97b592733178ab",
-        "ego_pose_token": "910804d02734409fa1613c12aadfcbac",
-        "timestamp": 1533151884504799
-      },
-      "object_group": "垃圾容器",
-      "appearance": "大型垃圾箱",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "763853404bb144d39782ace2c4efac51"
-    },
-    {
-      "review_id": 34,
-      "instance": "4c3e1c7cf6614036a6ea26503c1a7e65",
-      "category": "movable_object.debris",
-      "raw_label": 10,
-      "subset": "val",
-      "scene": "scene-0092",
-      "log_token": "53cf9c55dd8644bea67b9f009fc1ee38",
-      "sample_token": "e13ec49d20974a01942b83317fcbfa46",
-      "token": "b51e061e16344cf98e5d4e39ab989f1d",
-      "annotation_token": "c72148b490554e98bbaedf5507ca0f1a",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-01-15-16-36-0400__LIDAR_TOP__1533151080297220.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/b51e061e16344cf98e5d4e39ab989f1d_lidarseg.bin",
-      "pose": [
-        [
-          -0.02187766679530745,
-          -0.9989596854819481,
-          -0.04001142933464191,
-          2123.561227753528
-        ],
-        [
-          0.9994077281031486,
-          -0.020789114138740416,
-          -0.027422723078313897,
-          790.8412404406997
-        ],
-        [
-          0.02656239265007899,
-          -0.04058767688762147,
-          0.9988228470462462,
-          1.8448956991515892
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          2095.75,
-          798.297,
-          0.934
-        ],
-        "rotation": [
-          0.1907747298922339,
-          0.0,
-          0.0,
-          0.9816338433624552
-        ],
-        "size": [
-          2.542,
-          4.553,
-          1.606
-        ]
-      },
-      "point_slots": [
-        10007,
-        10070,
-        10103,
-        10166,
-        10230,
-        10231,
-        10262,
-        10294,
-        10295,
-        10326,
-        10327,
-        10390,
-        10422,
-        10454,
-        10455
-      ],
-      "points": 15,
-      "box_points": 15,
-      "box_raw_class_points": {
-        "10": 15
-      },
-      "camera": {
-        "camera_token": "1ac99b8d1c64468fa320af48dbd3159d",
-        "original": "samples/CAM_FRONT/n008-2018-08-01-15-16-36-0400__CAM_FRONT__1533151080262404.jpg",
-        "crop": [
-          1088,
-          451,
-          1327,
-          595
-        ],
-        "calibrated_sensor_token": "a9a2231d91a04dc48c22cc2b78a5a861",
-        "ego_pose_token": "1ac99b8d1c64468fa320af48dbd3159d",
-        "timestamp": 1533151080262404
-      },
-      "object_group": "垃圾容器",
-      "appearance": "大型垃圾箱",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "4c3e1c7cf6614036a6ea26503c1a7e65"
+      "array_key": "1abf9b9d975944bc9e1bb377d1c744ba",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 35,
@@ -4312,7 +2360,9 @@
       "object_group": "垃圾容器",
       "appearance": "大型垃圾箱",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "e9b831924b9f4618b8511d697b815dc2"
+      "array_key": "e9b831924b9f4618b8511d697b815dc2",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 36,
@@ -4822,7 +2872,9 @@
       "object_group": "垃圾容器",
       "appearance": "罩顶垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "d6b3e990f55d43c7bf17c2371762a687"
+      "array_key": "d6b3e990f55d43c7bf17c2371762a687",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 37,
@@ -5083,7 +3135,9 @@
       "object_group": "垃圾容器",
       "appearance": "罩顶垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "f4907854bd674525819b97ebe08c2b0f"
+      "array_key": "f4907854bd674525819b97ebe08c2b0f",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 38,
@@ -5312,7 +3366,9 @@
       "object_group": "垃圾容器",
       "appearance": "罩顶垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "fa5d5223f5f1473fa63e9656bed74b65"
+      "array_key": "fa5d5223f5f1473fa63e9656bed74b65",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 39,
@@ -5746,7 +3802,9 @@
       "object_group": "垃圾容器",
       "appearance": "平盖带轮垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "0eda4e2bd87c41e2a2d94fde52001eff"
+      "array_key": "0eda4e2bd87c41e2a2d94fde52001eff",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 40,
@@ -6208,7 +4266,9 @@
       "object_group": "垃圾容器",
       "appearance": "平盖带轮垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "a3049a37c9da43be8d1f3489e07e8fac"
+      "array_key": "a3049a37c9da43be8d1f3489e07e8fac",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 41,
@@ -6640,7 +4700,9 @@
       "object_group": "垃圾容器",
       "appearance": "平盖带轮垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "8860ad069bc44072907b8885d27c1f75"
+      "array_key": "8860ad069bc44072907b8885d27c1f75",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 42,
@@ -7074,7 +5136,9 @@
       "object_group": "垃圾容器",
       "appearance": "平盖带轮垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "88f46b5330344fa5899ed535b82ec5aa"
+      "array_key": "88f46b5330344fa5899ed535b82ec5aa",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 43,
@@ -7463,7 +5527,9 @@
       "object_group": "垃圾容器",
       "appearance": "平盖带轮垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "611cef32eec6401d835f8d11996c00aa"
+      "array_key": "611cef32eec6401d835f8d11996c00aa",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 44,
@@ -7657,7 +5723,9 @@
       "object_group": "垃圾容器",
       "appearance": "平盖带轮垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "28c6031f1b70416bb62ad13ce8b50590"
+      "array_key": "28c6031f1b70416bb62ad13ce8b50590",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 45,
@@ -7784,7 +5852,9 @@
       "object_group": "垃圾容器",
       "appearance": "街旁小型垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "0b2a7721909448b7bab76400669410ea"
+      "array_key": "0b2a7721909448b7bab76400669410ea",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 46,
@@ -7884,7 +5954,9 @@
       "object_group": "垃圾容器",
       "appearance": "街旁小型垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "e810c1c4cf4045e4a502cf8bf2f03b62"
+      "array_key": "e810c1c4cf4045e4a502cf8bf2f03b62",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 47,
@@ -7979,7 +6051,9 @@
       "object_group": "垃圾容器",
       "appearance": "街旁小型垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "746faa08525c41fbb91599442b973c98"
+      "array_key": "746faa08525c41fbb91599442b973c98",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 48,
@@ -8078,204 +6152,9 @@
       "object_group": "旅行箱",
       "appearance": "软壳拉杆旅行箱",
       "selection_note": "原图由人拉动；提取仅保留目标标签与实例框交集，人行道点已排除。",
-      "array_key": "280c02d06fbc4f8997345601852e5426"
-    },
-    {
-      "review_id": 51,
-      "instance": "8d2968c0b96347c59b94592cd8da4611",
-      "category": "movable_object.pushable_pullable",
-      "raw_label": 11,
-      "subset": "train",
-      "scene": "scene-0851",
-      "log_token": "2f3c08142bc04ac3af6a8cf6c721b816",
-      "sample_token": "ceccf74dd3e341d8b8af167d6021405a",
-      "token": "da1aaf76a1a24a4787d43a1828b55a71",
-      "annotation_token": "4fa6bbafcf4d45028b9d7f036e0cf485",
-      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n015-2018-10-08-16-03-24+0800__LIDAR_TOP__1538985896948129.pcd.bin",
-      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/da1aaf76a1a24a4787d43a1828b55a71_lidarseg.bin",
-      "pose": [
-        [
-          -0.1248073238851634,
-          -0.9921216959404273,
-          -0.010847688643861635,
-          2108.7062947407767
-        ],
-        [
-          0.9915436383379684,
-          -0.12432787362687248,
-          -0.037199369765152285,
-          1385.6507872989973
-        ],
-        [
-          0.035557631756460255,
-          -0.015398710456095345,
-          0.9992489852585097,
-          1.8469772769861177
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ],
-      "box": {
-        "translation": [
-          2109.871,
-          1380.532,
-          0.765
-        ],
-        "rotation": [
-          0.6525481749662503,
-          0.0,
-          0.0,
-          0.7577472397496516
-        ],
-        "size": [
-          0.719,
-          1.007,
-          1.062
-        ]
-      },
-      "point_slots": [
-        14,
-        15,
-        16,
-        47,
-        48,
-        79,
-        111,
-        113,
-        143,
-        175,
-        177,
-        207,
-        209,
-        239,
-        240,
-        33871,
-        33872,
-        33873,
-        33874,
-        33875,
-        33902,
-        33903,
-        33904,
-        33905,
-        33907,
-        33934,
-        33935,
-        33936,
-        33937,
-        33938,
-        33939,
-        33966,
-        33967,
-        33968,
-        33969,
-        33970,
-        33971,
-        33998,
-        33999,
-        34000,
-        34001,
-        34002,
-        34003,
-        34030,
-        34031,
-        34032,
-        34033,
-        34034,
-        34035,
-        34062,
-        34063,
-        34064,
-        34065,
-        34066,
-        34067,
-        34094,
-        34095,
-        34096,
-        34097,
-        34098,
-        34099,
-        34126,
-        34127,
-        34128,
-        34129,
-        34130,
-        34131,
-        34158,
-        34159,
-        34160,
-        34161,
-        34162,
-        34163,
-        34189,
-        34190,
-        34191,
-        34192,
-        34193,
-        34194,
-        34195,
-        34221,
-        34222,
-        34223,
-        34224,
-        34225,
-        34226,
-        34227,
-        34254,
-        34255,
-        34256,
-        34257,
-        34258,
-        34286,
-        34287,
-        34288,
-        34289,
-        34290,
-        34318,
-        34319,
-        34320,
-        34321,
-        34350,
-        34351,
-        34352,
-        34383,
-        34384,
-        34415,
-        34447,
-        34449,
-        34479,
-        34511,
-        34543,
-        34544,
-        34545
-      ],
-      "points": 114,
-      "box_points": 198,
-      "box_raw_class_points": {
-        "27": 84,
-        "11": 114
-      },
-      "camera": {
-        "camera_token": "9b77275c773144e5a4b73751a4700702",
-        "original": "samples/CAM_BACK_LEFT/n015-2018-10-08-16-03-24+0800__CAM_BACK_LEFT__1538985896947423.jpg",
-        "crop": [
-          890,
-          446,
-          1170,
-          864
-        ],
-        "calibrated_sensor_token": "90d02536c818406187e9a677935ca531",
-        "ego_pose_token": "9b77275c773144e5a4b73751a4700702",
-        "timestamp": 1538985896947423
-      },
-      "object_group": "办公椅",
-      "appearance": "无人办公转椅",
-      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "8d2968c0b96347c59b94592cd8da4611"
+      "array_key": "280c02d06fbc4f8997345601852e5426",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 52,
@@ -8958,7 +6837,9 @@
       "object_group": "垃圾容器",
       "appearance": "大型垃圾箱",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "e778c234539b4257abfc25183d73d2e7"
+      "array_key": "e778c234539b4257abfc25183d73d2e7",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 53,
@@ -9094,7 +6975,9 @@
       "object_group": "垃圾容器",
       "appearance": "开口塑料垃圾桶",
       "selection_note": "包括桶身及内衬袋，不拆分为两个实例。",
-      "array_key": "fc7356d62e5642179333fcd13de13b48"
+      "array_key": "fc7356d62e5642179333fcd13de13b48",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 54,
@@ -9274,7 +7157,9 @@
       "object_group": "垃圾容器",
       "appearance": "开口塑料垃圾桶",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "e9fb4d300e8a4d41b575739274680d26"
+      "array_key": "e9fb4d300e8a4d41b575739274680d26",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 55,
@@ -9598,7 +7483,9 @@
       "object_group": "工具箱",
       "appearance": "带脚轮金属工具箱",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "1b5e444a50854eeeb36d72b44647d38a"
+      "array_key": "1b5e444a50854eeeb36d72b44647d38a",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 56,
@@ -9688,7 +7575,9 @@
       "object_group": "搬运车",
       "appearance": "两轮手扶搬运车",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "09a4d8865a934616b6ee43143470fb5e"
+      "array_key": "09a4d8865a934616b6ee43143470fb5e",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 58,
@@ -9852,7 +7741,9 @@
       "object_group": "搬运车",
       "appearance": "料斗式搬运车",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "1ac3d6c9c4e44900a04c880fcba8a558"
+      "array_key": "1ac3d6c9c4e44900a04c880fcba8a558",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 66,
@@ -9943,7 +7834,9 @@
       "object_group": "搬运车",
       "appearance": "购物小拉车",
       "selection_note": "原图有人推拉；保留的是目标标签与实例框交集，不提取整幅图中的人。",
-      "array_key": "13130e479a3c4ddcaba9c09520d7d47a"
+      "array_key": "13130e479a3c4ddcaba9c09520d7d47a",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 68,
@@ -10052,7 +7945,9 @@
       "object_group": "搬运车",
       "appearance": "两轮手扶搬运车",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "897ff83e01d14ae4972e3b6779c9d2c3"
+      "array_key": "897ff83e01d14ae4972e3b6779c9d2c3",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     },
     {
       "review_id": 70,
@@ -10142,7 +8037,9 @@
       "object_group": "搬运车",
       "appearance": "购物小拉车",
       "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
-      "array_key": "ecf7d2d3b0984505a33fc612ac350e6b"
+      "array_key": "ecf7d2d3b0984505a33fc612ac350e6b",
+      "admission": "auxiliary_anomaly",
+      "admission_reason": "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
     }
   ],
   "deferred": [
@@ -10299,6 +8196,2145 @@
       "sample_token": "ecc9c875abe34151820fa427141d7471",
       "token": "c95b39d7eeb24d1089cd0d4c9c8b9905",
       "reason": "独立箱式设施可辨，疑似报刊取阅箱；本轮未核定此类固定设施作为供体的语义边界。"
+    }
+  ],
+  "excluded": [
+    {
+      "review_id": 1,
+      "instance": "e007ce82f5494e0992b0c714ba5a8f49",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0764",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "sample_token": "a73673f56b34442eacd0b71ecb014e4c",
+      "token": "88002c29a05940fa92d70e9c72e08dfd",
+      "annotation_token": "2ccde811d0374a7bbd0eb924b88362ee",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657292048997.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/88002c29a05940fa92d70e9c72e08dfd_lidarseg.bin",
+      "pose": [
+        [
+          -0.6592503350865276,
+          0.7511651994628314,
+          0.03376149884507209,
+          709.638621285946
+        ],
+        [
+          -0.7519216606405166,
+          -0.6586839624240212,
+          -0.02737250271712166,
+          601.3442252636007
+        ],
+        [
+          0.0016768863733425078,
+          -0.043431333865718826,
+          0.9990550071396146,
+          1.8429232489675003
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          716.623,
+          605.77,
+          0.483
+        ],
+        "rotation": [
+          0.9247940834806476,
+          0.0,
+          0.0,
+          -0.3804680054343451
+        ],
+        "size": [
+          0.525,
+          1.37,
+          0.819
+        ]
+      },
+      "point_slots": [
+        1394,
+        1455,
+        1552,
+        1553,
+        1584,
+        1585,
+        1616,
+        1617,
+        1648,
+        1649,
+        1681,
+        1713,
+        1745,
+        1776,
+        1777,
+        1807,
+        1808,
+        1809,
+        1840,
+        1841,
+        1872,
+        1873,
+        1904,
+        1905,
+        1935,
+        1936,
+        1937,
+        1968,
+        1969,
+        2001,
+        2033,
+        2065,
+        2097,
+        2129,
+        2161
+      ],
+      "points": 35,
+      "box_points": 35,
+      "box_raw_class_points": {
+        "1": 35
+      },
+      "camera": {
+        "camera_token": "5a7dbf67317a45a0aba3e7088881ce63",
+        "original": "samples/CAM_FRONT_LEFT/n008-2018-08-30-15-16-55-0400__CAM_FRONT_LEFT__1535657292004799.jpg",
+        "crop": [
+          134,
+          536,
+          613,
+          773
+        ],
+        "calibrated_sensor_token": "f2321bda91034c4ea5e1ede4815572a7",
+        "ego_pose_token": "5a7dbf67317a45a0aba3e7088881ce63",
+        "timestamp": 1535657292004799
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "e007ce82f5494e0992b0c714ba5a8f49",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 2,
+      "instance": "07dffbc7a71e45318784091fb0c7ffa5",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0533",
+      "log_token": "6c12081a828548b6b0a36f12d53be6ca",
+      "sample_token": "4ffa42f71f3b425da4fa89afe2c60046",
+      "token": "5c0ffa4395cf4a7593070afbe51d82a1",
+      "annotation_token": "73b17e4f97b746d08eef298654ea7362",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-52-26-0400__LIDAR_TOP__1535659117949530.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/5c0ffa4395cf4a7593070afbe51d82a1_lidarseg.bin",
+      "pose": [
+        [
+          0.6465745318396148,
+          -0.7622447602438439,
+          -0.030402306774125164,
+          641.9019932413484
+        ],
+        [
+          0.7627777604650963,
+          0.645447414389056,
+          0.03959448696895829,
+          535.2899991168566
+        ],
+        [
+          -0.01055759992780964,
+          -0.04879099034952393,
+          0.9987532109307469,
+          1.8376058635751193
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          637.466,
+          528.342,
+          0.407
+        ],
+        "rotation": [
+          0.9297443574233685,
+          0.0,
+          0.0,
+          -0.3682056895804404
+        ],
+        "size": [
+          0.461,
+          1.291,
+          0.817
+        ]
+      },
+      "point_slots": [
+        33710,
+        33742,
+        33743,
+        33775,
+        33807,
+        33838,
+        33839,
+        33840,
+        33871,
+        33872,
+        33903,
+        33904,
+        33935,
+        33936,
+        33967,
+        33968,
+        33999,
+        34000,
+        34031,
+        34032,
+        34063,
+        34064,
+        34095,
+        34096,
+        34126,
+        34127,
+        34128,
+        34158,
+        34159,
+        34160,
+        34191,
+        34192,
+        34221,
+        34223,
+        34224,
+        34253,
+        34254,
+        34256,
+        34285,
+        34286,
+        34317,
+        34318,
+        34349,
+        34381,
+        34413
+      ],
+      "points": 45,
+      "box_points": 65,
+      "box_raw_class_points": {
+        "27": 18,
+        "1": 45,
+        "26": 2
+      },
+      "camera": {
+        "camera_token": "5497f7f4c41b43749ca81a1f3e7d5f6e",
+        "original": "samples/CAM_BACK_LEFT/n008-2018-08-30-15-52-26-0400__CAM_BACK_LEFT__1535659117947405.jpg",
+        "crop": [
+          877,
+          588,
+          1258,
+          830
+        ],
+        "calibrated_sensor_token": "f9a4078b95e949c09884a0e0a984483b",
+        "ego_pose_token": "5497f7f4c41b43749ca81a1f3e7d5f6e",
+        "timestamp": 1535659117947405
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "07dffbc7a71e45318784091fb0c7ffa5",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 3,
+      "instance": "9db3f2a78daa47e2a2378752275e9738",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0761",
+      "log_token": "3a43824b84534c98bda1d07548db5817",
+      "sample_token": "0bc44cd3a2da4cbe819009de41c06f2c",
+      "token": "7a9bd5d03fa04c49bc65f084076145e1",
+      "annotation_token": "4130444887b4429f93aa90f67ed6d1c0",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-16-55-0400__LIDAR_TOP__1535657199198666.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/7a9bd5d03fa04c49bc65f084076145e1_lidarseg.bin",
+      "pose": [
+        [
+          0.8815284489805936,
+          0.46932295793908546,
+          0.05141551117296686,
+          343.8783054598629
+        ],
+        [
+          -0.47112112281219976,
+          0.8815301155027512,
+          0.030814657257212427,
+          739.0658394240622
+        ],
+        [
+          -0.03086229541110441,
+          -0.05138693037159038,
+          0.9982018343546278,
+          1.834352915230435
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          352.641,
+          737.146,
+          0.466
+        ],
+        "rotation": [
+          -0.5418475740594872,
+          0.0,
+          0.0,
+          0.8404767733172931
+        ],
+        "size": [
+          0.456,
+          1.231,
+          0.862
+        ]
+      },
+      "point_slots": [
+        15316,
+        15348,
+        15442,
+        15473,
+        15474,
+        15475,
+        15505,
+        15506,
+        15507,
+        15537,
+        15538,
+        15539,
+        15569,
+        15570,
+        15571,
+        15572,
+        15601,
+        15603,
+        15604,
+        15633,
+        15635,
+        15665,
+        15667,
+        15697,
+        15698,
+        15699,
+        15729,
+        15730,
+        15731,
+        15762,
+        15763,
+        15794,
+        15795,
+        15825,
+        15826,
+        15827,
+        15857,
+        15859,
+        15889,
+        15892,
+        15923,
+        15924,
+        15956
+      ],
+      "points": 43,
+      "box_points": 49,
+      "box_raw_class_points": {
+        "26": 6,
+        "1": 43
+      },
+      "camera": {
+        "camera_token": "d6b3c75cd23043fd9ee210e1a0629295",
+        "original": "samples/CAM_FRONT_RIGHT/n008-2018-08-30-15-16-55-0400__CAM_FRONT_RIGHT__1535657199170482.jpg",
+        "crop": [
+          1036,
+          458,
+          1415,
+          691
+        ],
+        "calibrated_sensor_token": "b7aee9301bef4af59205d7ff429f379d",
+        "ego_pose_token": "d6b3c75cd23043fd9ee210e1a0629295",
+        "timestamp": 1535657199170482
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "9db3f2a78daa47e2a2378752275e9738",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 4,
+      "instance": "79b7b1a356fb4ff198311bcf9408d04d",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0596",
+      "log_token": "8e0ced20b9d847608afcfbc23056460e",
+      "sample_token": "b75a7db3198f40d39d277621522372f3",
+      "token": "aec4185253544fe6b6719456977ebf66",
+      "annotation_token": "098e1ed8a7d1407ba23697d7788c767f",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-09-18-13-41-50-0400__LIDAR_TOP__1537293209649070.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/aec4185253544fe6b6719456977ebf66_lidarseg.bin",
+      "pose": [
+        [
+          -0.8755819639702116,
+          -0.48160433507686673,
+          -0.037596393513693656,
+          1447.1201256738282
+        ],
+        [
+          0.48268522024373517,
+          -0.8753356541225383,
+          -0.028327915209648426,
+          1262.7364964313406
+        ],
+        [
+          -0.0192666169403008,
+          -0.042950635117972945,
+          0.9988914057166767,
+          1.84317254482391
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          1452.301,
+          1261.698,
+          0.52
+        ],
+        "rotation": [
+          0.2933896695019586,
+          0.0,
+          0.0,
+          0.955992940261345
+        ],
+        "size": [
+          0.291,
+          0.904,
+          0.644
+        ]
+      },
+      "point_slots": [
+        32748,
+        32906,
+        32907,
+        32939,
+        32968,
+        32970,
+        32971,
+        33000,
+        33001,
+        33002,
+        33003,
+        33004,
+        33032,
+        33034,
+        33035,
+        33036,
+        33065,
+        33066,
+        33067,
+        33068,
+        33097,
+        33098,
+        33099,
+        33100,
+        33131,
+        33132,
+        33133,
+        33161,
+        33163,
+        33164,
+        33165,
+        33193,
+        33194,
+        33195,
+        33196,
+        33225
+      ],
+      "points": 36,
+      "box_points": 37,
+      "box_raw_class_points": {
+        "1": 36,
+        "26": 1
+      },
+      "camera": {
+        "camera_token": "7a6c5a43b82a47208f7ed55b1b1208fd",
+        "original": "samples/CAM_BACK_LEFT/n008-2018-09-18-13-41-50-0400__CAM_BACK_LEFT__1537293209647405.jpg",
+        "crop": [
+          646,
+          622,
+          907,
+          900
+        ],
+        "calibrated_sensor_token": "7a652698512247beb05c494c52f9105e",
+        "ego_pose_token": "7a6c5a43b82a47208f7ed55b1b1208fd",
+        "timestamp": 1537293209647405
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "79b7b1a356fb4ff198311bcf9408d04d",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 5,
+      "instance": "7541b30197a342dbb0daa9ce16cdcdde",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0544",
+      "log_token": "6c12081a828548b6b0a36f12d53be6ca",
+      "sample_token": "16764683ab72412d949c752f9397a7ff",
+      "token": "8888bb482b9446578a2a6d0650d999e0",
+      "annotation_token": "e250e0e7ecbe460a8575787508ae8601",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-52-26-0400__LIDAR_TOP__1535659506947720.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/8888bb482b9446578a2a6d0650d999e0_lidarseg.bin",
+      "pose": [
+        [
+          0.7899494969537725,
+          0.6116448990289051,
+          0.043247077986872245,
+          1050.5804086678734
+        ],
+        [
+          -0.612750682086176,
+          0.7900547925245335,
+          0.01870899280941871,
+          764.6023492523959
+        ],
+        [
+          -0.022724301208361247,
+          -0.04127883599300207,
+          0.9988892149951639,
+          1.8446931175954877
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          1057.862,
+          767.57,
+          0.364
+        ],
+        "rotation": [
+          0.9154941455201643,
+          0.0,
+          0.0,
+          -0.40233129323768035
+        ],
+        "size": [
+          0.405,
+          1.116,
+          0.697
+        ]
+      },
+      "point_slots": [
+        11345,
+        11377,
+        11408,
+        11409,
+        11440,
+        11441,
+        11442,
+        11473,
+        11474,
+        11505,
+        11506,
+        11537,
+        11538,
+        11569,
+        11570,
+        11600,
+        11601,
+        11602,
+        11632,
+        11633,
+        11634,
+        11665,
+        11666,
+        11697,
+        11698,
+        11729,
+        11730,
+        11761,
+        11762,
+        11792,
+        11794,
+        11826
+      ],
+      "points": 32,
+      "box_points": 32,
+      "box_raw_class_points": {
+        "1": 32
+      },
+      "camera": {
+        "camera_token": "499c7cccbcbf4b3dbf781a43b8d5d161",
+        "original": "samples/CAM_FRONT_RIGHT/n008-2018-08-30-15-52-26-0400__CAM_FRONT_RIGHT__1535659506920482.jpg",
+        "crop": [
+          0,
+          598,
+          318,
+          791
+        ],
+        "calibrated_sensor_token": "54b720416082407b8c3df4ac2b5adb39",
+        "ego_pose_token": "499c7cccbcbf4b3dbf781a43b8d5d161",
+        "timestamp": 1535659506920482
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "7541b30197a342dbb0daa9ce16cdcdde",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 6,
+      "instance": "11330dfdc86e4030a22b9d80350b0bf0",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0527",
+      "log_token": "6c12081a828548b6b0a36f12d53be6ca",
+      "sample_token": "69c7037cf1804dffb4b7a5e39feb1eae",
+      "token": "a35ae1f704204b6f8ec4bdabd3b4a8e4",
+      "annotation_token": "462cea8ca00f40188834d8fb5e231329",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-30-15-52-26-0400__LIDAR_TOP__1535658906449368.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/a35ae1f704204b6f8ec4bdabd3b4a8e4_lidarseg.bin",
+      "pose": [
+        [
+          -0.7710932097572846,
+          -0.6358353670200546,
+          -0.03359535552246888,
+          1115.1797303068174
+        ],
+        [
+          0.6367140520748364,
+          -0.7702774099709379,
+          -0.03560797072154568,
+          589.4093676431617
+        ],
+        [
+          -0.0032369363063268104,
+          -0.048847699382225954,
+          0.9988009934458478,
+          1.8376011572501907
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          1122.925,
+          582.034,
+          0.352
+        ],
+        "rotation": [
+          0.9106137480885772,
+          0.0,
+          0.0,
+          0.4132585169020394
+        ],
+        "size": [
+          0.672,
+          1.197,
+          0.718
+        ]
+      },
+      "point_slots": [
+        273,
+        400,
+        432,
+        464,
+        496,
+        561,
+        593,
+        625,
+        656,
+        657,
+        688,
+        689,
+        720,
+        721,
+        752,
+        753,
+        754,
+        784,
+        785,
+        786,
+        816,
+        818
+      ],
+      "points": 22,
+      "box_points": 22,
+      "box_raw_class_points": {
+        "1": 22
+      },
+      "camera": {
+        "camera_token": "46a4fa2121ce46478f3bac9696f940e4",
+        "original": "samples/CAM_BACK_LEFT/n008-2018-08-30-15-52-26-0400__CAM_BACK_LEFT__1535658906447405.jpg",
+        "crop": [
+          1188,
+          583,
+          1529,
+          745
+        ],
+        "calibrated_sensor_token": "2aa4de65c4e645539bc2351e8692e3f1",
+        "ego_pose_token": "46a4fa2121ce46478f3bac9696f940e4",
+        "timestamp": 1535658906447405
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "11330dfdc86e4030a22b9d80350b0bf0",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 7,
+      "instance": "e70fcc9111714e38b357bfcf59f734f8",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0213",
+      "log_token": "ab1e1b004548466f86b31f879a2d9e50",
+      "sample_token": "eacb994937d845f682f1b90833dba107",
+      "token": "fcab23956f154228bee74c165bf7d08d",
+      "annotation_token": "f75432eb9074485c9e3ccc14dae1fc4c",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-07-26-12-13-50-0400__LIDAR_TOP__1532622141297218.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/fcab23956f154228bee74c165bf7d08d_lidarseg.bin",
+      "pose": [
+        [
+          -0.541173054148037,
+          0.840171184736214,
+          0.035271884030103735,
+          2072.924199272049
+        ],
+        [
+          -0.8408680376159057,
+          -0.5402437909198735,
+          -0.03282666124509379,
+          955.5741638732156
+        ],
+        [
+          -0.008524598527915418,
+          -0.04742390443089953,
+          0.9988384776871919,
+          1.8389842721489726
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          2070.358,
+          949.485,
+          0.413
+        ],
+        "rotation": [
+          0.20185255757310352,
+          0.0,
+          0.0,
+          0.9794159203327241
+        ],
+        "size": [
+          0.363,
+          0.92,
+          0.47
+        ]
+      },
+      "point_slots": [
+        15982,
+        15983,
+        16014,
+        16015,
+        16046,
+        16047,
+        16078,
+        16079,
+        16110,
+        16111,
+        16143,
+        16175,
+        16206,
+        16207,
+        16238,
+        16239,
+        16270,
+        16271,
+        16302,
+        16303,
+        16334,
+        16335,
+        16366,
+        16367,
+        16399,
+        16431,
+        16432,
+        16464
+      ],
+      "points": 28,
+      "box_points": 28,
+      "box_raw_class_points": {
+        "1": 28
+      },
+      "camera": {
+        "camera_token": "bcf3c15864484167b0f7e7cc0fcb32b0",
+        "original": "samples/CAM_FRONT_RIGHT/n008-2018-07-26-12-13-50-0400__CAM_FRONT_RIGHT__1532622141270482.jpg",
+        "crop": [
+          1294,
+          600,
+          1596,
+          766
+        ],
+        "calibrated_sensor_token": "409c9c9942ab421eb99812391d431be0",
+        "ego_pose_token": "bcf3c15864484167b0f7e7cc0fcb32b0",
+        "timestamp": 1532622141270482
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "e70fcc9111714e38b357bfcf59f734f8",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 8,
+      "instance": "00134739225945f1839a372302a95a04",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0213",
+      "log_token": "ab1e1b004548466f86b31f879a2d9e50",
+      "sample_token": "07c8878f8f8c442998e93dec74829c41",
+      "token": "e18105a5fe8543c9a61764e9abddc39f",
+      "annotation_token": "0f7cec08676544bfb82c4b4bb7ccf8c7",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-07-26-12-13-50-0400__LIDAR_TOP__1532622149799538.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/e18105a5fe8543c9a61764e9abddc39f_lidarseg.bin",
+      "pose": [
+        [
+          -0.5324801878963837,
+          0.845565338417417,
+          0.03852412185723055,
+          2115.914372374033
+        ],
+        [
+          -0.8463976537684036,
+          -0.5314319167269884,
+          -0.034512745170745485,
+          928.7744596063003
+        ],
+        [
+          -0.008709833131203371,
+          -0.050984079386786584,
+          0.9986614854173103,
+          1.8354489962538874
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          2113.901,
+          923.686,
+          0.325
+        ],
+        "rotation": [
+          0.10363450056446145,
+          0.0,
+          0.0,
+          0.9946154484486729
+        ],
+        "size": [
+          0.224,
+          0.426,
+          0.397
+        ]
+      },
+      "point_slots": [
+        15915,
+        15916,
+        15947,
+        15948,
+        15979,
+        15980,
+        16011,
+        16012,
+        16043,
+        16044,
+        16075,
+        16076,
+        16107,
+        16108,
+        16139,
+        16140,
+        16171,
+        16172,
+        16173,
+        16203,
+        16204,
+        16235,
+        16237,
+        16267,
+        16299
+      ],
+      "points": 25,
+      "box_points": 25,
+      "box_raw_class_points": {
+        "1": 25
+      },
+      "camera": {
+        "camera_token": "8501a5b998f24e109be6423220659944",
+        "original": "samples/CAM_FRONT_RIGHT/n008-2018-07-26-12-13-50-0400__CAM_FRONT_RIGHT__1532622149770484.jpg",
+        "crop": [
+          1312,
+          701,
+          1579,
+          880
+        ],
+        "calibrated_sensor_token": "409c9c9942ab421eb99812391d431be0",
+        "ego_pose_token": "8501a5b998f24e109be6423220659944",
+        "timestamp": 1532622149770484
+      },
+      "object_group": "动物",
+      "appearance": "鸥类",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "00134739225945f1839a372302a95a04",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 11,
+      "instance": "c3933031be6e48fbb9cceeccaa44b85e",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0871",
+      "log_token": "65629cfc47fe489fabc497ead466a313",
+      "sample_token": "af0165a369544bb28602bf036b04908b",
+      "token": "34012b27ba494430b78d5f220d4881bb",
+      "annotation_token": "c0df36d137f946869288e1368eec107f",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-09-18-14-54-39-0400__LIDAR_TOP__1537297011399131.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/34012b27ba494430b78d5f220d4881bb_lidarseg.bin",
+      "pose": [
+        [
+          -0.6552655110551672,
+          0.7550299409470113,
+          0.023598692657928338,
+          760.2919340492787
+        ],
+        [
+          -0.755293593144078,
+          -0.6543336218463879,
+          -0.03713622863049423,
+          1514.740520486243
+        ],
+        [
+          -0.012597546472174755,
+          -0.042158031203331794,
+          0.9990315321489809,
+          1.8441097817211696
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          750.189,
+          1510.655,
+          0.338
+        ],
+        "rotation": [
+          0.9067645732951441,
+          0.0,
+          0.0,
+          -0.4216372950971902
+        ],
+        "size": [
+          0.406,
+          1.26,
+          0.689
+        ]
+      },
+      "point_slots": [
+        19697,
+        19825,
+        19857,
+        19889,
+        19890,
+        19921,
+        19953,
+        19985,
+        20017,
+        20049,
+        20081,
+        20113,
+        20145
+      ],
+      "points": 13,
+      "box_points": 19,
+      "box_raw_class_points": {
+        "26": 6,
+        "1": 13
+      },
+      "camera": {
+        "camera_token": "7ebc61a1a32648d4bcc050d7f52fa44e",
+        "original": "samples/CAM_BACK_RIGHT/n008-2018-09-18-14-54-39-0400__CAM_BACK_RIGHT__1537297011378113.jpg",
+        "crop": [
+          846,
+          525,
+          1078,
+          647
+        ],
+        "calibrated_sensor_token": "15861a114cd24d1fbf908d3c7fc35714",
+        "ego_pose_token": "7ebc61a1a32648d4bcc050d7f52fa44e",
+        "timestamp": 1537297011378113
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "c3933031be6e48fbb9cceeccaa44b85e",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 12,
+      "instance": "9349340c51ba47d999494e11fbea4aa7",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0370",
+      "log_token": "f8699afb7a2247e38549e4d250b4581b",
+      "sample_token": "991a62cba1b641fea2ba0cce9f3d79ad",
+      "token": "53199195cbdd44a7aeb2e7960150c633",
+      "annotation_token": "34b73c267a1f466fb8296b689d083b7f",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n015-2018-08-03-15-00-36+0800__LIDAR_TOP__1533280144200294.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/53199195cbdd44a7aeb2e7960150c633_lidarseg.bin",
+      "pose": [
+        [
+          0.549779061892208,
+          -0.8348286463383517,
+          -0.02835691023011753,
+          519.2434984297497
+        ],
+        [
+          0.8352867539252875,
+          0.5497006825822577,
+          0.01118920397331862,
+          871.8389262759484
+        ],
+        [
+          0.006246744902770122,
+          -0.029837741561237325,
+          0.9995352356753837,
+          1.8347939386585126
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          513.47,
+          871.198,
+          0.194
+        ],
+        "rotation": [
+          0.8894961384601621,
+          0.0,
+          0.0,
+          -0.456942687505184
+        ],
+        "size": [
+          0.322,
+          0.512,
+          0.417
+        ]
+      },
+      "point_slots": [
+        4973,
+        5004,
+        5005,
+        5036,
+        5037,
+        5068,
+        5069,
+        5100,
+        5101,
+        5133,
+        5165,
+        5197,
+        5198
+      ],
+      "points": 13,
+      "box_points": 17,
+      "box_raw_class_points": {
+        "1": 13,
+        "24": 4
+      },
+      "camera": {
+        "camera_token": "015b8a7759144e2db86816c29c2277d0",
+        "original": "samples/CAM_FRONT_LEFT/n015-2018-08-03-15-00-36+0800__CAM_FRONT_LEFT__1533280144154844.jpg",
+        "crop": [
+          1176,
+          708,
+          1332,
+          869
+        ],
+        "calibrated_sensor_token": "3cccbebee6064ddd9eb5ac30ac73f2ea",
+        "ego_pose_token": "015b8a7759144e2db86816c29c2277d0",
+        "timestamp": 1533280144154844
+      },
+      "object_group": "动物",
+      "appearance": "公鸡",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "9349340c51ba47d999494e11fbea4aa7",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 13,
+      "instance": "37953310c094473d9fb3ecb3054652f2",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0891",
+      "log_token": "65629cfc47fe489fabc497ead466a313",
+      "sample_token": "581b52155aae4123abff0d81bb51a6d5",
+      "token": "61495fc25ff24d649a48538ceccd2e86",
+      "annotation_token": "c3b6d84f333742749bc5518037a6c101",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-09-18-14-54-39-0400__LIDAR_TOP__1537297558400199.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/61495fc25ff24d649a48538ceccd2e86_lidarseg.bin",
+      "pose": [
+        [
+          0.8216076998157552,
+          -0.5692510894191295,
+          -0.030232181505775363,
+          1184.774011865237
+        ],
+        [
+          0.5699327628777119,
+          0.8213685951295641,
+          0.023027738348876343,
+          1670.7771142979507
+        ],
+        [
+          0.011723199309144174,
+          -0.03615007787018636,
+          0.9992776083090914,
+          1.849833306035647
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          1201.805,
+          1673.819,
+          0.673
+        ],
+        "rotation": [
+          -0.6524324100867489,
+          0.0,
+          0.0,
+          0.757846917436758
+        ],
+        "size": [
+          0.654,
+          1.213,
+          0.836
+        ]
+      },
+      "point_slots": [
+        19507,
+        19539,
+        19540,
+        19571,
+        19602,
+        19603,
+        19634,
+        19635,
+        19666,
+        19667,
+        19699,
+        19731,
+        19763,
+        19795
+      ],
+      "points": 14,
+      "box_points": 14,
+      "box_raw_class_points": {
+        "1": 14
+      },
+      "camera": {
+        "camera_token": "35b226e99fef40beb31e8772b962299b",
+        "original": "samples/CAM_BACK_RIGHT/n008-2018-09-18-14-54-39-0400__CAM_BACK_RIGHT__1537297558378113.jpg",
+        "crop": [
+          797,
+          480,
+          954,
+          629
+        ],
+        "calibrated_sensor_token": "6ce54e94515341d4b5ecc0344c61799c",
+        "ego_pose_token": "35b226e99fef40beb31e8772b962299b",
+        "timestamp": 1537297558378113
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "37953310c094473d9fb3ecb3054652f2",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 14,
+      "instance": "2b360adeda0943c39a786030762c765d",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0816",
+      "log_token": "246e7da6bb344941bac92be421a545e2",
+      "sample_token": "6faf0107396a42c8958a677366d87afe",
+      "token": "6c95937bd337439c9a19a327f9556bc7",
+      "annotation_token": "9c097ec76add444e9ca726d5cc863a35",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-09-18-15-26-58-0400__LIDAR_TOP__1537299235698178.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/6c95937bd337439c9a19a327f9556bc7_lidarseg.bin",
+      "pose": [
+        [
+          0.5820765226632234,
+          0.8127745099028221,
+          0.02417680327334205,
+          1819.1634064636023
+        ],
+        [
+          -0.8130229478636893,
+          0.582231114901128,
+          0.0007842754787411834,
+          1217.4179598863616
+        ],
+        [
+          -0.01343904800672051,
+          -0.02011280421068875,
+          0.9997073907376378,
+          1.8652213043014783
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          1825.42,
+          1214.035,
+          0.532
+        ],
+        "rotation": [
+          0.8886412462714912,
+          0.0,
+          0.0,
+          0.4586030259658683
+        ],
+        "size": [
+          0.496,
+          0.54,
+          0.488
+        ]
+      },
+      "point_slots": [
+        14609,
+        14640,
+        14672,
+        14704,
+        14736,
+        14768,
+        14800,
+        14832,
+        14864,
+        14896
+      ],
+      "points": 10,
+      "box_points": 21,
+      "box_raw_class_points": {
+        "26": 11,
+        "1": 10
+      },
+      "camera": {
+        "camera_token": "08f30e6d6c0c4588922490c249eb8319",
+        "original": "samples/CAM_FRONT_RIGHT/n008-2018-09-18-15-26-58-0400__CAM_FRONT_RIGHT__1537299235670482.jpg",
+        "crop": [
+          927,
+          581,
+          1095,
+          704
+        ],
+        "calibrated_sensor_token": "ef2fadb6061d4df492236f7d9645ba7a",
+        "ego_pose_token": "08f30e6d6c0c4588922490c249eb8319",
+        "timestamp": 1537299235670482
+      },
+      "object_group": "动物",
+      "appearance": "鸥类",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "2b360adeda0943c39a786030762c765d",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 15,
+      "instance": "6497b7daa97c476ca2c6c282fdb97bce",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0395",
+      "log_token": "efa31cf3cd2f452789ca7f3e7541ea69",
+      "sample_token": "8533366dd0a147318186c3295846004f",
+      "token": "916ca4f3c62242108fbaad59eec1b18e",
+      "annotation_token": "ef74658906274659aaecc63ca1df2cd4",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-31-11-56-46-0400__LIDAR_TOP__1535731299146963.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/916ca4f3c62242108fbaad59eec1b18e_lidarseg.bin",
+      "pose": [
+        [
+          0.864954633098705,
+          0.49986238424441676,
+          0.044621513853427795,
+          528.3222738119712
+        ],
+        [
+          -0.5014128917597613,
+          0.8644887834918513,
+          0.035274001671098135,
+          1086.1268521501306
+        ],
+        [
+          -0.02094265165155793,
+          -0.052884213469293284,
+          0.9983810221090621,
+          1.8332841998021077
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          534.943,
+          1085.383,
+          0.256
+        ],
+        "rotation": [
+          -0.5060337641211663,
+          0.0,
+          0.0,
+          0.862513669207256
+        ],
+        "size": [
+          0.193,
+          0.548,
+          0.301
+        ]
+      },
+      "point_slots": [
+        14767,
+        14799,
+        14831,
+        14863,
+        14895,
+        14927,
+        14958,
+        14959,
+        14990,
+        14991,
+        15023
+      ],
+      "points": 11,
+      "box_points": 11,
+      "box_raw_class_points": {
+        "1": 11
+      },
+      "camera": {
+        "camera_token": "bdb372448fdf443b917810481e9b7d27",
+        "original": "samples/CAM_FRONT_RIGHT/n008-2018-08-31-11-56-46-0400__CAM_FRONT_RIGHT__1535731299120482.jpg",
+        "crop": [
+          982,
+          642,
+          1140,
+          768
+        ],
+        "calibrated_sensor_token": "bd1184788d0c4b5cb85bd8e3d224ee9c",
+        "ego_pose_token": "bdb372448fdf443b917810481e9b7d27",
+        "timestamp": 1535731299120482
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "6497b7daa97c476ca2c6c282fdb97bce",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 16,
+      "instance": "646d23d87cb54d4aa882eb5cb45014cf",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0238",
+      "log_token": "3313a6a85b264e4c86ee44d6e6329cf3",
+      "sample_token": "e4606d4d8eb244f2aada8e6e96617f96",
+      "token": "17dcc42816a94845979ab6188e33d88e",
+      "annotation_token": "5accd8b61940456e8805a01ee6071a8e",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-07-27-12-07-38-0400__LIDAR_TOP__1532708631049045.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/17dcc42816a94845979ab6188e33d88e_lidarseg.bin",
+      "pose": [
+        [
+          -0.6559780798490066,
+          0.7545615297124734,
+          0.018156448870377647,
+          760.1364608019904
+        ],
+        [
+          -0.7546841051164543,
+          -0.6553216699502727,
+          -0.03170820679512326,
+          1514.9857031443673
+        ],
+        [
+          -0.012027478629665021,
+          -0.0345022719767538,
+          0.9993322435437852,
+          1.8515604759648876
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          771.544,
+          1517.519,
+          0.264
+        ],
+        "rotation": [
+          0.3469274668517982,
+          0.0,
+          0.0,
+          0.9378919621916986
+        ],
+        "size": [
+          0.416,
+          0.916,
+          0.668
+        ]
+      },
+      "point_slots": [
+        3378,
+        3410,
+        3441,
+        3442,
+        3474,
+        3506,
+        3537,
+        3538,
+        3570,
+        3602,
+        3634
+      ],
+      "points": 11,
+      "box_points": 11,
+      "box_raw_class_points": {
+        "1": 11
+      },
+      "camera": {
+        "camera_token": "d346fcbe32b44c17aff6fdd68905e69b",
+        "original": "samples/CAM_FRONT_LEFT/n008-2018-07-27-12-07-38-0400__CAM_FRONT_LEFT__1532708631004799.jpg",
+        "crop": [
+          764,
+          579,
+          917,
+          703
+        ],
+        "calibrated_sensor_token": "eba0f11a250e4aa187dff487087bec47",
+        "ego_pose_token": "d346fcbe32b44c17aff6fdd68905e69b",
+        "timestamp": 1532708631004799
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "646d23d87cb54d4aa882eb5cb45014cf",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 17,
+      "instance": "893613f8e6304e3fba37d3526ffc1af8",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0389",
+      "log_token": "efa31cf3cd2f452789ca7f3e7541ea69",
+      "sample_token": "65f468715f304167b8383546ec4fda29",
+      "token": "fd4b0a3fac0f452797671a5f03b04fd3",
+      "annotation_token": "20d838ba96bb408299997f685910b7a7",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-31-11-56-46-0400__LIDAR_TOP__1535731109147013.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/fd4b0a3fac0f452797671a5f03b04fd3_lidarseg.bin",
+      "pose": [
+        [
+          -0.7642079035653977,
+          -0.6430853658189699,
+          -0.0492695889739443,
+          1151.5902574522834
+        ],
+        [
+          0.6447772539338924,
+          -0.7636145308511305,
+          -0.033987366512821256,
+          892.1141643106275
+        ],
+        [
+          -0.015766196042445443,
+          -0.05774132439154333,
+          0.9982070759716452,
+          1.828555848334129
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          1166.67,
+          887.582,
+          0.47
+        ],
+        "rotation": [
+          0.5993519699978989,
+          0.0,
+          0.0,
+          0.800485612649995
+        ],
+        "size": [
+          0.521,
+          0.938,
+          0.692
+        ]
+      },
+      "point_slots": [
+        32306,
+        32338,
+        32369,
+        32401,
+        32433,
+        32434,
+        32466,
+        32498,
+        32530,
+        32561,
+        32562
+      ],
+      "points": 11,
+      "box_points": 11,
+      "box_raw_class_points": {
+        "1": 11
+      },
+      "camera": {
+        "camera_token": "35d16bdeb02c4d898fecadf30025df6e",
+        "original": "samples/CAM_BACK_LEFT/n008-2018-08-31-11-56-46-0400__CAM_BACK_LEFT__1535731109147405.jpg",
+        "crop": [
+          620,
+          548,
+          771,
+          671
+        ],
+        "calibrated_sensor_token": "3c17f28b9a964c7791bfcca573af5e56",
+        "ego_pose_token": "35d16bdeb02c4d898fecadf30025df6e",
+        "timestamp": 1535731109147405
+      },
+      "object_group": "动物",
+      "appearance": "犬",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "893613f8e6304e3fba37d3526ffc1af8",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 18,
+      "instance": "93c439d8a07244069edd19df80b98311",
+      "category": "animal",
+      "raw_label": 1,
+      "subset": "train",
+      "scene": "scene-0073",
+      "log_token": "7a0fde44c3504eaeb18f9ad83bed65bc",
+      "sample_token": "cbf9f6f096d54c669702cbbc288ed271",
+      "token": "862958fdfd904cf48129cd110c8eec5a",
+      "annotation_token": "7225716d8b40435e85c75e472d78aad1",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-01-15-52-19-0400__LIDAR_TOP__1533153677449055.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/862958fdfd904cf48129cd110c8eec5a_lidarseg.bin",
+      "pose": [
+        [
+          -0.520932507777132,
+          0.8529881973213406,
+          0.03225612455826528,
+          2101.9533143279104
+        ],
+        [
+          -0.8535070987084804,
+          -0.5199540107005514,
+          -0.03425579090670198,
+          937.176599692007
+        ],
+        [
+          -0.01244808399959791,
+          -0.04537578635022169,
+          0.99889242825133,
+          1.8409519447637683
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          2100.857,
+          926.867,
+          0.416
+        ],
+        "rotation": [
+          0.9345589083590606,
+          0.0,
+          0.0,
+          0.3558084411684481
+        ],
+        "size": [
+          0.313,
+          0.581,
+          0.399
+        ]
+      },
+      "point_slots": [
+        14674,
+        14706,
+        14738,
+        14739,
+        14771,
+        14803,
+        14835,
+        14867
+      ],
+      "points": 8,
+      "box_points": 11,
+      "box_raw_class_points": {
+        "1": 8,
+        "27": 3
+      },
+      "camera": {
+        "camera_token": "944a049470ff4f70835ace7dfaf6d6b0",
+        "original": "samples/CAM_FRONT_RIGHT/n008-2018-08-01-15-52-19-0400__CAM_FRONT_RIGHT__1533153677420482.jpg",
+        "crop": [
+          922,
+          527,
+          1057,
+          651
+        ],
+        "calibrated_sensor_token": "dba7471b5cec44278c797887fc4ac7da",
+        "ego_pose_token": "944a049470ff4f70835ace7dfaf6d6b0",
+        "timestamp": 1533153677420482
+      },
+      "object_group": "动物",
+      "appearance": "雁鹅类",
+      "selection_note": "影像支持雁鹅类鸟，未核定物种。",
+      "array_key": "93c439d8a07244069edd19df80b98311",
+      "admission": "excluded",
+      "admission_reason": "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+    },
+    {
+      "review_id": 33,
+      "instance": "763853404bb144d39782ace2c4efac51",
+      "category": "movable_object.debris",
+      "raw_label": 10,
+      "subset": "val",
+      "scene": "scene-0110",
+      "log_token": "53cf9c55dd8644bea67b9f009fc1ee38",
+      "sample_token": "4e50f9842b0745b7a969d46d1ef61143",
+      "token": "eda1da901d7a4db2ab9796a61883a35b",
+      "annotation_token": "c6f5956d08d44604adba49ddbac7988c",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-01-15-16-36-0400__LIDAR_TOP__1533151884547119.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/eda1da901d7a4db2ab9796a61883a35b_lidarseg.bin",
+      "pose": [
+        [
+          -0.5107632795551664,
+          0.8589530532561162,
+          0.036339022552171925,
+          1926.9897593547562
+        ],
+        [
+          -0.8596900643479781,
+          -0.509927372728909,
+          -0.03011756635523748,
+          1046.398828329625
+        ],
+        [
+          -0.007339313279909306,
+          -0.046623243600040734,
+          0.9988855828556097,
+          1.8397862596952281
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          1945.465,
+          1064.653,
+          1.021
+        ],
+        "rotation": [
+          -0.40305019648908547,
+          0.0,
+          0.0,
+          0.9151778729351522
+        ],
+        "size": [
+          2.135,
+          2.355,
+          2.369
+        ]
+      },
+      "point_slots": [
+        1332,
+        1333,
+        1334,
+        1335,
+        1364,
+        1365,
+        1366,
+        1367,
+        1396,
+        1397,
+        1398,
+        1399,
+        1428,
+        1429,
+        1430,
+        1431,
+        1460,
+        1461,
+        1462,
+        1463,
+        1492,
+        1524,
+        1526,
+        1527,
+        1556,
+        1557,
+        1558,
+        1559,
+        1588,
+        1589,
+        1590,
+        1591,
+        1620,
+        1621,
+        1622,
+        1623,
+        1652,
+        1653,
+        1654,
+        1655,
+        1684,
+        1686,
+        1687,
+        1716,
+        1717,
+        1718
+      ],
+      "points": 46,
+      "box_points": 46,
+      "box_raw_class_points": {
+        "10": 46
+      },
+      "camera": {
+        "camera_token": "910804d02734409fa1613c12aadfcbac",
+        "original": "samples/CAM_FRONT_LEFT/n008-2018-08-01-15-16-36-0400__CAM_FRONT_LEFT__1533151884504799.jpg",
+        "crop": [
+          269,
+          400,
+          471,
+          613
+        ],
+        "calibrated_sensor_token": "106cacbd3d7444f38c97b592733178ab",
+        "ego_pose_token": "910804d02734409fa1613c12aadfcbac",
+        "timestamp": 1533151884504799
+      },
+      "object_group": "垃圾容器",
+      "appearance": "大型垃圾箱",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "763853404bb144d39782ace2c4efac51",
+      "admission": "excluded",
+      "admission_reason": "此前从真实数据提取时无法建立可靠地面支撑，不用于移植。"
+    },
+    {
+      "review_id": 34,
+      "instance": "4c3e1c7cf6614036a6ea26503c1a7e65",
+      "category": "movable_object.debris",
+      "raw_label": 10,
+      "subset": "val",
+      "scene": "scene-0092",
+      "log_token": "53cf9c55dd8644bea67b9f009fc1ee38",
+      "sample_token": "e13ec49d20974a01942b83317fcbfa46",
+      "token": "b51e061e16344cf98e5d4e39ab989f1d",
+      "annotation_token": "c72148b490554e98bbaedf5507ca0f1a",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n008-2018-08-01-15-16-36-0400__LIDAR_TOP__1533151080297220.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/b51e061e16344cf98e5d4e39ab989f1d_lidarseg.bin",
+      "pose": [
+        [
+          -0.02187766679530745,
+          -0.9989596854819481,
+          -0.04001142933464191,
+          2123.561227753528
+        ],
+        [
+          0.9994077281031486,
+          -0.020789114138740416,
+          -0.027422723078313897,
+          790.8412404406997
+        ],
+        [
+          0.02656239265007899,
+          -0.04058767688762147,
+          0.9988228470462462,
+          1.8448956991515892
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          2095.75,
+          798.297,
+          0.934
+        ],
+        "rotation": [
+          0.1907747298922339,
+          0.0,
+          0.0,
+          0.9816338433624552
+        ],
+        "size": [
+          2.542,
+          4.553,
+          1.606
+        ]
+      },
+      "point_slots": [
+        10007,
+        10070,
+        10103,
+        10166,
+        10230,
+        10231,
+        10262,
+        10294,
+        10295,
+        10326,
+        10327,
+        10390,
+        10422,
+        10454,
+        10455
+      ],
+      "points": 15,
+      "box_points": 15,
+      "box_raw_class_points": {
+        "10": 15
+      },
+      "camera": {
+        "camera_token": "1ac99b8d1c64468fa320af48dbd3159d",
+        "original": "samples/CAM_FRONT/n008-2018-08-01-15-16-36-0400__CAM_FRONT__1533151080262404.jpg",
+        "crop": [
+          1088,
+          451,
+          1327,
+          595
+        ],
+        "calibrated_sensor_token": "a9a2231d91a04dc48c22cc2b78a5a861",
+        "ego_pose_token": "1ac99b8d1c64468fa320af48dbd3159d",
+        "timestamp": 1533151080262404
+      },
+      "object_group": "垃圾容器",
+      "appearance": "大型垃圾箱",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "4c3e1c7cf6614036a6ea26503c1a7e65",
+      "admission": "excluded",
+      "admission_reason": "此前从真实数据提取时无法建立可靠地面支撑，不用于移植。"
+    },
+    {
+      "review_id": 51,
+      "instance": "8d2968c0b96347c59b94592cd8da4611",
+      "category": "movable_object.pushable_pullable",
+      "raw_label": 11,
+      "subset": "train",
+      "scene": "scene-0851",
+      "log_token": "2f3c08142bc04ac3af6a8cf6c721b816",
+      "sample_token": "ceccf74dd3e341d8b8af167d6021405a",
+      "token": "da1aaf76a1a24a4787d43a1828b55a71",
+      "annotation_token": "4fa6bbafcf4d45028b9d7f036e0cf485",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n015-2018-10-08-16-03-24+0800__LIDAR_TOP__1538985896948129.pcd.bin",
+      "label": "/home/jasongao/Data/Nuscenes/lidarseg/v1.0-trainval/da1aaf76a1a24a4787d43a1828b55a71_lidarseg.bin",
+      "pose": [
+        [
+          -0.1248073238851634,
+          -0.9921216959404273,
+          -0.010847688643861635,
+          2108.7062947407767
+        ],
+        [
+          0.9915436383379684,
+          -0.12432787362687248,
+          -0.037199369765152285,
+          1385.6507872989973
+        ],
+        [
+          0.035557631756460255,
+          -0.015398710456095345,
+          0.9992489852585097,
+          1.8469772769861177
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "box": {
+        "translation": [
+          2109.871,
+          1380.532,
+          0.765
+        ],
+        "rotation": [
+          0.6525481749662503,
+          0.0,
+          0.0,
+          0.7577472397496516
+        ],
+        "size": [
+          0.719,
+          1.007,
+          1.062
+        ]
+      },
+      "point_slots": [
+        14,
+        15,
+        16,
+        47,
+        48,
+        79,
+        111,
+        113,
+        143,
+        175,
+        177,
+        207,
+        209,
+        239,
+        240,
+        33871,
+        33872,
+        33873,
+        33874,
+        33875,
+        33902,
+        33903,
+        33904,
+        33905,
+        33907,
+        33934,
+        33935,
+        33936,
+        33937,
+        33938,
+        33939,
+        33966,
+        33967,
+        33968,
+        33969,
+        33970,
+        33971,
+        33998,
+        33999,
+        34000,
+        34001,
+        34002,
+        34003,
+        34030,
+        34031,
+        34032,
+        34033,
+        34034,
+        34035,
+        34062,
+        34063,
+        34064,
+        34065,
+        34066,
+        34067,
+        34094,
+        34095,
+        34096,
+        34097,
+        34098,
+        34099,
+        34126,
+        34127,
+        34128,
+        34129,
+        34130,
+        34131,
+        34158,
+        34159,
+        34160,
+        34161,
+        34162,
+        34163,
+        34189,
+        34190,
+        34191,
+        34192,
+        34193,
+        34194,
+        34195,
+        34221,
+        34222,
+        34223,
+        34224,
+        34225,
+        34226,
+        34227,
+        34254,
+        34255,
+        34256,
+        34257,
+        34258,
+        34286,
+        34287,
+        34288,
+        34289,
+        34290,
+        34318,
+        34319,
+        34320,
+        34321,
+        34350,
+        34351,
+        34352,
+        34383,
+        34384,
+        34415,
+        34447,
+        34449,
+        34479,
+        34511,
+        34543,
+        34544,
+        34545
+      ],
+      "points": 114,
+      "box_points": 198,
+      "box_raw_class_points": {
+        "27": 84,
+        "11": 114
+      },
+      "camera": {
+        "camera_token": "9b77275c773144e5a4b73751a4700702",
+        "original": "samples/CAM_BACK_LEFT/n015-2018-10-08-16-03-24+0800__CAM_BACK_LEFT__1538985896947423.jpg",
+        "crop": [
+          890,
+          446,
+          1170,
+          864
+        ],
+        "calibrated_sensor_token": "90d02536c818406187e9a677935ca531",
+        "ego_pose_token": "9b77275c773144e5a4b73751a4700702",
+        "timestamp": 1538985896947423
+      },
+      "object_group": "办公椅",
+      "appearance": "无人办公转椅",
+      "selection_note": "原图可辨认目标外观；细分名称为本次图像判读。",
+      "array_key": "8d2968c0b96347c59b94592cd8da4611",
+      "admission": "excluded",
+      "admission_reason": "STU公开论文将椅子列为异常示例；无法确认此供体与目标异常类别不重叠，保守移除。"
     }
   ]
 }

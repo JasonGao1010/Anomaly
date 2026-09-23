@@ -15,7 +15,7 @@ import time
 
 import ijson
 import numpy as np
-from scipy.spatial import Delaunay, QhullError
+from scipy.spatial import ConvexHull, Delaunay, QhullError
 from scipy.spatial.transform import Rotation
 
 from .data import SOURCE_VERSION, identity, nuscenes_mapping, write_json
@@ -181,7 +181,7 @@ def _backgrounds(root, output, workers, records, mapping):
             split=dict(name=split, scenes=sorted(scenes), logs=sorted({r["log_token"] for r in rows})),
             recipe=dict(stage="background", partition="Official nuScenes train/val scenes; disjoint acquisition logs",
                 input="Complete original measured returns; no point removal by semantic label or supervision range",
-                supervision="20 known normal classes within 2.5-50 m; all other points ignored; no positive labels",
+                supervision=f"{sum(r['target'] == 1 for r in mapping)} admitted normal classes within 2.5-50 m; unresolved categories ignored; no positive labels",
                 validation="Normal-field and false-positive analysis only; anomaly metrics require later positive examples"),
             summary=summary)
         manifest["sha256"] = identity(manifest)
@@ -493,7 +493,21 @@ def _visible_attributes(xyzi):
                 intensity_interval=np.quantile(points[:, 3], [.1, .9]).tolist())
 
 
-def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diagnostics=None, match=None):
+def _road_clearance(road, center):
+    """Conservative local measured support proxy, not a mapped lane centre."""
+    relative = road[:, :2] - center
+    local = relative[np.linalg.norm(relative, axis=1) <= 2.5]
+    if len(local) < 3:
+        return -np.inf
+    try:
+        planes = ConvexHull(local).equations
+    except QhullError:
+        return -np.inf
+    return float(np.min(-planes[:, -1] / np.linalg.norm(planes[:, :2], axis=1)))
+
+
+
+def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diagnostics=None, match=None, interior=False):
     """Return a sparse foreground replacement, or None for unsupported placement."""
     transform = np.asarray(record["pose"])
     world = raw[:, :3].astype(float) @ transform[:3, :3].T + transform[:3, 3]
@@ -524,6 +538,9 @@ def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diag
     for candidate in rng.permutation(candidates)[:RECIPE["placement_attempts"]]:
         diagnostics["attempts"] += 1
         center = road[candidate, :2]
+        if interior and _road_clearance(road, center) < 1.:
+            reject("road_edge_or_unobserved_interior")
+            continue
         support = {}
         plane = _ground(road, center, radius + .5, support)
         if plane is None:
@@ -739,7 +756,8 @@ def _catalog(donors):
 
 def _selected_surfaces(root, records, mapping, catalog):
     """Use exactly the reviewed observations, not an unreviewed frame union."""
-    selected = {(x["sample_token"], x["instance"]): x for x in catalog["selected"]}
+    selected = {(x["sample_token"], x["instance"]): x for x in catalog["selected"]
+                if x.get("admission", "auxiliary_anomaly") == "auxiliary_anomaly"}
     source = {r["token"]: r for rows in records.values() for r in rows}
     wanted = {x["sample_token"] for x in selected.values()}
     names = {r["name"]: r["raw"] for r in mapping}
@@ -775,6 +793,87 @@ def _selected_surfaces(root, records, mapping, catalog):
         donors.extend(extracted)
         rejected.update(failures)
     return donors, collision_boxes, dict(rejected)
+
+
+def _control_surfaces(root, records, mapping, workers):
+    """Extract held-apart real normal instances through the same surface builder."""
+    meta = Path(root) / "v1.0-trainval"
+    categories = {r["token"]: r["name"] for r in _rows(meta / "category.json")}
+    instances = {r["token"]: categories[r["category_token"]] for r in _rows(meta / "instance.json")}
+    names = {r["name"]: r["raw"] for r in mapping}
+    allowed = ("human.pedestrian.adult", "vehicle.bicycle", "vehicle.motorcycle", "vehicle.car")
+    source = {r["sample_token"]: r for rows in records.values() for r in rows}
+    annotations, candidates = defaultdict(list), defaultdict(dict)
+    for row in _rows(meta / "sample_annotation.json"):
+        name = instances[row["instance_token"]]
+        if name not in allowed:
+            continue
+        record = source[row["sample_token"]]
+        annotation = dict(row, category=names[name], kind="control", family=name, extract=False)
+        annotations[row["sample_token"]].append(annotation)
+        if row["num_lidar_pts"] >= RECIPE["min_donor_points"]:
+            views = candidates[record["subset"], name].setdefault(row["instance_token"], [])
+            views.append(annotation)
+    wanted = set()
+    for (split, _), pool in candidates.items():
+        # A bounded source-only library, selected before any receiver or score.
+        for token in sorted(pool, key=_seed)[:64 if split == "train" else 24]:
+            for row in sorted(pool[token], key=lambda r: (-r["num_lidar_pts"], r["token"]))[:3]:
+                row["extract"] = True
+                wanted.add(row["sample_token"])
+    scenes = defaultdict(list)
+    for token in sorted(wanted):
+        scenes[source[token]["scene"]].append(source[token])
+    tasks = [(rows, mapping, {r["sample_token"]: annotations[r["sample_token"]] for r in rows})
+             for rows in scenes.values()]
+    donors, rejected = [], Counter()
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        for _, views, failures in executor.map(_scene_donors, tasks):
+            by_instance = defaultdict(list)
+            for donor in views:
+                by_instance[donor["instance"]].append(donor)
+            for views in by_instance.values():
+                donor = min(views, key=lambda d: (-len(d["triangles"]), d["id"]))
+                box = next(r for r in annotations[donor["sample_token"]] if r["instance_token"] == donor["instance"])
+                donor["box_rotation_local"] = np.asarray(donor["basis"]).T @ _pose(box)[:3, :3]
+                donors.append(donor)
+            rejected.update(failures)
+    return donors, dict(rejected)
+
+
+
+def _object_admission(catalog):
+    """Public definitions constrain auxiliary exposure, not hidden target labels."""
+    candidates = catalog["selected"] + catalog.get("excluded", [])
+    for row in candidates:
+        if row["category"] == "animal":
+            reason = "动物不符合本次静止非生命道路障碍模拟；公开规范也不足以确定其STU正常或忽略边界。"
+        elif row["appearance"] == "无人办公转椅":
+            reason = "STU公开论文将椅子列为异常示例；无法确认此供体与目标异常类别不重叠，保守移除。"
+        elif row["review_id"] in (33, 34):
+            reason = "此前从真实数据提取时无法建立可靠地面支撑，不用于移植。"
+        else:
+            reason = None
+        row["admission"] = "excluded" if reason else "auxiliary_anomaly"
+        row["admission_reason"] = reason or "已复核的独立物体；原场景保持忽略，仅明确插入道路后的实测回波作为辅助异常监督，不声称其是STU目标类别。"
+    catalog["selected"] = [r for r in candidates if r["admission"] == "auxiliary_anomaly"]
+    catalog["excluded"] = [r for r in candidates if r["admission"] == "excluded"]
+    catalog["scope"] = "当前辅助异常供体目录；selected参与生成，excluded和deferred仅保存移除理由，不参与训练。"
+    catalog["selection_rule"] = "按公开正常、忽略边界及静止障碍任务核定；19类名称的补集不构成异常定义。"
+    rows = catalog["selected"]
+    catalog["summary"] = dict(selected_instances=len(rows), admitted_instances=len(rows),
+        excluded_instances=len(catalog["excluded"]), deferred_candidates=len(catalog["deferred"]),
+        points=sum(r["points"] for r in rows),
+        points_per_observation_min=min(r["points"] for r in rows),
+        points_per_observation_max=max(r["points"] for r in rows),
+        by_split={s: dict(instances=sum(r["subset"] == s for r in rows),
+                        points=sum(r["points"] for r in rows if r["subset"] == s)) for s in ("train", "val")},
+        by_raw_category=dict(Counter(r["category"] for r in rows)),
+        by_group=dict(Counter(r["object_group"] for r in rows)))
+    catalog["source_categories"] = {r["category"]: r["raw_label"] for r in rows}
+    catalog["limits"][0] = "当前数量是不同官方实例标识，不保证跨场景绝对不同实体，也不代表独立几何类别。"
+    return catalog
+
 
 
 def _box_entry(directions, sensor, rotation, size):
@@ -835,7 +934,8 @@ def _sequence(task):
         frames.append((record, raw, labels, world))
         original.append(dict(record, role="original", **_counts(raw, labels, lookup)))
     scene = records[0]["scene"]
-    result = dict(scene=scene, subset=records[0]["subset"], donor=donor["id"],
+    kind = donor["kind"]
+    result = dict(scene=scene, subset=records[0]["subset"], donor=donor["id"], kind=kind,
                   instance=donor["instance"], attempts=0, failures={}, frames=[])
     placement = None
     # The source is assigned before placement; failed scenes never swap donors.
@@ -847,7 +947,7 @@ def _sequence(task):
             diagnostics = {}
             candidate = transplant(raw, labels, record, donor, road_id,
                 np.random.default_rng(_seed(("sequence", scene, donor["id"], index, attempt))),
-                diagnostics=diagnostics)
+                diagnostics=diagnostics, interior=True)
             if candidate is None:
                 reason = diagnostics["reason"]
             else:
@@ -855,6 +955,8 @@ def _sequence(task):
                 origin, basis = np.array(proposed["position_world"]), np.array(proposed["basis_world"])
                 reason = _sequence_collision(frames, donor, origin, basis, boxes, road_id)
                 if reason is None:
+                    anchor_road = frames[index][3][labels == road_id]
+                    proposed["measured_road_clearance_m"] = _road_clearance(anchor_road, origin[:2])
                     placement = proposed
                     result["anchor_token"] = record["token"]
                     break
@@ -908,7 +1010,7 @@ def _sequence(task):
         replacement[:, 3] /= 255.
         replacement_labels = np.zeros(len(changed), np.uint32)
         where = np.searchsorted(changed, slots)
-        replacement[where], replacement_labels[where] = xyzi, 2
+        replacement[where], replacement_labels[where] = xyzi, 1 if kind == "control" else 2
         truth = lookup[labels].copy()
         truth[changed] = replacement_labels
         observed = raw[:, :4].copy()
@@ -917,35 +1019,49 @@ def _sequence(task):
         supervised = (ranges >= 2.5) & (ranges <= 50.) & np.any(observed[:, :3] != 0, axis=1)
         positive = ranges[(truth == 2) & supervised]
         histogram = np.histogram(positive, RECIPE["distance_edges"])[0].tolist()
-        filename = f"{record['token']}.npz"
+        filename = f"{record['token']}_{kind}.npz"
         if len(changed):
             np.savez_compressed(Path(output) / record["subset"] / filename,
                 slots=changed, xyzi=replacement, labels=replacement_labels, token=np.asarray(record["token"]))
-        row = dict(background, group="anomaly_nuscenes", role="sequence", donor=donor["id"],
+        row = dict(background, group=f"{kind}_nuscenes", role="control" if kind == "control" else "sequence", donor=donor["id"],
             instance=donor["instance"], source_scene=donor["scene"], segment=segment,
             normal=int(((truth == 1) & supervised).sum()), anomaly=len(positive), eligible=len(positive) >= 5,
             point_histogram=histogram, visible_points=len(slots), uncertain_points=len(ignored),
-            range=distance_to_center, placement=placement)
+            range=distance_to_center, placement=placement,
+            point_range_median=float(np.median(positive)) if len(positive) else None)
         if len(changed):
             row["delta"] = str(Path(output) / record["subset"] / filename)
-        generated.append(row)
+        # A zero-change timeline entry is not a second training observation.
+        if len(changed):
+            generated.append(row)
         status.update(status=reason, supported=True, segment=segment, visible_points=len(slots),
                       anomaly=len(positive), uncertain_points=len(ignored),
                       uncertain_supervised_points=int((uncertain & supervised).sum()),
                       point_histogram=histogram)
         result["frames"].append(status)
     result["segments"] = segment + 1
-    if not generated:
+    if not previous_supported and segment < 0:
         result["status"] = "no_supported_interval"
     return original, generated, result
 
 
 def _sequences(root, output, workers, records, mapping, objects):
     """One fixed placement per scene; supported time intervals keep their identity."""
-    catalog = json.loads(Path(objects).read_text())
+    catalog = _object_admission(json.loads(Path(objects).read_text()))
+    write_json(objects, catalog)
+    np.savez_compressed(Path(objects).with_name("points.npz"),
+        **{r["array_key"]: np.fromfile(r["scan"], dtype="<f4").reshape(-1, 5)[r["point_slots"]]
+           for r in catalog["selected"]})
     donors, boxes, rejected = _selected_surfaces(root, records, mapping, catalog)
+    controls, control_failures = _control_surfaces(root, records, mapping, workers)
+    donors.extend(controls)
     report = dict(stage="fixed_sequence", objects=str(Path(objects).resolve()),
-        selected_objects=len(catalog["selected"]), surfaces=len(donors), surface_failures=rejected,
+        selected_objects=catalog["summary"]["admitted_instances"], surfaces=len(donors), surface_failures=rejected,
+        normal_surface_failures=control_failures,
+        semantic_sources=catalog["sources"], semantic_mapping=mapping,
+        normal_controls="One separate fixed normal-object sequence per receiver scene; identical rendering and admission rules, independently sampled placement; not geometry-matched causal pairs",
+        road_interior="Both roles: anchor at least 1 m inside convex hull of measured driveable-surface points within 2.5 m; local support proxy, not an annotated lane centre",
+        manifest_scope="Original once, changed supported anomaly/control observations only; zero-change entries retained in timeline",
         scope="Partial measured surfaces on existing return directions; unknown occlusion ignored",
         geometry="One reviewed observation per object; no multiframe deformation or backside completion",
         collision="All labeled keyframes: observed points and conservative annotation bounds; ego clearance 2.5 m",
@@ -961,20 +1077,21 @@ def _sequences(root, output, workers, records, mapping, objects):
         scenes = defaultdict(list)
         for row in records[split]:
             scenes[row["scene"]].append(row)
-        available = [d for d in donors if d["subset"] == split]
-        if not available:
-            raise ValueError(f"no reviewed surface supports {split}")
-        for scene, rows in scenes.items():
-            donor = min((d for d in available if d["scene"] != scene),
-                        key=lambda d: (usage[d["instance"]], _seed((scene, d["id"]))))
-            usage[donor["instance"]] += 1
-            tasks.append((rows, donor, mapping,
-                          {r["sample_token"]: boxes[r["sample_token"]] for r in rows}, str(output)))
+        for kind in ("anomaly", "control"):
+            available = [d for d in donors if d["subset"] == split and d["kind"] == kind]
+            if not available:
+                raise ValueError(f"no surface supports {split}:{kind}")
+            for scene, rows in scenes.items():
+                donor = min((d for d in available if d["scene"] != scene),
+                            key=lambda d: (usage[d["instance"]], _seed((scene, d["id"]))))
+                usage[donor["instance"]] += 1
+                tasks.append((rows, donor, mapping,
+                              {r["sample_token"]: boxes[r["sample_token"]] for r in rows}, str(output)))
     output_rows = {s: [] for s in records}
     started = time.monotonic()
     with ProcessPoolExecutor(max_workers=workers) as executor:
         for i, (original, generated, scene) in enumerate(executor.map(_sequence, tasks, chunksize=1)):
-            output_rows[scene["subset"]].extend(original + generated)
+            output_rows[scene["subset"]].extend((original if scene["kind"] == "anomaly" else []) + generated)
             report["scenes"].append(scene)
             if (i + 1) % 25 == 0:
                 print(f"nuScenes fixed sequences {i + 1}/{len(tasks)}", flush=True)
@@ -982,8 +1099,13 @@ def _sequences(root, output, workers, records, mapping, objects):
     for split, rows in output_rows.items():
         scenes = [r for r in report["scenes"] if r["subset"] == split]
         generated = [r for r in rows if r["role"] == "sequence"]
+        control_rows = [r for r in rows if r["role"] == "control"]
         frames = [f for s in scenes for f in s["frames"]]
-        summaries[split] = dict(scenes=len(scenes), placed_scenes=sum(s["status"] == "placed" for s in scenes),
+        summaries[split] = dict(scenes=len({s["scene"] for s in scenes}), attempted_sequences=len(scenes),
+            placed_scenes=sum(s["status"] == "placed" and s["kind"] == "anomaly" for s in scenes),
+            placed_controls=sum(s["status"] == "placed" and s["kind"] == "control" for s in scenes),
+            control_frames=len(control_rows), control_instances=len({r["instance"] for r in control_rows}),
+            control_returns=sum(r["visible_points"] for r in control_rows),
             originals=sum(r["role"] == "original" for r in rows), generated=len(generated),
             eligible=sum(r["eligible"] for r in generated), zero_positive=sum(r["anomaly"] == 0 for r in generated),
             one_to_four_points=sum(0 < r["anomaly"] < 5 for r in generated),
@@ -997,7 +1119,11 @@ def _sequences(root, output, workers, records, mapping, objects):
             directory=str(output / split), root=str(Path(root).resolve()),
             split=dict(name=split, scenes=sorted({r["scene"] for r in rows}),
                        logs=sorted({r["log_token"] for r in rows})),
-            recipe=dict(stage="fixed_sequence", report=str(output / "sequences.json"), summary=summaries[split]))
+            recipe=dict(stage="fixed_sequence", frozen=True, report=str(output / "sequences.json"), summary=summaries[split],
+                supervision="Public-definition conservative mapping; only admitted inserted obstacle returns positive",
+                sampling="One visit per manifest row per epoch; source_order only reorders, no duplicated unchanged sequence frames",
+                validation="nuScenes development only; >=5 positive points for official-style anomaly metrics; normal controls require separate false-positive reporting",
+                limits="Instance/log-disjoint, not certified unseen geometry families; no STU data used; partial-surface observations, not complete sensor simulation"))
         manifest["sha256"] = identity(manifest)
         write_json(output / f"{split}.json", manifest, indent=None)
         manifests[split] = manifest

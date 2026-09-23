@@ -45,10 +45,10 @@ NUSCENES_ROOT = Path("/home/jasongao/Data/Nuscenes")
 NUSCENES_NORMAL = frozenset((
     "human.pedestrian.adult", "human.pedestrian.child",
     "human.pedestrian.construction_worker", "human.pedestrian.police_officer",
-    "movable_object.barrier", "movable_object.trafficcone", "vehicle.bicycle",
+    "vehicle.bicycle", "vehicle.emergency.ambulance", "vehicle.emergency.police",
     "vehicle.bus.bendy", "vehicle.bus.rigid", "vehicle.car", "vehicle.construction",
     "vehicle.motorcycle", "vehicle.trailer", "vehicle.truck", "flat.driveable_surface",
-    "flat.other", "flat.sidewalk", "flat.terrain", "static.manmade", "static.vegetation",
+    "flat.sidewalk", "flat.terrain", "static.vegetation",
 ))
 
 # Empirical redundancy tolerances, fixed before model evaluation. They organize
@@ -627,8 +627,28 @@ def nuscenes_mapping(root=NUSCENES_ROOT):
         raise ValueError("the original 32-class lidarseg taxonomy is required")
     if not NUSCENES_NORMAL <= {row["name"] for row in categories}:
         raise ValueError("known normal classes are absent from the lidarseg taxonomy")
+    reasons = {
+        "noise": "Invalid or unidentifiable returns; no supervision",
+        "animal": "Animal behavior and STU normal/ignore boundary are not specified; no stationary obstacle donor",
+        "human.pedestrian.personal_mobility": "Person and mobility device are not separately labeled; ignore mixed category",
+        "human.pedestrian.stroller": "Person/device boundary is not established; ignore, never an obstacle donor",
+        "human.pedestrian.wheelchair": "Person/device boundary is not established; ignore, never an obstacle donor",
+        "movable_object.barrier": "Temporary barriers are not identical to SemanticKITTI fences; target boundary unresolved",
+        "movable_object.trafficcone": "No public point-level STU normal/ignore correspondence; do not infer anomaly from missing class name",
+        "movable_object.debris": "Native debris remains ignored; only admitted, explicitly inserted objects are positive",
+        "movable_object.pushable_pullable": "Native devices remain ignored; only admitted, unoccupied inserted obstacles are positive",
+        "static_object.bicycle_rack": "Rack is not a bicycle; no reliable normal/ignore correspondence",
+        "flat.other": "Mixed water, rail tracks, islands and stairs cannot be separated with this label",
+        "static.manmade": "Mixed normal infrastructure and STU-ignored parking meters, utility boxes and lamps; ignore entire unresolved category",
+        "static.other": "Unresolved static objects; no normal or anomaly target",
+        "vehicle.ego": "Ego platform is outside road-object supervision",
+    }
     return [dict(raw=row["index"], name=row["name"],
-                 target=int(row["name"] in NUSCENES_NORMAL))
+                 target=int(row["name"] in NUSCENES_NORMAL),
+                 decision="normal" if row["name"] in NUSCENES_NORMAL else "ignore",
+                 reason=reasons.get(row["name"],
+                     "Expected road user" if row["name"].startswith(("human.", "vehicle.")) else
+                     "Road, sidewalk, terrain or vegetation in the shared normal semantics"))
             for row in sorted(categories, key=lambda row: row["index"])]
 
 

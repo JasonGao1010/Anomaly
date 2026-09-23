@@ -353,11 +353,21 @@ def test_oriented_box_entry_handles_parallel_rays_and_returns_inside_box():
     np.testing.assert_array_equal(entry[0] < return_ranges - 1e-4, [False, True, True])
 
 
+def test_road_interior_requires_surrounding_measured_support():
+    from src.nuscenes import _road_clearance
+
+    road = np.array([[-1.5, -1.5, 0.], [-1.5, 1.5, 0.], [1.5, -1.5, 0.], [1.5, 1.5, 0.]])
+    assert _road_clearance(road, [0., 0.]) == 1.5
+    assert _road_clearance(road, [1.5, 0.]) < 1.
+    assert _road_clearance(road[:2], [0., 0.]) == -np.inf
+
+
+
 def test_sequence_keeps_supported_zero_hits_and_outside_changes_but_excludes_back(tmp_path, monkeypatch):
     import src.nuscenes as source
 
     mapping = [dict(raw=0, target=0, name="noise"), dict(raw=1, target=1, name="flat.driveable_surface")]
-    donor = dict(id="one-view", instance="one-object", scene="source", range=5.,
+    donor = dict(id="one-view", instance="one-object", kind="anomaly", scene="source", range=5.,
                  xyz=np.array([[0., -1., -1.], [0., 1., -1.], [0., -1., 1.]]),
                  triangles=np.array([[0, 1, 2]]), intensity=np.full(3, .4),
                  sensor_local=np.array([-5., 0., 0.]), object_center_local=np.zeros(3),
@@ -383,8 +393,8 @@ def test_sequence_keeps_supported_zero_hits_and_outside_changes_but_excludes_bac
     (tmp_path / "train").mkdir()
     original, generated, report = source._sequence((records, donor, mapping, {}, str(tmp_path)))
     assert len(original) == len(report["frames"]) == 5
-    assert [row["token"] for row in generated] == ["0", "1", "2", "4"]
-    assert [row["segment"] for row in generated] == [0, 0, 0, 1]
+    assert [row["token"] for row in generated] == ["0", "2", "4"]
+    assert [row["segment"] for row in generated] == [0, 0, 1]
     assert report["segments"] == 2
     assert all(row["placement"] == placement and row["donor"] == donor["id"] for row in generated)
     assert generated[0]["anomaly"] == 0 and generated[0]["visible_points"] == 1
@@ -392,27 +402,35 @@ def test_sequence_keeps_supported_zero_hits_and_outside_changes_but_excludes_bac
         assert np.linalg.norm(delta["xyzi"][0, :3]) > 50.
         np.testing.assert_array_equal(delta["slots"], [0])
         np.testing.assert_array_equal(delta["labels"], [2])
-    assert generated[1]["anomaly"] == generated[1]["visible_points"] == 0
-    assert "delta" not in generated[1]
+    assert report["frames"][1]["anomaly"] == report["frames"][1]["visible_points"] == 0
     assert report["frames"][1]["status"] == "no_receiver_ray_in_cone"
     # Keep a possible unknown surface's old context, but never its normal label.
-    assert generated[2]["uncertain_points"] == 1 and generated[2]["normal"] == 1
+    assert generated[1]["uncertain_points"] == 1 and generated[1]["normal"] == 1
     assert report["frames"][2]["uncertain_supervised_points"] == 1
-    with np.load(generated[2]["delta"]) as delta:
+    with np.load(generated[1]["delta"]) as delta:
         np.testing.assert_array_equal(delta["slots"], [0])
         np.testing.assert_array_equal(delta["labels"], [0])
         np.testing.assert_array_equal(delta["xyzi"][:, :3], clouds[2][:1, :3])
     assert report["frames"][3]["status"] == "unobserved_surface_side"
     assert not report["frames"][3]["supported"]
-    assert generated[3]["anomaly"] == 1
+    assert generated[2]["anomaly"] == 1
     assert not (tmp_path / "train" / "3.npz").exists()
+    # Changing only donor supervision must not alter observation generation.
+    _, controls, control_report = source._sequence((records, dict(donor, kind="control"), mapping, {}, str(tmp_path)))
+    assert all(row["anomaly"] == 0 and row["group"] == "control_nuscenes" for row in controls)
+    assert [f["supported"] for f in report["frames"]] == [f["supported"] for f in control_report["frames"]]
+    for anomaly, control in zip(generated, controls):
+        with np.load(anomaly["delta"]) as a, np.load(control["delta"]) as c:
+            np.testing.assert_array_equal(a["slots"], c["slots"])
+            np.testing.assert_array_equal(a["xyzi"], c["xyzi"])
+            np.testing.assert_array_equal(np.where(a["labels"] == 2, 1, a["labels"]), c["labels"])
 
 
 def test_sequence_rejects_fixed_placement_when_a_later_frame_collides(tmp_path, monkeypatch):
     import src.nuscenes as source
 
     mapping = [dict(raw=0, target=0, name="noise"), dict(raw=1, target=1, name="flat.driveable_surface")]
-    donor = dict(id="one-view", instance="one-object", object_center_local=np.array([0., 0., .5]),
+    donor = dict(id="one-view", instance="one-object", kind="anomaly", object_center_local=np.array([0., 0., .5]),
                  box_rotation_local=np.eye(3), size=np.ones(3))
     origin, basis = np.array([10., 0., -1.5]), np.eye(3)
     raw = np.array([[20., 0., -1.5, 90., 0.]], np.float32)
