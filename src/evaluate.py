@@ -112,12 +112,21 @@ def better(metrics, previous):
         previous["AP"], -previous["FPR95"], previous["AUROC"])
 
 
+def evaluation_indices(manifest):
+    """Keep reference selection separate from the official five-point rule."""
+    reference = manifest.get("version") == SOURCE_VERSION and manifest.get("evaluation_role") == "reference"
+    return [i for i, row in enumerate(manifest["records"])
+            if row["eligible"] and (not reference or row.get("role") == "reference")]
+
+
 @torch.no_grad()
 def evaluate(model, manifest, device, workers=4, score_path=None, record_points=False):
     """Call the pinned official implementation once across the complete valid set."""
     if manifest["kind"] not in ("val", "test"):
         raise ValueError("evaluation requires a held-out validation or test manifest")
-    indices = [i for i, row in enumerate(manifest["records"]) if row["eligible"]]
+    indices = evaluation_indices(manifest)
+    selection = (dict(evaluation_role="reference")
+                 if manifest.get("version") == SOURCE_VERSION and manifest.get("evaluation_role") == "reference" else {})
     count = sum(manifest["records"][i]["normal"] + manifest["records"][i]["anomaly"] for i in indices)
     if not count:
         raise ValueError("no eligible evaluation points")
@@ -149,6 +158,8 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
         identity_path = score_path.parent / "val_points.npy"
         identities = np.lib.format.open_memmap(identity_path, mode="r" if identity_path.exists() else "w+",
             dtype=np.dtype([("slot", "<u4"), ("target", "i1")]), shape=(raw_count,))
+        if identities.shape != (raw_count,):
+            raise ValueError("evaluation point population changed")
     cursor = 0
     start = time.perf_counter()
     for number, sample in enumerate(loader, 1):
@@ -191,7 +202,8 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
         identities.flush()
         write_json(score_path.parent / "val.json", dict(manifest_sha256=manifest["sha256"], frames=frames,
             points=raw_count, metric_points=count, identities="val_points.npy",
-            scope="Each val*.npy is the exact official metric population; its *_all.npy companion preserves every actual return, including ignored context, in the eligible full scans. Ineligible scans remain excluded under the fixed evaluation rule."))
+            scope="Each val*.npy is the exact selected metric population; its *_all.npy companion preserves every actual return, including ignored context, in the selected eligible full scans. Source reference selection, when declared, also excludes coverage and control roles.",
+            **selection))
         del raw_scores, identities
     del batch, sample, dataset, loader
     gc.collect()
@@ -201,7 +213,7 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
     better(metrics, None)
     return dict(metrics=metrics, scans=len(indices), points=count,
                 seconds=time.perf_counter() - start, manifest_sha256=manifest["sha256"],
-                official_commit=STU_COMMIT)
+                official_commit=STU_COMMIT, **selection)
 
 
 def load_model(path, device):

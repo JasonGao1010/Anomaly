@@ -5,33 +5,45 @@ a local visibility approximation, not a complete object or firing simulation.
 """
 
 from concurrent.futures import ProcessPoolExecutor
+from collections import Counter, defaultdict
 import hashlib
 import json
+import itertools
 from pathlib import Path
+import shutil
+import time
 
 import ijson
 import numpy as np
-from scipy.sparse import coo_matrix
-from scipy.sparse.csgraph import connected_components
-from scipy.spatial import Delaunay, QhullError, cKDTree
+from scipy.spatial import Delaunay, QhullError
 from scipy.spatial.transform import Rotation
 
 from .data import SOURCE_VERSION, identity, nuscenes_mapping, write_json
 
 
 RECIPE = dict(
-    supervision="Only inserted debris is positive; original debris is ignored",
-    support="Observed connected semantic patches; open adjacent-beam triangles",
+    revision="instance-coverage-1",
+    supervision="Only inserted, separable debris/pushable road obstacles are positive; original void remains ignored",
+    support="Unique instance-box and semantic-label intersection; open adjacent-beam triangles",
     visibility="Nearest triangle intersections on existing measured directions",
     normal_control="The same insertion applied to measured normal road users",
     pairing="Unmodified original returns are the normal auxiliary reference",
     source_view="Rigid road-tangent rotation preserves the primary viewing side and road-relative height",
-    source_range_ratio=[.75, 1.25], scale=1., positive_fraction=.75,
+    scale=1., minimum_target_range="source observation range; no closer-view surface completion",
+    distance_edges=[2.5, 10., 20., 30., 40., 50.], max_views=6, requests_per_view_bin=2,
+    train_requests=dict(reference=14065, coverage=14065, control=14065),
+    val_requests=dict(reference=2000, coverage=2000, control=2000),
     min_donor_points=8, max_azimuth_steps=2.5, max_adjacent_beams=1,
     depth_jump_m=.2, depth_jump_per_angular_distance=2.,
     support_residual_m=.12, collision_margin_m=.15, placement_attempts=16,
-    donor_identity="Semantic-label connected patch without instance annotations; spatial merging is not instance ground truth",
-    evaluation="anomaly >= 5 marks official-style eligibility; training retains all records",
+    donor_identity="Official instance token within scene; cross-scene identity is not guaranteed",
+    evaluation="anomaly >= 5 eligibility; main metrics use reference role; training keeps 1-4 positive points",
+    reference_distance="Sample a bin proportional to the receiver's measured road-return counts; not natural anomaly prevalence",
+    control_match="Same range bin, visible-count ratio in [0.5,2], angular-span ratio in [0.5,2] where measurable, overlapping intensity q10-q90",
+    normal_library="Deterministic instance subset: at most 256 per mapped normal category in train, 64 in val",
+    allocation="Interleave reference and coverage requests; balance annotated instance, then view-bin use; geometry groups unavailable",
+    allocation_ties="First 64 SHA256 bits of donor_id XOR request seed; matched controls use donor hash",
+    shape_holdout="Unavailable without validated cross-instance geometry labels; keep all 600 requested slots unfilled",
 )
 _DONORS = None
 _MAPPING = None
@@ -111,15 +123,61 @@ def _counts(raw, labels, mapping):
     return dict(points=int(actual.sum()), slots=len(raw), normal=int(normal.sum()), anomaly=0, eligible=False)
 
 
-def _components(xyz):
-    if len(xyz) < RECIPE["min_donor_points"]:
-        return []
-    radius = np.clip(.035 * np.median(np.linalg.norm(xyz, axis=1)), .25, .8)
-    pairs = cKDTree(xyz).query_pairs(radius, output_type="ndarray")
-    graph = coo_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(len(xyz), len(xyz)))
-    count, labels = connected_components(graph, directed=False)
-    return [np.flatnonzero(labels == label) for label in range(count)
-            if np.count_nonzero(labels == label) >= RECIPE["min_donor_points"]]
+def _seed(value):
+    return int.from_bytes(hashlib.sha256(str(value).encode()).digest()[:8], "little")
+
+
+def _inside(world, annotation):
+    rotation = _pose(annotation)[:3, :3]
+    local = (world - annotation["translation"]) @ rotation
+    # nuScenes stores width, length, height; box x is length and box y is width.
+    half = np.asarray(annotation["size"])[[1, 0, 2]] * .5
+    return np.all(abs(local) <= half + 1e-5, axis=1)
+
+
+def _instance_slots(world, labels, annotation, category, other_boxes=()):
+    selected = (labels == category) & _inside(world, annotation)
+    for other in other_boxes:
+        if other["instance_token"] != annotation["instance_token"]:
+            selected &= ~_inside(world, other)
+    return np.flatnonzero(selected)
+
+
+def _annotations(root, records, mapping):
+    meta = Path(root) / "v1.0-trainval"
+    categories = {r["token"]: r["name"] for r in _rows(meta / "category.json")}
+    names = {r["name"]: r["raw"] for r in mapping}
+    normal = {r["name"] for r in mapping if r["target"] == 1 and
+              (r["name"].startswith("human.") or r["name"] in (
+                  "vehicle.car", "vehicle.bicycle", "vehicle.motorcycle",
+                  "movable_object.trafficcone", "movable_object.barrier"))}
+    anomaly = {"movable_object.debris", "movable_object.pushable_pullable"}
+    instances = {r["token"]: dict(r, category=categories[r["category_token"]])
+                 for r in _rows(meta / "instance.json") if categories[r["category_token"]] in normal | anomaly}
+    sample = {r["sample_token"]: r for rows in records.values() for r in rows}
+    # First establish partition identity before selecting a bounded normal library.
+    for row in _rows(meta / "sample_annotation.json"):
+        instance = instances.get(row["instance_token"])
+        if instance is not None and row["token"] == instance["first_annotation_token"]:
+            source = sample[row["sample_token"]]
+            instance.update(subset=source["subset"], scene=source["scene"], log_token=source["log_token"])
+    selected = {token for token, row in instances.items() if row["category"] in anomaly}
+    for split, limit in (("train", 256), ("val", 64)):
+        for category in sorted(normal):
+            candidates = [token for token, row in instances.items() if row["subset"] == split and row["category"] == category]
+            selected.update(sorted(candidates, key=_seed)[:limit])
+    all_instances = instances
+    instances = {token: dict(row, kind="anomaly" if row["category"] in anomaly else "control")
+                 for token, row in instances.items() if token in selected}
+    annotations = defaultdict(list)
+    for row in _rows(meta / "sample_annotation.json"):
+        instance = all_instances.get(row["instance_token"])
+        if instance is not None:
+            annotations[row["sample_token"]].append(dict(
+                {key: row[key] for key in ("token", "instance_token", "translation", "rotation", "size", "num_lidar_pts")},
+                category=names[instance["category"]], kind="anomaly" if instance["category"] in anomaly else "control",
+                extract=row["instance_token"] in selected))
+    return annotations, instances
 
 
 def _triangles(xyz, rings, beam_rank, azimuth_step):
@@ -171,18 +229,19 @@ def _basis(view, plane):
 
 
 def _scene_donors(task):
-    records, mapping = task
+    records, mapping, annotations = task
     lookup = np.asarray([r["target"] for r in mapping], np.uint8)
     names = {r["name"]: r["raw"] for r in mapping}
     ground_ids = [r["raw"] for r in mapping if r["name"] in ("flat.driveable_surface", "flat.sidewalk", "flat.terrain")]
-    control_ids = [r["raw"] for r in mapping if r["target"] and
-                   (r["name"].startswith("human.") or r["name"] in ("vehicle.car", "vehicle.bicycle", "vehicle.motorcycle"))]
-    rows, debris, controls = [], [], {}
+    human_ids = [r["raw"] for r in mapping if r["name"].startswith("human.")]
+    rows, observations, rejected = [], defaultdict(list), Counter()
     for record in records:
         raw, labels = _read(record)
         if np.any(labels >= len(lookup)):
             raise ValueError("unknown original lidarseg category")
         rows.append(dict(record, **_counts(raw, labels, lookup)))
+        rows[-1]["road_histogram"] = np.histogram(np.linalg.norm(raw[labels == names["flat.driveable_surface"], :3], axis=1),
+                                                RECIPE["distance_edges"])[0].tolist()
         transform = np.asarray(record["pose"])
         world = raw[:, :3].astype(float) @ transform[:3, :3].T + transform[:3, 3]
         ground = world[np.isin(labels, ground_ids)]
@@ -195,52 +254,80 @@ def _scene_donors(task):
         beam_pitch = [np.median(elevation[real & (rings == i)]) if np.any(real & (rings == i)) else -10. + i for i in range(32)]
         rank = np.argsort(np.argsort(beam_pitch))
         step = 2 * np.pi / max(1, len(raw) / 32)
-        for category in [names["movable_object.debris"], *control_ids]:
-            slots = np.flatnonzero((labels == category) & real & (distance <= 50.))
-            parts = _components(raw[slots, :3])
-            is_debris = category == names["movable_object.debris"]
-            if not is_debris and parts:
-                parts = [max(parts, key=len)]
-            for component in parts:
-                selected = slots[component]
+        boxes = annotations.get(record["sample_token"], [])
+        for annotation in boxes:
+            if not annotation["extract"]:
+                continue
+            category = annotation["category"]
+            instance = annotation["instance_token"]
+            if annotation["num_lidar_pts"] < RECIPE["min_donor_points"]:
+                rejected["box_too_sparse"] += 1
+                continue
+            others = [row for row in boxes if row["category"] == category]
+            selected = _instance_slots(world, labels, annotation, category, others)
+            selected = selected[real[selected] & (distance[selected] <= 50.)]
+            if len(selected) < RECIPE["min_donor_points"]:
+                rejected["semantic_surface_too_sparse"] += 1
+                continue
+            # Exclude an occupied cart rather than relabeling its user's returns.
+            if annotation["kind"] == "anomaly" and np.any(_inside(world[np.isin(labels, human_ids)], annotation)):
+                rejected["occupied_object"] += 1
+                continue
+            if len(selected):
                 triangles = _triangles(raw[selected, :3].astype(float), rings[selected], rank, step)
                 if not len(triangles):
+                    rejected["no_observed_triangles"] += 1
                     continue
                 xyz = world[selected]
-                center = np.median(xyz[:, :2], axis=0)
+                center = np.asarray(annotation["translation"])[:2]
                 radius = max(.75, float(np.linalg.norm(xyz[:, :2] - center, axis=1).max()) + .5)
                 if radius > 5.:
+                    rejected["oversize_surface"] += 1
                     continue
                 plane = _ground(ground, center, radius + 1.)
                 if plane is None:
+                    rejected["uncertain_support"] += 1
                     continue
                 origin = np.r_[center, plane[2]]
                 vector = center - transform[:2, 3]
-                source_range = float(np.linalg.norm(vector))
+                source_range = float(np.linalg.norm(np.asarray(annotation["translation"]) - transform[:3, 3]))
                 if source_range < 2.5:
                     continue
-                forward = vector / source_range
+                forward = vector / np.linalg.norm(vector)
                 basis = _basis(forward, plane)
                 local = (xyz - origin) @ basis
-                if local[:, 2].min() < -.2 or local[:, 2].max() < .15:
+                if local[:, 2].min() < -RECIPE["support_residual_m"]:
+                    rejected["below_support"] += 1
                     continue
-                donor = dict(id=f"{record['token']}:{int(selected.min())}", scene=record["scene"],
+                box_rotation = _pose(annotation)[:3, :3]
+                viewpoint = (transform[:3, 3] - annotation["translation"]) @ box_rotation
+                donor = dict(id=f"{instance}:{record['token']}", instance=instance, scene=record["scene"],
                     token=record["token"], sample_token=record["sample_token"], log_token=record["log_token"],
-                    scan=record["scan"], category=mapping[category]["name"],
+                    scan=record["scan"], category=mapping[category]["name"], subset=record["subset"],
+                    timestamp=record["timestamp"], annotation=annotation["token"],
                     slots=selected.astype(np.int32), xyz=local.astype(np.float32),
+                    source_view=viewpoint / np.linalg.norm(viewpoint),
+                    sensor_local=((transform[:3, 3] - origin) @ basis).astype(np.float32),
+                    object_center_local=((np.asarray(annotation["translation"]) - origin) @ basis).astype(np.float32),
+                    size=np.asarray(annotation["size"])[[1, 0, 2]],
                     intensity=(raw[selected, 3] / 255.).astype(np.float32), triangles=triangles,
                     center=origin, basis=basis.tolist(), support_plane=plane.tolist(),
-                    range=source_range, kind="anomaly" if is_debris else "control")
-                if is_debris:
-                    previous = next((i for i, old in enumerate(debris)
-                                     if np.linalg.norm(old["center"] - origin) < .75), None)
-                    if previous is None:
-                        debris.append(donor)
-                    elif len(triangles) > len(debris[previous]["triangles"]):
-                        debris[previous] = donor
-                elif category not in controls or len(triangles) > len(controls[category]["triangles"]):
-                    controls[category] = donor
-    return rows, debris + list(controls.values())
+                    range=source_range, kind=annotation["kind"])
+                observations[instance].append(donor)
+    donors = []
+    for views in observations.values():
+        # Maximin viewing-direction selection starts at the best measured surface.
+        remaining = sorted(views, key=lambda d: (-len(d["triangles"]), d["id"]))
+        chosen = [remaining.pop(0)]
+        while remaining and len(chosen) < RECIPE["max_views"]:
+            angle = np.array([min(1 - np.clip(d["source_view"] @ old["source_view"], -1, 1)
+                                 for old in chosen) for d in remaining])
+            index = int(np.argmax(angle))
+            if angle[index] < 1 - np.cos(np.deg2rad(3.)):
+                break
+            chosen.append(remaining.pop(index))
+        donors.extend(chosen)
+    return rows, donors, dict(rejected)
 
 
 def _intersections(directions, vertices, triangles, intensities):
@@ -270,27 +357,47 @@ def _intersections(directions, vertices, triangles, intensities):
     return nearest, intensity
 
 
-def transplant(raw, labels, record, donor, road_id, rng):
+def _visible_attributes(xyzi):
+    distance = np.linalg.norm(xyzi[:, :3], axis=1)
+    points = xyzi[(distance >= 2.5) & (distance <= 50.)]
+    if not len(points):
+        return dict(angular_span=[0., 0.], intensity_interval=[0., 0.])
+    azimuth = np.arctan2(points[:, 1], points[:, 0])
+    center = np.arctan2(np.sin(azimuth).mean(), np.cos(azimuth).mean())
+    azimuth = (azimuth - center + np.pi) % (2 * np.pi) - np.pi
+    elevation = np.arctan2(points[:, 2], np.linalg.norm(points[:, :2], axis=1))
+    return dict(angular_span=[float(np.ptp(azimuth)), float(np.ptp(elevation))],
+                intensity_interval=np.quantile(points[:, 3], [.1, .9]).tolist())
+
+
+def transplant(raw, labels, record, donor, road_id, rng, distance_bin=None, diagnostics=None, match=None):
     """Return a sparse foreground replacement, or None for unsupported placement."""
     transform = np.asarray(record["pose"])
     world = raw[:, :3].astype(float) @ transform[:3, :3].T + transform[:3, 3]
     distance = np.linalg.norm(raw[:, :3], axis=1)
     road_mask = labels == road_id
     road = world[road_mask]
+    diagnostics = {} if diagnostics is None else diagnostics
+    diagnostics.update(reason="no_road", attempts=0)
     if len(road) < 8:
         return None
-    horizontal = np.linalg.norm(road[:, :2] - transform[:2, 3], axis=1)
-    near, far = RECIPE["source_range_ratio"]
-    candidates = np.flatnonzero((horizontal >= max(2.5, near * donor["range"])) &
-                                (horizontal <= min(50., far * donor["range"])))
+    center_distance = np.linalg.norm(road - transform[:3, 3], axis=1)
+    lower_range, upper_range = (2.5, 50.) if distance_bin is None else RECIPE["distance_edges"][distance_bin:distance_bin + 2]
+    center_local = np.asarray(donor.get("object_center_local", [0., 0., 0.]))
+    margin_center = np.linalg.norm(center_local)
+    candidates = np.flatnonzero((center_distance >= max(lower_range, donor["range"]) - margin_center) &
+                                (center_distance <= upper_range + margin_center))
     if not len(candidates):
+        diagnostics["reason"] = "no_supported_road_range"
         return None
     local = donor["xyz"].astype(float)
     lower, upper = local.min(axis=0), local.max(axis=0)
     radius = max(.75, float(np.linalg.norm(local[:, :2], axis=1).max()) + .5)
     origin_sensor = transform[:3, 3]
     directions = np.divide(raw[:, :3], distance[:, None], out=np.zeros((len(raw), 3), float), where=distance[:, None] > 0)
+    diagnostics["reason"] = "no_valid_support_or_collision"
     for candidate in rng.permutation(candidates)[:RECIPE["placement_attempts"]]:
+        diagnostics["attempts"] += 1
         center = road[candidate, :2]
         plane = _ground(road, center, radius + .5)
         if plane is None:
@@ -299,6 +406,11 @@ def transplant(raw, labels, record, donor, road_id, rng):
         vector /= np.linalg.norm(vector)
         basis = _basis(vector, plane)
         origin = np.r_[center, plane[2]]
+        object_center = origin + center_local @ basis.T
+        placed_range = float(np.linalg.norm(object_center - origin_sensor))
+        if (placed_range < max(lower_range, donor["range"]) or placed_range > upper_range
+                or (upper_range != 50. and placed_range == upper_range)):
+            continue
         # Normal and anomalous donors share the same footprint collision rule.
         nearby = np.linalg.norm(world[:, :2] - center, axis=1) <= radius
         relative = (world[nearby] - origin) @ basis
@@ -320,16 +432,50 @@ def transplant(raw, labels, record, donor, road_id, rng):
         slots = np.flatnonzero((distance > 0) & covered)
         if not len(slots):
             continue
-        hit, intensity = _intersections(directions[slots], vertices, donor["triangles"], donor["intensity"])
+        triangles = donor["triangles"]
+        if "sensor_local" in donor:
+            face = local[triangles]
+            normals = np.cross(face[:, 1] - face[:, 0], face[:, 2] - face[:, 0])
+            midpoint = face.mean(axis=1)
+            current_sensor = (origin_sensor - origin) @ basis
+            original_side = np.einsum("ij,ij->i", normals, donor["sensor_local"] - midpoint)
+            target_side = np.einsum("ij,ij->i", normals, current_sensor - midpoint)
+            triangles = triangles[(original_side * target_side) > 0]
+        if not len(triangles):
+            diagnostics["reason"] = "unobserved_surface_side"
+            continue
+        hit, intensity = _intersections(directions[slots], vertices, triangles, donor["intensity"])
         # Visibility precedes supervision: an out-of-range foreground still
         # occludes its background and remains part of the observed point cloud.
         visible = (hit > 0) & (hit < distance[slots] - 1e-4)
         slots, hit, intensity = slots[visible], hit[visible], intensity[visible]
         if not len(slots):
+            diagnostics["reason"] = "no_visible_return"
             continue
         xyzi = np.column_stack((directions[slots] * hit[:, None], intensity)).astype(np.float32)
+        diagnostics["reason"] = "visible"
+        # The request keeps its donor; bounded matching never swaps to an easier object.
+        supervised = (np.linalg.norm(xyzi[:, :3], axis=1) >= 2.5) & (np.linalg.norm(xyzi[:, :3], axis=1) <= 50.)
+        if match and supervised.any():
+            actual = int(supervised.sum())
+            if not (.5 <= actual / max(match["visible_points"], 1) <= 2.):
+                diagnostics["reason"] = "control_point_support_mismatch"
+                continue
+            attributes = _visible_attributes(xyzi)
+            span, target_span = np.asarray(attributes["angular_span"]), np.asarray(match["angular_span"])
+            measurable = (span > 1e-5) & (target_span > 1e-5)
+            if np.any((span[measurable] / target_span[measurable] < .5) |
+                      (span[measurable] / target_span[measurable] > 2.)):
+                diagnostics["reason"] = "control_angular_support_mismatch"
+                continue
+            low, high = attributes["intensity_interval"]
+            target_low, target_high = match["intensity_interval"]
+            if low > target_high + 1 / 255 or target_low > high + 1 / 255:
+                diagnostics["reason"] = "control_intensity_support_mismatch"
+                continue
         return slots.astype(np.int32), xyzi, dict(position_world=origin.tolist(),
-            yaw_rad=float(np.arctan2(vector[1], vector[0])), range=float(np.linalg.norm(origin - origin_sensor)),
+            object_center_world=object_center.tolist(),
+            yaw_rad=float(np.arctan2(vector[1], vector[0])), range=placed_range,
             source_range=float(donor["range"]), scale=1., basis_world=basis.tolist(),
             support_plane=plane.tolist(), surface="open measured triangles")
     return None
@@ -340,82 +486,306 @@ def _initialize(donors, mapping, output):
     _DONORS, _MAPPING, _OUTPUT = donors, mapping, Path(output)
 
 
-def _generate(record):
-    seed = int.from_bytes(hashlib.sha256((SOURCE_VERSION + record["token"]).encode()).digest()[:8], "little")
-    rng = np.random.default_rng(seed)
-    kind = "anomaly" if seed % 4 else "control"
-    donors = [d for d in _DONORS[kind] if d["scene"] != record["scene"]]
-    if not donors:
-        return record, None
-    donor = donors[int(rng.integers(len(donors)))]
+def _generate(request):
+    record, role = request["record"], request["role"]
+    outcome = {key: value for key, value in request.items() if key not in ("record", "match")}
+    outcome.update(token=record["token"], subset=record["subset"])
+    if request.get("donor") is None:
+        reason = "geometry_holdout_unavailable" if request["holdout"] is True else "no_donor_budget"
+        outcome.update(reason=reason, visible_points=0)
+        return None, outcome
+    donor = _DONORS[request["donor"]]
+    rng = np.random.default_rng(_seed((RECIPE["revision"], record["token"], role)))
+    kind = donor["kind"]
     raw, labels = _read(record)
     road_id = next(row["raw"] for row in _MAPPING if row["name"] == "flat.driveable_surface")
-    result = transplant(raw, labels, record, donor, road_id, rng)
+    result = transplant(raw, labels, record, donor, road_id, rng, request["bin"], outcome, request.get("match"))
     if result is None:
-        return record, None
+        outcome["visible_points"] = 0
+        return None, outcome
     slots, xyzi, placement = result
-    delta_path = _OUTPUT / record["subset"] / f"{record['token']}.npz"
     value = 2 if kind == "anomaly" else 1
-    np.savez_compressed(delta_path, slots=slots, xyzi=xyzi,
-                        labels=np.full(len(slots), value, dtype=np.uint32), token=np.asarray(record["token"]))
     lookup = np.asarray([r["target"] for r in _MAPPING], np.uint8)
     old_range = np.linalg.norm(raw[slots, :3], axis=1)
     removed_normal = int(((lookup[labels[slots]] == 1) & (old_range >= 2.5) & (old_range <= 50.)).sum())
     stored_range = np.linalg.norm(xyzi[:, :3], axis=1)
     supervised = int(((stored_range >= 2.5) & (stored_range <= 50.)).sum())
+    outcome.update(visible_points=supervised, changed_slots=len(slots), placement_range=placement["range"])
+    if not supervised:
+        outcome["reason"] = "only_outside_supervision"
+        return None, outcome
     normal = record["normal"] - removed_normal + (supervised if value == 1 else 0)
     anomaly = supervised if value == 2 else 0
-    inserted = dict(record, group=f"{kind}_nuscenes", delta=str(delta_path),
+    valid_ranges = stored_range[(stored_range >= 2.5) & (stored_range <= 50.)]
+    filename = f"{record['token']}_{role}.npz"
+    delta_path = _OUTPUT / ".building" / record["subset"] / filename
+    np.savez_compressed(delta_path, slots=slots, xyzi=xyzi,
+                        labels=np.full(len(slots), value, dtype=np.uint32), token=np.asarray(record["token"]))
+    outcome.update(reason="accepted", point_range_median=float(np.median(valid_ranges)),
+                   point_histogram=np.histogram(valid_ranges, RECIPE["distance_edges"])[0].tolist(),
+                   **_visible_attributes(xyzi))
+    inserted = dict(record, group=f"{kind}_nuscenes", delta=str(_OUTPUT / record["subset"] / filename),
         normal=normal, anomaly=anomaly, eligible=anomaly >= 5, placement=placement,
-        donor=donor["id"], source_scene=donor["scene"], range=placement["range"])
-    return record, inserted
+        donor=donor["id"], source_scene=donor["scene"], range=placement["range"], role=role,
+        instance=donor["instance"], geometry_group=donor["geometry_group"],
+        geometry_reliable=donor["geometry_reliable"], shape_holdout=donor["shape_holdout"],
+        point_range_median=outcome["point_range_median"], point_histogram=outcome["point_histogram"],
+        requested_bin=request["bin"], visible_points=supervised,
+        angular_span=outcome["angular_span"], intensity_interval=outcome["intensity_interval"],
+        matched_anomaly_token=request["match"]["token"] if request.get("match") else None)
+    return inserted, outcome
+
+
+def _requests(records, split):
+    scenes = defaultdict(list)
+    for record in records:
+        scenes[record["scene"]].append(record)
+    ordered = [row for batch in itertools.zip_longest(
+        *(sorted(scenes[name], key=lambda r: _seed(r["token"])) for name in sorted(scenes, key=_seed)))
+        for row in batch if row is not None]
+    budget = RECIPE[f"{split}_requests"]
+    required = budget["reference"] + budget["coverage"] + (budget["control"] if split == "val" else 0)
+    if len(ordered) < required:
+        raise ValueError("the agreed request budget requires all official keyframes")
+    requests = [("reference", row, None, None) for row in ordered[:budget["reference"]]]
+    coverage = ordered[budget["reference"]:budget["reference"] + budget["coverage"]]
+    requests.extend(("coverage", row, i % 5, (i // 5 < 120) if split == "val" else False)
+                    for i, row in enumerate(coverage))
+    controls = (ordered[required - budget["control"]:required] if split == "val" else
+                sorted(ordered, key=lambda r: _seed("control" + r["token"]))[:budget["control"]])
+    requests.extend(("control", row, None, None) for row in controls)
+    return requests
+
+
+def _assign(requests, donors, usage, matches=None):
+    """Allocate identities before placement; failures consume their original quota."""
+    identifiers = [d["id"] for d in donors]
+    scenes = {value: i for i, value in enumerate(dict.fromkeys(d["scene"] for d in donors))}
+    groups = {value: i for i, value in enumerate(dict.fromkeys(d["geometry_group"] for d in donors))}
+    instances = {value: i for i, value in enumerate(dict.fromkeys(d["instance"] for d in donors))}
+    group_index = np.array([groups[d["geometry_group"]] for d in donors], dtype=np.intp)
+    instance_index = np.array([instances[d["instance"]] for d in donors], dtype=np.intp)
+    group_usage = np.zeros(len(groups), dtype=np.int64)
+    instance_usage = np.zeros(len(instances), dtype=np.int64)
+    counts = np.array([[usage[identifier, b] for b in range(5)] for identifier in identifiers],
+                      dtype=np.int64).reshape(-1, 5)
+    kind = np.array([d["kind"] == "control" for d in donors], dtype=bool)
+    scene = np.array([scenes[d["scene"]] for d in donors], dtype=np.intp)
+    ranges = np.array([d["range"] for d in donors], dtype=float)
+    held = np.array([d["shape_holdout"] for d in donors], dtype=bool)
+    reliable = np.array([d["geometry_reliable"] for d in donors], dtype=bool)
+    support = np.array([len(d["slots"]) for d in donors], dtype=float)
+    tie = np.array([_seed(identifier) for identifier in identifiers], dtype=np.uint64)
+    assigned = []
+    edges = RECIPE["distance_edges"]
+    for role, record, distance_bin, holdout in requests:
+        request_seed = _seed((record["token"], role))
+        rng = np.random.default_rng(request_seed)
+        match = None if matches is None else matches.get(record["token"])
+        if match is not None:
+            distance_bin = min(4, max(0, int(np.searchsorted(edges, match["point_range_median"], side="right") - 1)))
+        if distance_bin is None:
+            frequencies = np.asarray(record["road_histogram"], dtype=float)
+            distance_bin = int(rng.choice(5, p=frequencies / frequencies.sum())) if frequencies.sum() else int(rng.integers(5))
+        eligible = ((kind == (role == "control")) & (scene != scenes.get(record["scene"], -1))
+                    & (ranges < edges[distance_bin + 1])
+                    & (counts[:, distance_bin] < RECIPE["requests_per_view_bin"]))
+        if holdout is not None:
+            eligible &= held == holdout
+        if holdout is True:
+            eligible &= reliable
+        candidates = np.flatnonzero(eligible)
+        selected = None
+        if len(candidates):
+            if match is not None:
+                target_range = max(match["point_range_median"], 2.5)
+                estimated = np.maximum(support[candidates] * (ranges[candidates] / target_range) ** 2, 1)
+                mismatch = abs(np.log(estimated / max(match["visible_points"], 1)))
+                candidates = candidates[mismatch == mismatch.min()]
+            # Lexicographic minima need no full sort; donor order breaks exact hash ties.
+            for value, index in ((group_usage, group_index), (instance_usage, instance_index)):
+                current = value[index[candidates]]
+                candidates = candidates[current == current.min()]
+            if match is None:
+                current = counts[candidates, distance_bin]
+                candidates = candidates[current == current.min()]
+                # Stable pre-generation tie rule avoids hashing every token/view pair.
+                priority = tie[candidates] ^ np.uint64(request_seed)
+            else:
+                priority = tie[candidates]
+            selected = int(candidates[np.argmin(priority)])
+            counts[selected, distance_bin] += 1
+            usage[identifiers[selected], distance_bin] += 1
+            group_usage[group_index[selected]] += 1
+            instance_usage[instance_index[selected]] += 1
+        assigned.append(dict(record=record, role=role, bin=distance_bin, holdout=holdout,
+                             donor=None if selected is None else identifiers[selected], match=match))
+    return assigned
+
+
+def _catalog(donors):
+    keep = ("instance", "scene", "token", "sample_token", "log_token", "scan", "category", "subset",
+            "kind", "basis", "support_plane", "range", "annotation", "timestamp", "geometry_group",
+            "geometry_reliable", "shape_holdout")
+    return {d["id"]: dict({key: d[key] for key in keep}, center=d["center"].tolist(),
+                          slots=d["slots"].tolist(), triangles=len(d["triangles"]),
+                          size=d["size"].tolist(), source_view=d["source_view"].tolist(),
+                          object_center_local=d["object_center_local"].tolist()) for d in donors}
 
 
 def build(root, output, workers):
-    """Build both official source splits; never read STU or an older generated set."""
+    """Census actual surfaces, then materialize bounded source-only requests."""
     output = Path(output).resolve()
     if workers < 1:
         raise ValueError("workers must be positive")
-    if output.exists() and any(output.iterdir()):
-        raise ValueError("output must be empty; existing generated observations are not reused")
+    staging = output / ".building"
+    if staging.exists():
+        raise ValueError("an unfinished build exists; inspect it before replacement")
+    if output.exists() and any(output.iterdir()) and not all((output / f"{s}.json").exists() for s in ("train", "val")):
+        raise ValueError("output is not an existing complete nuScenes build")
+    started = time.monotonic()
     records, mapping = sources(root)
+    annotations, instances = _annotations(root, records, mapping)
+    print(f"nuScenes selected candidate instances {dict(Counter((d['subset'] + ':' + d['kind']) for d in instances.values()))}", flush=True)
+    original, donors, failures = {}, [], {}
+    for split in ("train", "val"):
+        scenes = defaultdict(list)
+        for record in records[split]:
+            scenes[record["scene"]].append(record)
+        original[split], failures[split] = [], Counter()
+        tasks = [(rows, mapping, {r["sample_token"]: annotations.get(r["sample_token"], []) for r in rows})
+                 for rows in scenes.values()]
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            for index, (rows, views, rejected) in enumerate(executor.map(_scene_donors, tasks), 1):
+                original[split].extend(rows)
+                donors.extend(views)
+                failures[split].update(rejected)
+                if index % 25 == 0 or index == len(scenes):
+                    print(f"nuScenes census {split} scenes {index}/{len(scenes)}; measured views {len(donors)}", flush=True)
+    del annotations, records, tasks
+    geometry = group_geometry(donors)
+    census = dict(recipe=RECIPE, geometry=geometry, extraction_failures=failures,
+                  candidates={s: dict(Counter(d["category"] for d in instances.values() if d["subset"] == s)) for s in original},
+                  surfaces={s: {kind: dict(instances=len({d['instance'] for d in donors if d['subset'] == s and d['kind'] == kind}),
+                                           views=sum(d['subset'] == s and d['kind'] == kind for d in donors))
+                                for kind in ("anomaly", "control")} for s in original})
+    print("nuScenes usable measured surfaces " + json.dumps(census["surfaces"]), flush=True)
+    print("nuScenes geometry groups " + json.dumps({k: geometry[k] for k in (
+        "anomaly_instances", "reliable_instances", "groups", "largest_group", "development_reliable_groups",
+        "heldout_fraction", "removed_training_observations")}), flush=True)
+    views_by_instance = defaultdict(list)
+    for donor in donors:
+        views_by_instance[donor["instance"]].append(donor)
+    census["instances"] = {token: dict(subset=row["subset"], category=row["category"], kind=row["kind"],
+        views=len(views_by_instance[token]),
+        range_eligible_views=[sum(d["range"] < upper for d in views_by_instance[token])
+                              for upper in RECIPE["distance_edges"][1:]],
+        geometry_group=views_by_instance[token][0]["geometry_group"] if views_by_instance[token] else None,
+        geometry_reliable=bool(views_by_instance[token] and views_by_instance[token][0]["geometry_reliable"]),
+        shape_holdout=bool(views_by_instance[token] and views_by_instance[token][0]["shape_holdout"]))
+        for token, row in instances.items()}
+    census["range_eligible_definition"] = "Source range below target-bin upper bound is necessary, not sufficient for visible placement; actual outcomes are counted separately."
+    write_json(staging / "census.json", census)
     manifests = {}
     for split in ("train", "val"):
-        directory = output / split
-        directory.mkdir(parents=True, exist_ok=True)
-        scenes = {}
-        for record in records[split]:
-            scenes.setdefault(record["scene"], []).append(record)
-        original, donors = [], []
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            for index, (rows, patches) in enumerate(executor.map(_scene_donors, [(rows, mapping) for rows in scenes.values()]), 1):
-                original.extend(rows)
-                donors.extend(patches)
-                if index % 25 == 0 or index == len(scenes):
-                    print(f"nuScenes {split} original scenes {index}/{len(scenes)}; observed donor patches {len(donors)}", flush=True)
-        pools = {kind: [donor for donor in donors if donor["kind"] == kind] for kind in ("anomaly", "control")}
-        if any(not pool for pool in pools.values()):
-            raise ValueError(f"{split} has no supported measured anomaly or control surfaces")
-        original.sort(key=lambda r: (r["scene"], r["timestamp"], r["token"]))
-        rows, attempted = [], {"anomaly": 0, "control": 0}
-        with ProcessPoolExecutor(max_workers=workers, initializer=_initialize, initargs=(pools, mapping, str(output))) as executor:
-            for index, (record, inserted) in enumerate(executor.map(_generate, original, chunksize=16), 1):
-                rows.append(record)
+        (staging / split).mkdir(parents=True, exist_ok=True)
+        available = [d for d in donors if d["subset"] == split and not (split == "train" and d["shape_holdout"])]
+        original[split].sort(key=lambda r: (r["scene"], r["timestamp"], r["token"]))
+        requests = _requests(original[split], split)
+        usage, rows, outcomes = Counter(), list(original[split]), []
+        for record in rows:
+            record["role"] = "original"
+        by_role = [[r for r in requests if r[0] == role] for role in ("reference", "coverage")]
+        anomaly_requests = [r for pair in itertools.zip_longest(*by_role) for r in pair if r is not None]
+        assigned = _assign(anomaly_requests, available, usage)
+        source = {d["id"]: d for d in available}
+        with ProcessPoolExecutor(max_workers=workers, initializer=_initialize, initargs=(source, mapping, str(output))) as executor:
+            for index, (inserted, outcome) in enumerate(executor.map(_generate, assigned, chunksize=8), 1):
+                outcomes.append(outcome)
                 if inserted is not None:
                     rows.append(inserted)
-                    attempted[inserted["group"].split("_")[0]] += 1
-                if index % 1000 == 0 or index == len(original):
-                    print(f"nuScenes {split} insertions {index}/{len(original)}: {attempted}", flush=True)
-        catalog = {donor["id"]: dict(
-            {key: donor[key] for key in ("scene", "token", "sample_token", "log_token", "scan", "category",
-                                         "kind", "basis", "support_plane", "range")},
-            center=donor["center"].tolist(), slots=donor["slots"].tolist()) for donor in donors}
+                if index % 1000 == 0 or index == len(assigned):
+                    print(f"nuScenes {split} anomaly requests {index}/{len(assigned)}; accepted {len(rows)-len(original[split])}", flush=True)
+            controls = [r for r in requests if r[0] == "control"]
+            accepted = {r["token"]: r for r in rows if r["role"] in ("reference", "coverage")}
+            if split == "val":
+                reference = [r for r in accepted.values() if r["role"] == "reference"]
+                coverage = [r for r in accepted.values() if r["role"] == "coverage"]
+                matches = {request[1]["token"]: pool[i % len(pool)] for half, pool in enumerate((reference, coverage)) if pool
+                           for i, request in enumerate(controls[half * 1000:(half + 1) * 1000])}
+            else:
+                matches = accepted
+            assigned = _assign(controls, available, usage, matches)
+            for index, (inserted, outcome) in enumerate(executor.map(_generate, assigned, chunksize=8), 1):
+                outcomes.append(outcome)
+                if inserted is not None:
+                    rows.append(inserted)
+                if index % 1000 == 0 or index == len(assigned):
+                    print(f"nuScenes {split} control requests {index}/{len(assigned)}", flush=True)
+        catalog = _catalog([d for d in donors if d["subset"] == split])
+        summary = dict(requests=dict(Counter(r["role"] for r in outcomes)),
+                       outcomes=dict(Counter(r["reason"] for r in outcomes)),
+                       records=dict(Counter(r["role"] for r in rows)),
+                       eligible_reference=sum(r["eligible"] and r["role"] == "reference" for r in rows),
+                       eligible_coverage=sum(r["eligible"] and r["role"] == "coverage" for r in rows),
+                       positive_points=sum(r["anomaly"] for r in rows),
+                       per_distance=[dict(bin=b, requested=sum(r["bin"] == b and r["role"] != "control" for r in outcomes),
+                                          coverage_requests=sum(r["bin"] == b and r["role"] == "coverage" for r in outcomes),
+                                          accepted=sum(r["requested_bin"] == b for r in rows if r["anomaly"]),
+                                          instances=len({r["instance"] for r in rows if r["anomaly"] and r["requested_bin"] == b}),
+                                          eligible=sum(r["eligible"] and r["requested_bin"] == b for r in rows if r["anomaly"]),
+                                          few_point=sum(0 < r["anomaly"] < 5 and r["requested_bin"] == b for r in rows if r["anomaly"]),
+                                          points=sum(r["point_histogram"][b] for r in rows if r["anomaly"])) for b in range(5)])
+        census[split] = summary
+        if split == "val" and not summary["eligible_reference"]:
+            raise ValueError(f"{split} has no evaluable reference anomalies; generated data remain unpublished")
         manifest = dict(version=SOURCE_VERSION, kind=split, mapping=mapping, records=rows, donors=catalog,
-            directory=str(directory), root=str(Path(root).resolve()),
-            split=dict(name=split, scenes=sorted(scenes), logs=sorted({r["log_token"] for r in original})),
-            recipe=dict(RECIPE, donor_patches={kind: len(pool) for kind, pool in pools.items()},
-                        original_frames=len(original), successful_insertions=attempted))
+                        directory=str(output / split), root=str(Path(root).resolve()),
+                        split=dict(name=split, scenes=sorted({r["scene"] for r in original[split]}),
+                                   logs=sorted({r["log_token"] for r in original[split]})),
+                        recipe=dict(RECIPE, original_frames=len(original[split]), summary=summary),
+                        evaluation_role="reference" if split == "val" else None)
         manifest["sha256"] = identity(manifest)
-        write_json(output / f"{split}.json", manifest, indent=None)
+        write_json(staging / f"{split}.json", manifest, indent=None)
+        write_json(staging / f"{split}_requests.json", outcomes, indent=None)
         manifests[split] = manifest
+    census["seconds"] = time.monotonic() - started
+    write_json(staging / "census.json", census)
+    # Publish only a complete replacement. Old raw scans are never copied or deleted.
+    for split in ("train", "val"):
+        directory = output / split
+        directory.mkdir(exist_ok=True)
+        keep = {Path(r["delta"]).name for r in manifests[split]["records"] if r.get("delta")}
+        for path in (staging / split).iterdir():
+            path.replace(directory / path.name)
+        for path in directory.glob("*.npz"):
+            if path.name not in keep:
+                path.unlink()
+    for path in staging.glob("*.json"):
+        path.replace(output / path.name)
+    shutil.rmtree(staging)
+    print("nuScenes completed " + json.dumps({s: census[s] for s in ("train", "val")}), flush=True)
     return manifests
+
+
+
+def group_geometry(donors):
+    """Instance identity is observed; cross-instance shape identity is not.
+
+    Repeat-view errors alone do not calibrate cross-instance false matches.
+    Do not turn this unavailable measurement into exclusions or shape claims.
+    """
+    instances = {}
+    for donor in donors:
+        signature = (donor["subset"], donor["kind"])
+        previous = instances.setdefault(donor["instance"], signature)
+        if previous != signature:
+            raise ValueError("one annotated instance crosses source partitions or roles")
+        donor.update(geometry_group=None, geometry_reliable=False, shape_holdout=False)
+    return dict(method="Official annotated-instance allocation; geometric identity unavailable",
+                unavailable_reason="Partial visible-surface repeatability does not validate cross-instance shape similarity",
+                anomaly_instances=sum(kind == "anomaly" for _, kind in instances.values()),
+                reliable_instances=0, groups=None, largest_group=None, development_reliable_groups=0,
+                heldout_groups=[], heldout_fraction=0., removed_training_instances=[],
+                removed_training_observations=0, planned_holdout_requests=600,
+                scope="Scene/log and annotated-instance split; no unseen-geometry or cross-scene physical-identity guarantee")

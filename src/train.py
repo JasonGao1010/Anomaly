@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader
 
 from .data import (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION, Scans, file_sha256, identity,
                    load_manifest, write_json)
-from .evaluate import PreparedScans, autocast, better, evaluate, memory_available, precision
+from .evaluate import PreparedScans, autocast, better, evaluate, evaluation_indices, memory_available, precision
 from .model import (POINT_CHUNK, Segmentor, balanced_loss, ranking_loss, to_device,
                     LITEPT_COMMIT, WEIGHTS_REVISION, WEIGHTS_SHA256, RELATION_MODES)
 from .normal import NORMAL_MODES, SCALES, HYPOTHESES, KERNELS, RAY_CHUNK, LOWER, UPPER
@@ -52,6 +52,63 @@ def epoch_order(count, seed, stage, epoch):
     return generator.permutation(count).tolist()
 
 
+def source_order(records, seed, epoch, offset, far_updates=None):
+    """Reorder one complete pass without changing its records or boundary."""
+    order = epoch_order(len(records), seed, 1, epoch)
+    # Cross-pass remainder batches stay mixed; only complete aligned batches
+    # inside this pass can be deliberately specialized for distant positives.
+    first = (-offset) % BATCH_SIZE
+    starts = list(range(first, len(order) - BATCH_SIZE + 1, BATCH_SIZE))
+    limit = len(starts) // 5
+    bins, normal, controls = defaultdict(list), [], []
+    for index in order:
+        row = records[index]
+        points, distance = int(row.get("anomaly", 0)), row.get("point_range_median")
+        if points > 0 and distance is not None and np.isfinite(distance) and distance >= 30.:
+            # Counts within one bin differ by less than a factor of two.
+            bins[points.bit_length() - 1].append(index)
+        elif points == 0 and row.get("normal", 0) > 0:
+            if row.get("group") == "normal_nuscenes":
+                normal.append(index)
+            elif row.get("group") == "control_nuscenes":
+                controls.append(index)
+    if not limit or not bins or not normal or not controls:
+        return order
+    generator = np.random.default_rng(np.random.SeedSequence([seed, 719, epoch]))
+    candidates = [indices[start:start + 4] for indices in bins.values()
+                  for start in range(0, len(indices), 4)]
+    batches = []
+    for candidate in generator.permutation(len(candidates)):
+        positives = candidates[int(candidate)]
+        needed = BATCH_SIZE - len(positives)
+        if not normal or not controls or len(normal) + len(controls) < needed:
+            continue
+        originals = min(len(normal), max(1, needed // 2, needed - len(controls)))
+        originals = min(originals, needed - 1)
+        batch = positives + [normal.pop() for _ in range(originals)]
+        batch += [controls.pop() for _ in range(needed - originals)]
+        batches.append(generator.permutation(batch).tolist())
+        if len(batches) == limit:
+            break
+    if not batches:
+        return order
+    positions = generator.choice(starts, len(batches), replace=False).tolist()
+    assigned = dict(zip(positions, batches))
+    selected = {index for batch in batches for index in batch}
+    mixed = iter(index for index in order if index not in selected)
+    result, position = [], 0
+    while position < len(order):
+        if position in assigned:
+            result.extend(assigned[position])
+            position += BATCH_SIZE
+        else:
+            result.append(next(mixed))
+            position += 1
+    if far_updates is not None:
+        far_updates.extend(sorted((offset + position) // BATCH_SIZE for position in positions))
+    return result
+
+
 def effective_batches(order, rank=0, world_size=1):
     for start in range(0, len(order), BATCH_SIZE):
         yield order[start:start + BATCH_SIZE][rank::world_size]
@@ -70,11 +127,16 @@ def material_order(order, manifest, indices, start, stop):
     return result
 
 
-def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None, passes=2):
+def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None, passes=2,
+                far_updates=None):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
     if manifest.get("version") in (NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION):
-        order = sum((epoch_order(len(manifest["records"]), seed, 1, epoch)
-                     for epoch in range(passes * segment, passes * segment + passes)), [])
+        order = []
+        for epoch in range(passes * segment, passes * segment + passes):
+            current = (source_order(manifest["records"], seed, epoch, len(order), far_updates)
+                       if manifest["version"] == SOURCE_VERSION else
+                       epoch_order(len(manifest["records"]), seed, 1, epoch))
+            order.extend(current)
         if updates != math.ceil(len(order) / BATCH_SIZE):
             raise ValueError("native training must finish the configured complete data passes")
         return order
@@ -587,6 +649,11 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
             paired_visits = passes * sum(bool(row.get("delta")) for row in train["records"])
             result.update(data_recipe=train.get("recipe", {}), normal_source_visits=visits,
                 paired_normal_source_visits=paired_visits, shared_normal_source_visits=visits - paired_visits,
+                sampling="complete passes without replacement; at most 20% deliberately distant-positive batches; mixed cross-pass remainders",
+                far_batch=dict(max_update_fraction=.2, positive_median_range_min_m=30.,
+                    positive_count_bins="powers of two", positive_scans=[1, 4],
+                    normal_scans="at least one original and one normal insertion; no repeated records",
+                    metadata="point_range_median describes supervised inserted points, never object-center distance"),
                 source_groups=source_counts(train, range(len(train["records"]))),
                 data_roles=dict(training="raw nuScenes scans, synthetic road obstacles and normal placement controls",
                     positive="explicit synthetic obstacle returns; original debris and void remain ignored",
@@ -897,9 +964,11 @@ def train_stage(args, train, val, seed, method, device, config):
     dataset = PreparedScans(train, relations=method in RELATION_MODES, normal=method in NORMAL_MODES)
     if pilot:
         del parent
+        far_updates = []
         full_order = pilot_order(train, seed, schedule_total, sampling=config.get("sampling"),
                                  segment=config.get("sampling_segment", 0), paired=config.get("recipe") == "paired",
-                                 background=config.get("background_reference"), passes=config.get("epochs", 2) if method == "field" else 2)
+                                 background=config.get("background_reference"), passes=config.get("epochs", 2) if method == "field" else 2,
+                                 far_updates=far_updates)
         if branch and full_order != json.loads(Path(config["reference_sampling"]).read_text())["order"]:
             raise ValueError("branch scan order differs from the original recorded stream")
         reference_order = full_order
@@ -914,11 +983,15 @@ def train_stage(args, train, val, seed, method, device, config):
             raise ValueError("local weighting must reuse every material-control input position")
         if native and rank == 0:
             executed = full_order[config.get("start_update", 0) * BATCH_SIZE:total * BATCH_SIZE]
+            distant = (dict(scheduled_far_updates=far_updates,
+                            scheduled_far_fraction=len(far_updates) / schedule_total)
+                       if train["version"] == SOURCE_VERSION else {})
             write_json(directory / "sampling.json", dict(train_manifest=train["sha256"], order=full_order,
                 sources=source_counts(train, executed), distinct_records=len(set(executed)),
                 executed_order=executed, start_update=config.get("start_update", 0),
                 replaced_visits=sum(a!=b for a,b in zip(reference_order,full_order)),
-                passes=None if branch else config.get("epochs", 2), scans_per_pass=len(train["records"]), visits=len(executed)))
+                passes=None if branch else config.get("epochs", 2), scans_per_pass=len(train["records"]), visits=len(executed),
+                **distant))
         if config.get("recipe") == "paired" and rank == 0:
             paired_updates = min(total, PAIRED_UPDATES)
             reference = pilot_order(train, seed, paired_updates)
@@ -1296,7 +1369,7 @@ def main():
         raise RuntimeError(f"other CUDA processes must finish before this run: {other}")
     # Best/last optimizer states, atomic replacement, bounded logs and optional scores.
     peak = 100_000_000 if args.check else 2_000_000_000 + (
-        4 * sum(row["normal"] + row["anomaly"] for row in val["records"] if row["eligible"])
+        4 * sum(val["records"][i]["normal"] + val["records"][i]["anomaly"] for i in evaluation_indices(val))
         if args.score_path else 0)
     disk_check(peak)
     args.output.mkdir(parents=True, exist_ok=True)
