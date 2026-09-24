@@ -7,13 +7,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from scipy.integrate import quad
+from scipy.special import erfcx, log_ndtr
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from src.normal import (NormalField, Compatibility, angular_observation, joint_nll,
                         ray_parameters, ray_log_prob, log_normal_mass, SCALES, LOWER, UPPER,
-                        HYPOTHESES, KERNELS)
+                        HYPOTHESES, KERNELS, LogNormalCDF, log_event_ratio)
 from src.model import Segmentor, balanced_loss, ranking_loss, to_device
 from src.train import cached_backward, seed_all, rng_state, restore_rng
 
@@ -134,6 +135,63 @@ def test_fp32_tail_mass_density_and_gradients_do_not_collapse(device):
     mass = log_normal_mass(torch.tensor([0.], device=device), torch.tensor([1.], device=device), 100., 100.00001)
     expected = -.5 * 100.000005**2 - .5 * math.log(2 * math.pi) + math.log(.00001)
     assert abs(float(mass) - expected) < .002
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA"))])
+def test_logcdf_extreme_tail_keeps_values_and_correct_derivatives(device):
+    x = torch.tensor([-1e8, -1e5, -1e4, -100., -20., -3., 0., 3., 10.], device=device, requires_grad=True)
+    actual = LogNormalCDF.apply(x)
+    torch.testing.assert_close(actual, torch.special.log_ndtr(x), atol=0, rtol=0)
+    actual.sum().backward()
+    reference = x.detach().cpu().double().numpy()
+    expected = np.empty_like(reference)
+    negative = reference < 0
+    expected[negative] = math.sqrt(2 / math.pi) / erfcx(-reference[negative] / math.sqrt(2))
+    expected[~negative] = np.exp(-.5 * reference[~negative]**2 - log_ndtr(reference[~negative]) - .5 * math.log(2 * math.pi))
+    np.testing.assert_allclose(x.grad.cpu().numpy(), expected, rtol=2e-6, atol=0)
+    assert torch.autograd.gradcheck(LogNormalCDF.apply,
+        (torch.tensor([-20., -3., 0., 3.], dtype=torch.float64, device=device, requires_grad=True),),
+        eps=1e-5, atol=1e-8, rtol=1e-7)
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA"))])
+def test_interval_mass_extreme_tail_has_finite_analytic_gradients(device):
+    mu = torch.tensor([100., 1e6], device=device, requires_grad=True)
+    tau = torch.tensor([1e-4, 1.], device=device, requires_grad=True)
+    mass = log_normal_mass(mu, tau, LOWER, UPPER)
+    mass.sum().backward()
+    a = (LOWER - mu.detach().cpu().double().numpy()) / tau.detach().cpu().double().numpy()
+    b = (UPPER - mu.detach().cpu().double().numpy()) / tau.detach().cpu().double().numpy()
+    ratio = np.exp(log_ndtr(a) - log_ndtr(b))
+    ra, rb = (math.sqrt(2 / math.pi) / erfcx(-z / math.sqrt(2)) for z in (a, b))
+    scale = tau.detach().cpu().double().numpy() * (1 - ratio)
+    np.testing.assert_allclose(mu.grad.cpu().numpy(), (ratio * ra - rb) / scale, rtol=2e-6)
+    np.testing.assert_allclose(tau.grad.cpu().numpy(), (a * ratio * ra - b * rb) / scale, rtol=2e-6)
+    assert torch.isfinite(mass).all()
+    # A distant narrow interval must not form middle**4 * width**4 (inf * 0).
+    center = torch.tensor([-1e30], device=device, requires_grad=True)
+    spread = torch.tensor([1e15], device=device, requires_grad=True)
+    value = log_normal_mass(center, spread, 0., 1e-5)
+    value.sum().backward()
+    assert all(torch.isfinite(t).all() for t in (value, center.grad, spread.grad))
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA"))])
+def test_event_normalizer_large_rate_retains_value_and_gradient(device):
+    values = [-1000., -20., -5., -1., 0., 1., 5., 89., 100., 1000.]
+    x = torch.tensor(values, device=device, requires_grad=True)
+    result = log_event_ratio(x)
+    result.sum().backward()
+    expected, derivatives = [], []
+    for value in values:
+        if value > math.log(50):
+            expected.append(-value); derivatives.append(-1.)
+        else:
+            rate = math.exp(value)
+            expected.append(math.log(-math.expm1(-rate)) - value if rate else 0.)
+            derivatives.append(-rate / 2 + rate**2 / 12 if rate < .01 else rate / math.expm1(rate) - 1)
+    np.testing.assert_allclose(result.detach().cpu().numpy(), expected, atol=2e-7, rtol=2e-6)
+    np.testing.assert_allclose(x.grad.cpu().numpy(), derivatives, atol=1e-7, rtol=2e-6)
 
 
 def test_joint_nll_shares_hypothesis_and_weights_blocks_equally():

@@ -187,6 +187,26 @@ def ray_parameters(field, group, origin, direction):
     return mu, tau, log_h
 
 
+class LogNormalCDF(torch.autograd.Function):
+    """Keep log-CDF values, but avoid cancellation in their negative-tail derivative."""
+
+    @staticmethod
+    def forward(ctx, value):
+        result = torch.special.log_ndtr(value)
+        ctx.save_for_backward(value, result)
+        return result
+
+    @staticmethod
+    def backward(ctx, gradient):
+        value, result = ctx.saved_tensors
+        # phi(x)/Phi(x) = sqrt(2/pi)/erfcx(-x/sqrt(2)) for x <= 0.
+        # Safe inputs matter: where() still evaluates both derivative branches.
+        tail = math.sqrt(2 / math.pi) / torch.special.erfcx(-value.clamp_max(0) / math.sqrt(2))
+        central = (-.5 * value.clamp_min(0).square() - result.clamp_min(-math.log(2))
+                   - .5 * math.log(2 * math.pi)).exp()
+        return gradient * torch.where(value < 0, tail, central)
+
+
 def log_normal_mass(mu, tau, lower, upper):
     """Stable log Gaussian interval mass, including narrow intervals in either tail."""
     width = (upper - lower) / tau
@@ -194,17 +214,20 @@ def log_normal_mass(mu, tau, lower, upper):
     left, right = middle - width / 2, middle + width / 2
     # Reflect the positive tail before subtracting CDFs near one.
     positive = middle > 0
-    lo = torch.special.log_ndtr(torch.where(positive, -right, left))
-    hi = torch.special.log_ndtr(torch.where(positive, -left, right))
+    lo = LogNormalCDF.apply(torch.where(positive, -right, left))
+    hi = LogNormalCDF.apply(torch.where(positive, -left, right))
     delta = lo - hi
     safe_delta = torch.where(delta < 0, delta, torch.full_like(delta, -1.))
     ordinary = hi + torch.log(-torch.expm1(safe_delta))
     narrow = (width < .01) & (middle.abs() * width < .01)
     # The midpoint integral expansion avoids catastrophic CDF cancellation.
-    w2, m2 = width.square(), middle.square()
-    correction = (m2 - 1) * w2 / 24 + (m2.square() - 6 * m2 + 3) * w2.square() / 1920
-    local = width.clamp_min(torch.finfo(width.dtype).tiny).log() - .5 * m2 - .5 * math.log(2 * math.pi)
-    local = local + torch.log1p(torch.where(narrow, correction, torch.zeros_like(correction)))
+    local_width = torch.where(narrow, width, torch.ones_like(width))
+    local_middle = torch.where(narrow, middle, torch.zeros_like(middle))
+    # Reorder the same polynomial: m*w stays small even in a very distant tail.
+    w2, u2 = local_width.square(), (local_middle * local_width).square()
+    correction = (u2 - w2) / 24 + (u2.square() - 6 * u2 * w2 + 3 * w2.square()) / 1920
+    local = local_width.clamp_min(torch.finfo(width.dtype).tiny).log() - .5 * local_middle.square() - .5 * math.log(2 * math.pi)
+    local = local + torch.log1p(correction)
     return torch.where(width > 0, torch.where(narrow, local, ordinary), torch.full_like(local, -torch.inf))
 
 
@@ -214,7 +237,9 @@ def log_event_ratio(log_H):
     H_small = log_H.clamp_max(math.log(.01)).exp()
     approximation = -H_small / 2 + H_small.square() / 24
     safe_log_H = log_H.clamp_min(math.log(.01))
-    regular = torch.log(-torch.expm1(-safe_log_H.exp())) - safe_log_H
+    # Above this bound the log correction already rounds to zero; keep -log_H.
+    maximum = math.log(-math.log(torch.finfo(log_H.dtype).tiny))
+    regular = torch.log(-torch.expm1(-safe_log_H.clamp_max(maximum).exp())) - safe_log_H
     return torch.where(small, approximation, regular)
 
 

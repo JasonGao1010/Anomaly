@@ -575,6 +575,28 @@ def code_record():
                 weights_revision=WEIGHTS_REVISION, weights_sha256=WEIGHTS_SHA256)
 
 
+def normal_numerics_repair(previous, current):
+    """Accept only the identified log-CDF backward repair of the source-only run."""
+    affected = {
+        "src/normal.py": "cb40bb3bd78e52bfae02c9a4c4181214e8d1672eccc7561f28935db45e093cc3",
+        "src/train.py": "5561c185c8e4f2b79fd2838fbf9c3d95fb17c744d42a3e3311b838ef136e8974",
+    }
+    if (previous.get("recipe") != "field" or previous.get("data_version") != SOURCE_VERSION
+            or "normal_numerics" in previous
+            or current.get("normal_numerics") != "stable_logcdf_backward"):
+        return False
+    files = current.get("code", {}).get("files", {})
+    if any(previous.get("code", {}).get("files", {}).get(name) != digest or name not in files
+           for name, digest in affected.items()):
+        return False
+    repaired = copy.deepcopy(previous)
+    repaired["normal_numerics"] = current["normal_numerics"]
+    for name in affected:
+        repaired["code"]["files"][name] = files[name]
+    # The data, optimizer, schedule, dependencies and every other source file stay exact.
+    return identity(repaired) == identity(current)
+
+
 def configuration(train, val, device, world_size, *, updates=None, initial=None,
                   eval_every=None, recipe="mixed", optimizer_state="reset", segment=0, objective="bce", branch=None,
                   hard_pool=None, material_indices=None, baseline_eval=None, passes=None, seed=0):
@@ -649,6 +671,7 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
         visits = updates * BATCH_SIZE if bounded else passes * len(train["records"])
         updates = math.ceil(visits / BATCH_SIZE)
         result.update(version=train["version"], model="field", recipe="field", epochs=passes, updates=updates,
+            normal_numerics="stable_logcdf_backward",
             scan_visits=visits, initial=str(initial.resolve()), initial_sha256=WEIGHTS_SHA256,
             optimizer_state="reset", peak_lr=PEAK_LR[0], microbatch=2, objective="metrics", precision="torch.float32",
             eval_every=eval_every or updates, sampling_segment=0,
@@ -885,13 +908,21 @@ def train_stage(args, train, val, seed, method, device, config):
     seed_all(seed)
     model = Segmentor(mode, **({"recompute": False} if config.get("retain_activations") else {}))
     load_record = None
+    numerical_repair = None
     resume = last.exists()
     if resume:
         if not args.resume:
             raise ValueError(f"{last} exists; use --resume to continue its exact state")
         saved = torch.load(last, map_location="cpu", weights_only=False)
-        if identity(saved["config"]) != identity(config) or saved["seed"] != seed or saved["method"] != method:
+        exact = identity(saved["config"]) == identity(config)
+        repaired = (not exact and not saved["complete"] and method == "field"
+                    and normal_numerics_repair(saved["config"], config))
+        if not (exact or repaired) or saved["seed"] != seed or saved["method"] != method:
             raise ValueError("resume configuration, code, dependencies or data differ")
+        if repaired:
+            numerical_repair = dict(reason="stable_logcdf_backward", resume_step=saved["planned_updates"],
+                previous_configuration=identity(saved["config"]), previous_code=saved["config"]["code"],
+                current_code=config["code"])
         if saved["complete"]:
             if rank == 0:
                 write_result(directory, saved, config)
@@ -947,6 +978,12 @@ def train_stage(args, train, val, seed, method, device, config):
         for key in state:
             state[key] = saved.get(key, state[key])
         restore_rng(saved["rng"][rank], device)
+        if numerical_repair and rank == 0:
+            record = json.loads((directory / "config.json").read_text())
+            record.update(configuration=config, numerical_repair=numerical_repair)
+            write_json(directory / "config.json", record)
+            print(f"数值修复续训：已恢复第 {state['planned_updates']} 步的模型、优化器和随机状态；"
+                  "后续使用稳定的正态分布对数累积概率梯度。", flush=True)
         del saved
     else:
         seed_all(seed + stage * 1000 + rank * 10000)

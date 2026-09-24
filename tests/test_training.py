@@ -1294,8 +1294,44 @@ def test_distributed_gradient_sum_with_empty_final_rank(tmp_path):
         torch.testing.assert_close(expected.grad, observed, atol=0, rtol=0)
 
 
-@pytest.mark.parametrize("bounded", [False, True])
-def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(tmp_path, monkeypatch, bounded):
+def _normal_numerics_configs():
+    from src.data import SOURCE_VERSION
+    previous = dict(recipe="field", data_version=SOURCE_VERSION, train_manifest="fixture-train", updates=3,
+        code=dict(files={
+            "src/normal.py": "cb40bb3bd78e52bfae02c9a4c4181214e8d1672eccc7561f28935db45e093cc3",
+            "src/train.py": "5561c185c8e4f2b79fd2838fbf9c3d95fb17c744d42a3e3311b838ef136e8974",
+            "src/data.py": "same-data-reader"}, dependencies={"torch": "same-version"}))
+    current = deepcopy(previous)
+    current["normal_numerics"] = "stable_logcdf_backward"
+    current["code"]["files"].update({"src/normal.py": "repaired-normal", "src/train.py": "repaired-resume"})
+    return previous, current
+
+
+def test_normal_numerics_repair_rejects_other_configuration_and_code_changes():
+    from src.train import normal_numerics_repair
+    previous, current = _normal_numerics_configs()
+    assert normal_numerics_repair(previous, current)
+    for path, value in [(("train_manifest",), "different-data"), (("updates",), 4),
+                        (("normal_numerics",), "other-repair"),
+                        (("code", "files", "src/data.py"), "changed-reader"),
+                        (("code", "dependencies", "torch"), "changed-version")]:
+        changed = deepcopy(current)
+        parent = changed
+        for key in path[:-1]:
+            parent = parent[key]
+        parent[path[-1]] = value
+        assert not normal_numerics_repair(previous, changed)
+    for name in ("src/normal.py", "src/train.py"):
+        changed = deepcopy(previous)
+        changed["code"]["files"][name] = "unknown-previous-implementation"
+        assert not normal_numerics_repair(changed, current)
+    already_repaired = deepcopy(previous)
+    already_repaired["normal_numerics"] = "stable_logcdf_backward"
+    assert not normal_numerics_repair(already_repaired, current)
+
+
+@pytest.mark.parametrize("bounded,numerics_repair", [(False, False), (True, False), (True, True)])
+def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(tmp_path, monkeypatch, bounded, numerics_repair):
     import src.train as training
     from src.data import NATIVE_VERSION, SOURCE_VERSION
     monkeypatch.setattr(training, "disk_check", lambda *a: None)
@@ -1327,6 +1363,9 @@ def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(
                   recipe="field", objective="metrics", world_size=1, train_manifest="fixture-train",
                   sampling="bounded" if bounded else "complete passes", sampling_segment=0, optimizer_state="reset",
                   retain_activations=bounded)
+    if numerics_repair:
+        previous, current = _normal_numerics_configs()
+        config.update(current)
     args = SimpleNamespace(output=tmp_path / "full", initial=tmp_path / "public.pth", resume=True,
                            workers=0, save_every=100, score_path=None, progress=bounded)
     monkeypatch.setattr(training, "STOP", False)
@@ -1337,14 +1376,30 @@ def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(
     assert order["passes"] == (None if bounded else 3)
     assert full["successful_updates"] == 3 and full["overflows"] == 0
     args.output = tmp_path / "resume"
+    interrupted_config = deepcopy(config)
+    if numerics_repair:
+        interrupted_config.update(previous)
+        interrupted_config.pop("normal_numerics")
     training.STOP = True
-    assert not training.train_stage(args, manifest, {}, 2, "field", torch.device("cpu"), config)
+    assert not training.train_stage(args, manifest, {}, 2, "field", torch.device("cpu"), interrupted_config)
     training.STOP = False
     assert training.train_stage(args, manifest, {}, 2, "field", torch.device("cpu"), config)
     resumed = torch.load(args.output / "2/field/last.pt", weights_only=False)
     for key, value in full["model"].items():
         torch.testing.assert_close(value, resumed["model"][key], atol=0, rtol=0)
+    torch.testing.assert_close(full["optimizer"], resumed["optimizer"], atol=0, rtol=0)
     assert torch.equal(full["rng"][0]["torch"], resumed["rng"][0]["torch"])
+    assert full["rng"][0]["python"] == resumed["rng"][0]["python"]
+    np.testing.assert_equal(full["rng"][0]["numpy"], resumed["rng"][0]["numpy"])
+    assert json.loads((args.output / "2/field/sampling.json").read_text()) == order
+    if numerics_repair:
+        record = json.loads((args.output / "2/field/config.json").read_text())
+        repair = record["numerical_repair"]
+        assert repair["resume_step"] == 1
+        assert repair["previous_code"] == previous["code"]
+        assert repair["current_code"] == current["code"]
+        assert record["load"] is not None
+        assert resumed["config"] == config
 
 
 @pytest.mark.parametrize("count", [5, 17])
