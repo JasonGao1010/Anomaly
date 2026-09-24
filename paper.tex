@@ -1,19 +1,13 @@
-% Compile from the repository root with XeLaTeX, BibTeX, XeLaTeX, XeLaTeX.
+% Compile from the repository root with pdfLaTeX, BibTeX, pdfLaTeX, pdfLaTeX.
 % ICLR style files: https://media.iclr.cc/Conferences/ICLR2027/iclr-2027-style-files.zip
 \documentclass{article}
-\usepackage{vendor/iclr2027/iclr2027_conference}
-\usepackage{fontspec}
-\setmainfont{Times New Roman}
-\setsansfont{Times New Roman}
-\setmonofont{Times New Roman}
+\usepackage{vendor/iclr2027/iclr2027_conference,times}
 \usepackage{amsmath,amssymb,booktabs,array,graphicx,xcolor,placeins,xurl}
 \usepackage{hyperref}
 \hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=black,
   pdftitle={Contextual Normal Return Fields for Point-Level LiDAR Anomaly Segmentation},
   pdfauthor={Anonymous authors}}
 \urlstyle{same}
-% Use the requested text typeface for the template's line numbers as well.
-\renewcommand{\iclrtenhv}{\rmfamily\bfseries\fontsize{8}{9}\selectfont}
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\given}{\,\vert\,}
 \newcommand{\blank}{\phantom{00.00}}
@@ -26,6 +20,8 @@
 
 \begin{document}
 \maketitle
+% Modern fancyhdr needs the template's header outside the title's local group.
+\lhead{Under review as a conference paper at ICLR 2027}
 
 \begin{abstract}
 Point-level LiDAR anomaly segmentation must identify objects outside a normal semantic set while retaining normal objects whose sparse returns may look unfamiliar. We introduce contextual normal return fields to learn the observations supported by the surrounding scene and use these alternatives in the anomaly decision. A context encoder withholds a target angular block and predicts multiple three-dimensional return-rate fields. Each field provides a shared spatial explanation for the block's rays, and analytic integration converts it into normalized return-distance distributions. A block-level likelihood trains each explanation against a collection of normal returns before marginalizing the hypothesis identity. A point-level decoder then combines the support of the complete hypotheses with actual-observation features to produce one anomaly score. Original nuScenes scans supervise normal prediction, while scans containing auxiliary anomalies and inserted normal objects supervise discrimination. Both insertion roles use the same observation procedure, and grouped supervision gives inserted normal objects an explicit share of the classification objective. The evaluation examines this learning mechanism through source-domain development, controlled component comparisons, and AP, AUROC, and FPR95 on STU.
@@ -310,15 +306,15 @@ The qualitative comparison pairs point-level predictions with the normal-return 
 We introduced contextual normal return fields for point-level LiDAR anomaly segmentation. Surrounding observations predict shared spatial hypotheses, analytic ray integration converts them into distance distributions, and a learned decoder combines their support with actual-observation features. Block-level normal learning and point-level discrimination train this mechanism jointly. Original scans provide normal targets, while auxiliary anomalies and normal insertion controls teach the final semantic decision. The resulting formulation connects context-based normal prediction directly to point-level anomaly segmentation.
 % Add the empirical conclusion supported by benchmark and component results.
 
-\section*{Writing Assistance}
-AI tools assisted with literature organization, implementation, manuscript drafting, and formatting.
+\section*{AI Use Statement}
+We used OpenAI Codex to assist with literature search and synthesis, refinement of research hypotheses and the model formulation, mathematical derivations, training-data construction and annotation review, experimental design, implementation and debugging, and interpretation of development results. Codex also assisted with manuscript drafting and editing, reference organization, and document formatting. Synthetic point clouds are produced by the nuScenes-based geometric procedure in Section~\ref{sec:data}; AI assistance included designing and implementing that procedure. Checks of the assisted implementation include numerical evaluation of return densities and gradients, metric recomputation, and verification of source labels and generated observations. The authors take responsibility for the final text, claims, code, and data artifacts.
+
+\section*{Reproducibility Statement}
+Section~\ref{sec:method} defines the model and learning objectives, and Section~\ref{sec:data} describes the source-data construction and partitioning. Appendices~\ref{app:integral}--\ref{app:implementation} provide the analytic derivation, loss definitions, model dimensions, optimization settings, and sampling procedure. Appendix~\ref{app:resources} records the training resources and observation coverage.
 
 \clearpage
-\begingroup
-\raggedright
 \bibliography{paper}
 \bibliographystyle{vendor/iclr2027/iclr2027_conference}
-\endgroup
 
 \clearpage
 \appendix
