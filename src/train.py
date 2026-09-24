@@ -114,6 +114,17 @@ def effective_batches(order, rank=0, world_size=1):
         yield order[start:start + BATCH_SIZE][rank::world_size]
 
 
+def progress_line(step, total, loss, seconds, peak_bytes):
+    def clock(value):
+        minutes, seconds = divmod(max(0, int(value)), 60)
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    rate = seconds / max(step, 1)
+    return (f"训练 {step}/{total} ({step / total:.1%}) | 损失 {loss:.4f} | "
+            f"{rate:.1f}秒/步 | 已用 {clock(seconds)} | 预计剩余 {clock((total - step) * rate)} | "
+            f"显存 {peak_bytes / 1e9:.1f}GB")
+
+
 def material_order(order, manifest, indices, start, stop):
     """Repeat verified materials only in their existing source/type positions."""
     groups = {manifest["records"][i]["group"] for i in indices}
@@ -131,12 +142,22 @@ def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=Fal
                 far_updates=None):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
     if manifest.get("version") in (NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION):
+        bounded = passes is None
+        if bounded:
+            if manifest["version"] != SOURCE_VERSION or updates < 1 or segment:
+                raise ValueError("an update budget requires source-only data and segment zero")
+            passes = math.ceil(updates * BATCH_SIZE / len(manifest["records"]))
         order = []
         for epoch in range(passes * segment, passes * segment + passes):
             current = (source_order(manifest["records"], seed, epoch, len(order), far_updates)
                        if manifest["version"] == SOURCE_VERSION else
                        epoch_order(len(manifest["records"]), seed, 1, epoch))
             order.extend(current)
+        if bounded:
+            # Use a prefix of the same shuffled stream, never a new data selection.
+            if far_updates is not None:
+                far_updates[:] = [step for step in far_updates if step < updates]
+            return order[:updates * BATCH_SIZE]
         if updates != math.ceil(len(order) / BATCH_SIZE):
             raise ValueError("native training must finish the configured complete data passes")
         return order
@@ -556,7 +577,7 @@ def code_record():
 
 def configuration(train, val, device, world_size, *, updates=None, initial=None,
                   eval_every=None, recipe="mixed", optimizer_state="reset", segment=0, objective="bce", branch=None,
-                  hard_pool=None, material_indices=None, baseline_eval=None, passes=None):
+                  hard_pool=None, material_indices=None, baseline_eval=None, passes=None, seed=0):
     if branch:
         parent = torch.load(initial, map_location="cpu", weights_only=False)
         previous = parent["config"]
@@ -620,10 +641,12 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 precision=str(precision(device)), sparse_precision="float32", world_size=world_size,
                 code=code_record())
     if recipe == "field":
-        if (train["version"] not in (NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION) or world_size != 1 or not passes or passes < 1
+        bounded = passes is None and updates is not None and updates > 0 and train["version"] == SOURCE_VERSION
+        if (train["version"] not in (NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION) or world_size != 1
+                or not (bounded or passes is not None and passes > 0 and updates is None)
                 or file_sha256(initial) != WEIGHTS_SHA256 or optimizer_state != "reset"):
-            raise ValueError("field training requires supported fixed data, public weights, explicit passes and one GPU")
-        visits = passes * len(train["records"])
+            raise ValueError("field training requires fixed data, public weights, an explicit budget and one GPU")
+        visits = updates * BATCH_SIZE if bounded else passes * len(train["records"])
         updates = math.ceil(visits / BATCH_SIZE)
         result.update(version=train["version"], model="field", recipe="field", epochs=passes, updates=updates,
             scan_visits=visits, initial=str(initial.resolve()), initial_sha256=WEIGHTS_SHA256,
@@ -646,7 +669,8 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 forwards="one score pass plus one replay; per-scan activation release; BN advances once"),
             validation="explicit development manifest; checkpoint selection permitted; not an independent final test")
         if train["version"] == SOURCE_VERSION:
-            paired_visits = passes * sum(bool(row.get("delta")) for row in train["records"])
+            selected = pilot_order(train, seed, updates, passes=None) if bounded else range(len(train["records"]))
+            paired_visits = sum(bool(train["records"][i].get("delta")) for i in selected) * (1 if bounded else passes)
             result.update(data_recipe=train.get("recipe", {}), normal_source_visits=visits,
                 paired_normal_source_visits=paired_visits, shared_normal_source_visits=visits - paired_visits,
                 sampling="complete passes without replacement; at most 20% deliberately distant-positive batches; mixed cross-pass remainders",
@@ -654,11 +678,14 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                     positive_count_bins="powers of two", positive_scans=[1, 4],
                     normal_scans="at least one original and one normal insertion; no repeated records",
                     metadata="point_range_median describes supervised inserted points, never object-center distance"),
-                source_groups=source_counts(train, range(len(train["records"]))),
+                source_groups=source_counts(train, selected),
                 data_roles=dict(training="raw nuScenes scans, synthetic road obstacles and normal placement controls",
                     positive="explicit synthetic obstacle returns; original debris and void remain ignored",
                     normal_auxiliary="unchanged nuScenes source; paired original for every modified scan, shared prediction for unmodified scans",
                     development="explicit development manifest; official pooled-point metrics"))
+            if bounded:
+                result.update(sampling="fixed update budget; prefix of complete shuffled source passes",
+                              data_passes_equivalent=visits / len(train["records"]))
         if train["version"] == NDP_VERSION:
             result.update(data_recipe=train["recipe"], normal_source_visits=visits,
                 comparison=dict(reference="NDP-EE, arXiv:2604.09232v2 Table 1",
@@ -856,7 +883,7 @@ def train_stage(args, train, val, seed, method, device, config):
         dist.barrier()
     last, best_path = directory / "last.pt", directory / "best.pt"
     seed_all(seed)
-    model = Segmentor(mode)
+    model = Segmentor(mode, **({"recompute": False} if config.get("retain_activations") else {}))
     load_record = None
     resume = last.exists()
     if resume:
@@ -1184,8 +1211,14 @@ def train_stage(args, train, val, seed, method, device, config):
                 with (directory / "log.jsonl").open("a") as stream:
                     stream.write(json.dumps(row, allow_nan=False) + "\n")
                 if step == 1 or step % 25 == 0 or overflow or need_stop:
-                    print(json.dumps(row, allow_nan=False), flush=True)
+                    if not getattr(args, "progress", False):
+                        print(json.dumps(row, allow_nan=False), flush=True)
+            if rank == 0 and getattr(args, "progress", False):
+                print("\r" + progress_line(step, total, loss_sum.item(), state["training_seconds"],
+                      torch.cuda.max_memory_allocated(device)), end="\n" if need_stop or step == total else "", flush=True)
             if need_stop:
+                if rank == 0:
+                    print(f"已停止，恢复检查点：{last}", flush=True)
                 return False
         del iterator, loader
         if state["epoch_frames"] != len(order):
@@ -1197,6 +1230,8 @@ def train_stage(args, train, val, seed, method, device, config):
             atomic_save(last, saved)
         del saved
         validation_start = time.perf_counter()
+        if rank == 0 and getattr(args, "progress", False):
+            print("\n开始完整 nuScenes 验证；上面的剩余时间仅估算训练部分。", flush=True)
         evaluation_scores = directory / f"val{state['planned_updates']}.npy" if recording is not None else (
             args.score_path if (epoch + 1) * steps_per_epoch >= total else None)
         if config.get("decoder_comparison"):
@@ -1226,7 +1261,10 @@ def train_stage(args, train, val, seed, method, device, config):
                     array.flush()
                 atomic_save(directory / f"step{state['planned_updates']}.pt", saved)
             write_json(directory / f"epoch{epoch + 1}.json", report)
-            print(json.dumps(dict(seed=seed, method=method, **report)), flush=True)
+            if getattr(args, "progress", False):
+                print(f"验证完成：{json.dumps(result['metrics'])}；检查点：{last}", flush=True)
+            else:
+                print(json.dumps(dict(seed=seed, method=method, **report)), flush=True)
         del saved
     state["complete"] = True
     saved = capture(model, optimizer, scaler, state, config, device, selected=False)
@@ -1254,7 +1292,7 @@ def preflight(args, train, val, device, config, resources, method="field"):
                           background=config.get("background_reference"), passes=config.get("epochs", 2) if method == "field" else 2)
     indices = order[:BATCH_SIZE]
     if config.get("recipe") in ("native", "field"):
-        model = Segmentor(method).to(device)
+        model = Segmentor(method, **({"recompute": False} if config.get("retain_activations") else {})).to(device)
         model.load_pretrained(args.initial)
     else:
         parent = torch.load(args.initial, map_location="cpu", weights_only=False)
@@ -1333,7 +1371,11 @@ def main():
     parser.add_argument("--val-manifest", type=Path, required=True, help="development data used for model selection")
     parser.add_argument("--output", type=Path, required=True, help="experiment output directory")
     parser.add_argument("--initial", type=Path, default=Path("assets/nuscenes.pth"))
-    parser.add_argument("--epochs", type=int, required=True, help="explicit complete training-data passes")
+    budget = parser.add_mutually_exclusive_group(required=True)
+    budget.add_argument("--epochs", type=int, help="explicit complete training-data passes")
+    budget.add_argument("--updates", type=int, help="fixed source-only update budget; may stop within a data pass")
+    parser.add_argument("--retain-activations", action="store_true", help="retain model/normal activations instead of recomputing; uses more VRAM")
+    parser.add_argument("--progress", action="store_true", help="compact live progress; detailed JSON remains in log.jsonl")
     parser.add_argument("--eval-every", type=int, help="updates between development evaluations; default: endpoint only")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=2)
@@ -1343,7 +1385,8 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--check", action="store_true", help="one complete effective-batch backward; no parameter update")
     args = parser.parse_args()
-    if (args.epochs < 1 or args.seed < 0 or args.workers < 0 or args.threads < 1 or args.save_every < 1
+    if (args.epochs is not None and args.epochs < 1 or args.updates is not None and args.updates < 1
+            or args.seed < 0 or args.workers < 0 or args.threads < 1 or args.save_every < 1
             or args.eval_every is not None and args.eval_every < 1):
         parser.error("invalid training budget or runtime settings")
     if int(os.environ.get("WORLD_SIZE", 1)) != 1:
@@ -1356,8 +1399,11 @@ def main():
     torch.cuda.set_device(device)
     train, val = load_manifest(args.train_manifest, "train"), load_manifest(args.val_manifest, "val")
     config = configuration(train, val, device, 1, initial=args.initial, recipe="field",
-                           eval_every=args.eval_every, passes=args.epochs)
+                           eval_every=args.eval_every, passes=args.epochs, updates=args.updates, seed=args.seed)
     config["seeds"] = [args.seed]
+    if args.retain_activations:
+        config["retain_activations"] = True
+        config["gradient_cache"]["activations"] = "retain model and normal-field intermediates; backbone attention still recomputes"
     args.updates = config["updates"]
     resources = runtime_snapshot()
     if args.workers + args.threads > len(os.sched_getaffinity(0)):

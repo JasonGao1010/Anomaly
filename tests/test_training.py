@@ -365,6 +365,22 @@ def test_native_two_passes_preserve_every_record_and_partial_final_batch():
     assert all(sorted(longer[start:start + 19]) == list(range(19)) for start in (0, 19, 38))
 
 
+def test_source_update_budget_is_exact_prefix_and_rescales_schedule():
+    from src.data import SOURCE_VERSION
+    from src.train import source_order, ranking_weight, progress_line
+    records = [dict(group="normal_nuscenes", normal=10, anomaly=0) for _ in range(35)]
+    manifest = dict(version=SOURCE_VERSION, records=records)
+    for updates in (2, 6):
+        expected = source_order(records, 7, 0, 0) + source_order(records, 7, 1, 35)
+        order = pilot_order(manifest, 7, updates, passes=None)
+        assert order == expected[:updates * 8]
+        assert len(order) == updates * 8
+        assert len(set(order[:min(35, len(order))])) == min(35, len(order))
+    assert lr_factor(75, 1500) == 1 and lr_factor(1500, 1500) == .01
+    assert ranking_weight(150, 1500) == 0 and ranking_weight(300, 1500) == 1
+    assert "预计剩余 00:01:40" in progress_line(5, 10, .5, 100, 3_000_000_000)
+
+
 def test_ndp_complete_passes_keep_sparse_anomalies_and_pair_original_geometry():
     from src.data import NDP_VERSION
     from src.evaluate import PreparedScans
@@ -1278,13 +1294,15 @@ def test_distributed_gradient_sum_with_empty_final_rank(tmp_path):
         torch.testing.assert_close(expected.grad, observed, atol=0, rtol=0)
 
 
-def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(tmp_path, monkeypatch):
+@pytest.mark.parametrize("bounded", [False, True])
+def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(tmp_path, monkeypatch, bounded):
     import src.train as training
-    from src.data import NATIVE_VERSION
+    from src.data import NATIVE_VERSION, SOURCE_VERSION
     monkeypatch.setattr(training, "disk_check", lambda *a: None)
     class Model(_ToyModel):
-        def __init__(self, mode):
+        def __init__(self, mode, recompute=True):
             super().__init__(mode)
+            assert recompute == (not bounded)
             self.normal = nn.Linear(3, 4)
             self.bn = nn.BatchNorm1d(4)
         def forward(self, sample, *, normal_loss=False):
@@ -1301,19 +1319,22 @@ def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(
     monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a: 0)
     monkeypatch.setattr(training, "validate_all", lambda *a, **kw: dict(metrics=dict(AP=2., FPR95=90., AUROC=51.)))
-    manifest = dict(version=NATIVE_VERSION, sha256="fixture-train", records=[
-        dict(group="normal_stu" if i % 2 else "anomaly_stu", normal=5, anomaly=0 if i % 2 else 5)
-        for i in range(7)])
-    config = dict(version=NATIVE_VERSION, model="field", updates=3, eval_every=3, epochs=3, microbatch=2,
+    version = SOURCE_VERSION if bounded else NATIVE_VERSION
+    manifest = dict(version=version, sha256="fixture-train", records=[
+        dict(group="normal_nuscenes" if i % 2 else "anomaly_nuscenes", normal=5, anomaly=0 if i % 2 else 5)
+        for i in range(35 if bounded else 7)])
+    config = dict(version=version, model="field", updates=3, eval_every=3, epochs=None if bounded else 3, microbatch=2,
                   recipe="field", objective="metrics", world_size=1, train_manifest="fixture-train",
-                  sampling="complete passes", sampling_segment=0, optimizer_state="reset")
+                  sampling="bounded" if bounded else "complete passes", sampling_segment=0, optimizer_state="reset",
+                  retain_activations=bounded)
     args = SimpleNamespace(output=tmp_path / "full", initial=tmp_path / "public.pth", resume=True,
-                           workers=0, save_every=100, score_path=None)
+                           workers=0, save_every=100, score_path=None, progress=bounded)
     monkeypatch.setattr(training, "STOP", False)
     assert training.train_stage(args, manifest, {}, 2, "field", torch.device("cpu"), config)
     full = torch.load(args.output / "2/field/last.pt", weights_only=False)
     order = json.loads((args.output / "2/field/sampling.json").read_text())
-    assert len(order["order"]) == 21 and order["passes"] == 3
+    assert len(order["order"]) == (24 if bounded else 21)
+    assert order["passes"] == (None if bounded else 3)
     assert full["successful_updates"] == 3 and full["overflows"] == 0
     args.output = tmp_path / "resume"
     training.STOP = True
