@@ -426,6 +426,30 @@ def test_source_role_quotas_cover_each_pool_before_reuse_and_spread_observations
         pilot_order(incomplete, 7, 3, passes=None)
 
 
+def test_source_distance_capacity_proportions_persist_until_pool_end():
+    from src.data import SOURCE_VERSION
+    records = []
+    for group, count in (("anomaly_nuscenes", 8), ("anomaly_nuscenes", 2), ("control_nuscenes", 0)):
+        for frame in range(100):
+            band = 0 if frame < 90 else 3
+            records.append(dict(group=group, normal=20, anomaly=count, scene="scene",
+                instance="donor", timestamp=frame, point_range_median=8. if band == 0 else 35.,
+                inserted_points=count if count else 3,
+                inserted_point_histogram=[3 if i == band else 0 for i in range(5)]))
+    records += [dict(group="normal_nuscenes", normal=20, anomaly=0, scene="scene", timestamp=i)
+                for i in range(100)]
+    manifest = dict(version=SOURCE_VERSION, records=records)
+    order = pilot_order(manifest, 12, 110, passes=None)
+    assert order[:37 * 8] == pilot_order(manifest, 12, 37, passes=None)
+    for lower in (0, 100, 200):
+        visits = [i for i in order if lower <= i < lower + 100]
+        cycle = visits[:100]
+        assert set(cycle) == set(range(lower, lower + 100))
+        # The rare-distance tenth is preserved in every fifth of the first cycle.
+        for begin in range(0, 100, 20):
+            assert sum((i - lower) >= 90 for i in cycle[begin:begin + 20]) == 2
+
+
 def test_ndp_complete_passes_keep_sparse_anomalies_and_pair_original_geometry():
     from src.data import NDP_VERSION
     from src.evaluate import PreparedScans
@@ -1420,7 +1444,8 @@ def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(
             inserted_point_histogram=[0, 1, 0, 0, 0] if group == "control_nuscenes" else [0]*5)
             for group, count in (("anomaly_nuscenes", 5), ("anomaly_nuscenes", 2),
                                  ("control_nuscenes", 0), ("normal_nuscenes", 0)) for i in range(12)]
-    config = dict(version=version, model="field", updates=3, eval_every=3, epochs=None if bounded else 3, microbatch=2,
+    config = dict(version=version, model="field", updates=3, eval_every=2 if bounded else 3,
+                  epochs=None if bounded else 3, microbatch=2,
                   recipe="field", objective="metrics", world_size=1, train_manifest="fixture-train",
                   sampling="bounded" if bounded else "complete passes", sampling_segment=0, optimizer_state="reset",
                   retain_activations=bounded)
@@ -1436,6 +1461,10 @@ def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(
     assert len(order["order"]) == (24 if bounded else 21)
     assert order["passes"] == (None if bounded else 3)
     assert full["successful_updates"] == 3 and full["overflows"] == 0
+    if bounded:
+        reports = [json.loads((args.output / f"2/field/epoch{i}.json").read_text()) for i in (1, 2)]
+        assert [report["planned_updates"] for report in reports] == [2, 3]
+        assert sum(report["frames"] for report in reports) == len(order["order"])
     args.output = tmp_path / "resume"
     interrupted_config = deepcopy(config)
     if numerics_repair:

@@ -4,6 +4,7 @@ import argparse
 import copy
 from collections import Counter, defaultdict, deque
 import gc
+import heapq
 import importlib.metadata
 import json
 import math
@@ -96,7 +97,7 @@ def source_order(records, seed, updates, far_updates=None):
                 node = node.setdefault(key, {})
             node.setdefault(None, []).append(index)
 
-        def interleave(node):
+        def interleave(node, depth=0):
             if None in node:
                 ordered = sorted(node[None], key=lambda i: (records[i].get("timestamp", records[i].get("frame", i)), i))
                 intervals, result = deque([(0, len(ordered))]), []
@@ -112,8 +113,22 @@ def source_order(records, seed, updates, far_updates=None):
                             intervals.append((a, b))
                 return result
             keys = list(node)
-            queues = deque(deque(interleave(node[keys[int(i)]])) for i in rng.permutation(len(keys)))
+            queues = [deque(interleave(node[keys[int(i)]], depth + 1)) for i in rng.permutation(len(keys))]
             result = []
+            if depth == 0 and role != "original":
+                # Merge evenly spaced visits at each band's share of this role pool.
+                # Rare distances remain spread across the cycle instead of ending early.
+                schedule = [(.5 / len(queue), index, len(queue)) for index, queue in enumerate(queues)]
+                heapq.heapify(schedule)
+                while schedule:
+                    _, index, capacity = heapq.heappop(schedule)
+                    queue = queues[index]
+                    result.append(queue.popleft())
+                    if queue:
+                        consumed = capacity - len(queue)
+                        heapq.heappush(schedule, ((consumed + .5) / capacity, index, capacity))
+                return result
+            queues = deque(queues)
             while queues:
                 queue = queues.popleft()
                 result.append(queue.popleft())
@@ -744,7 +759,8 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 source_sampling=dict(quota=dict(dense_anomaly=3, sparse_anomaly=1, inserted_normal=2, original=2),
                     dense="at least five supervised anomaly points", sparse="one to four supervised anomaly points",
                     control="at least one inserted normal point within 2.5-50 m",
-                    order="interleave distance band, donor, scene, point-count bin and placement; temporally separated frames first",
+                    order="distance bands follow role-pool frame proportions throughout each cycle; interleave donor, scene, point-count bin and placement within each band; temporally separated frames first",
+                    distance_allocation="merge evenly spaced per-band visits (j+0.5)/band_size; source training capacities only",
                     range="anomaly: supervised-point median; control: median band of inserted-point histogram",
                     repeats="only after all records in the same role pool were visited; never within one effective batch"),
                 source_groups=source_counts(train, selected), data_passes_equivalent=visits / len(train["records"]),
