@@ -1,0 +1,519 @@
+% Compile from the repository root with XeLaTeX, BibTeX, XeLaTeX, XeLaTeX.
+% ICLR style files: https://media.iclr.cc/Conferences/ICLR2027/iclr-2027-style-files.zip
+\documentclass{article}
+\usepackage{vendor/iclr2027/iclr2027_conference}
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\setsansfont{Times New Roman}
+\setmonofont{Times New Roman}
+\usepackage{amsmath,amssymb,booktabs,array,graphicx,xcolor,placeins,xurl}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=black,
+  pdftitle={Contextual Normal Return Fields for Point-Level LiDAR Anomaly Segmentation},
+  pdfauthor={Anonymous authors}}
+\urlstyle{same}
+% Use the requested text typeface for the template's line numbers as well.
+\renewcommand{\iclrtenhv}{\rmfamily\bfseries\fontsize{8}{9}\selectfont}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\given}{\,\vert\,}
+\newcommand{\blank}{\phantom{00.00}}
+\newcommand{\pending}[1]{\par\noindent\textit{[#1]}\par}
+\newcommand{\figureblank}[2]{%
+  \fbox{\parbox[c][#1][c]{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{%
+    \centering\color{gray}\textit{#2}}}}
+
+\title{Contextual Normal Return Fields for\\Point-Level LiDAR Anomaly Segmentation}
+\author{Anonymous authors}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Point-level LiDAR anomaly segmentation requires a model to recognize objects beyond its training vocabulary while retaining normal points under sparse and unfamiliar observations. Auxiliary anomalies provide discriminative supervision, and normal-scene prediction offers a complementary description of expected observations. We introduce contextual normal return fields, a representation that connects these two sources of supervision through the geometry of LiDAR measurements. A context encoder excludes a target angular block and predicts multiple three-dimensional return-rate fields shared by its rays. Analytic integration converts each field into a conditional distribution over return distance. A hierarchical compatibility decoder compares the observed point with individual field components and complete normal hypotheses, producing one anomaly score per point. The model learns jointly from point-level anomaly labels and a shared-hypothesis likelihood on normal returns. Training data are constructed entirely from nuScenes through observation-supported object insertion, with normal objects inserted by the same procedure as auxiliary anomalies. Evaluation is organized around AP, AUROC, and FPR95 on STU, together with controlled comparisons of the normal representation and its readout.
+\pending{Quantitative findings to be inserted after evaluation.}
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+An unfamiliar object can occupy only a handful of LiDAR returns. Identifying these points requires a model to separate semantic novelty from the variation produced by range, sampling density, and scene layout. A distant pedestrian remains normal even when its shape is poorly resolved; an unfamiliar object can resemble part of a known vehicle. The point-level anomaly segmentation task captures this distinction by assigning an anomaly score to each observed return. STU provides a driving benchmark in which the target objects lie outside a specified set of normal semantic categories \citep{stu}.
+
+Existing approaches obtain anomaly evidence from semantic representations, auxiliary unknown examples, and learned normal distributions. Open-set LiDAR models expose a segmentation network to transformed or inserted objects \citep{real,lion}, learn anomaly-aware scores \citep{rel,ndp}, or compare observations with normal semantic prototypes \citep{lido}. Generative approaches reconstruct normal features and use their discrepancy from the input as additional evidence \citep{doodle}. The quality of a normal reference therefore matters: it determines which aspects of an observation can support an anomaly decision beyond resemblance to the auxiliary objects encountered during training.
+
+We study a normal reference that is constrained by both its input information and its observation geometry. When predicting a target region, the reference uses measurements outside that region. Within the region, several rays query a common three-dimensional hypothesis. This construction links their predicted distances through shared geometry. Multiple hypotheses represent alternative normal arrangements supported by the surrounding scene. The resulting distributions remain available to the anomaly decoder at inference, where they can be compared with the actual returns.
+
+This leads to \emph{contextual normal return fields}. For each angular block, a context encoder predicts a mixture of spatial return-rate fields. Integrating a field along an observed ray produces a normalized distribution over return distance. During normal learning, one mixture component jointly explains the valid normal returns in the block. During anomaly inference, the observed point reads the ray-specific parameters of these hypotheses through a hierarchical compatibility decoder. An actual-observation encoder supplies scene and point detail, and a single output head combines these representations into the anomaly score.
+
+The distinction between normal prediction and anomaly judgment is central to this design. Normal density describes support under a learned distribution, while anomaly labels specify semantic membership \citep{likelihood,perfectdensity}. Normal observations can have several plausible continuations, while auxiliary anomalies sample a finite set of unknown objects. A learned decoder uses the predicted distribution together with the observed point to resolve the task's semantic decision. This follows the broader motivation for combining normal modeling with discriminative learning \citep{densehybrid,draem}, and develops it around a shared spatial representation of LiDAR returns.
+
+Our training construction gives each learning objective a corresponding observation. Modified scans supervise point-level anomaly segmentation, and their original scans supervise normal-field prediction. Auxiliary anomalies and normal objects undergo the same road-placement and observation procedure. Normal cars, pedestrians, bicycles, and motorcycles retain their normal labels after insertion. The data therefore expose the model to both anomaly and normal decisions under the geometric changes introduced by object placement.
+
+The paper develops two connected contributions. First, it formulates an input-excluded normal reference as shared three-dimensional return fields with analytic ray-conditioned distributions. Second, it introduces a hierarchical readout that keeps these normal hypotheses available to end-to-end point-level anomaly learning. The experimental study examines their contribution under fixed source supervision and evaluates transfer from nuScenes to STU using one score for all three official point-level metrics.
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Point-level unknown detection.}
+REAL learns unknown responses alongside known semantic classes, and LiON uses diverse synthetic objects to train point-wise abstention \citep{real,lion}. Relative energy learning and neural distribution priors further connect anomaly supervision to learned segmentation scores \citep{rel,ndp}. LIDO constructs complementary prototype, entropy, and contrastive evidence from normal training data \citep{lido}. COVAL studies visibility interventions for LiDAR anomaly learning \citep{coval}. These methods establish semantic representation, auxiliary anomalies, and observation structure as useful sources of supervision. Our method develops an explicit conditional normal-return representation that a point-level decoder reads at inference.
+
+\paragraph{Normal prediction for anomaly segmentation.}
+Image resynthesis and inpainting provide normal references for road anomaly detection \citep{erasing}. DRAEM couples reconstruction with discriminative anomaly segmentation, while DenseHybrid combines normal-density and outlier-discrimination objectives \citep{draem,densehybrid}. InTra excludes the target image patch before predicting it from its neighborhood, and UniAD restricts reconstruction pathways to address input copying \citep{intra,uniad}. In three dimensions, DOODLE augments LiDAR anomaly scores with diffusion-based feature reconstruction, and GPFlow models normal feature distributions with Gaussian prototypes \citep{doodle,gpflow}. We predict distributions of measured distances from shared spatial hypotheses and retain their component structure in the anomaly readout.
+
+\paragraph{Conditional prediction and geometric representation learning.}
+Blind-spot denoising predicts a distribution from surrounding observations and combines it with the measured target \citep{blindspot,pn2v}. Conditional neural processes learn context-dependent prediction rules with uncertainty over queried outputs \citep{cnp}. In point clouds, masked reconstruction learns geometric representations \citep{pointmae}; UniPAD and Ponder connect three-dimensional fields to rendered observations \citep{unipad,ponder}. Probabilistic LiDAR fields also connect ray attenuation with return distributions \citep{plink}. Our formulation brings shared field prediction into the anomaly decision itself through a learned comparison with observed points.
+
+\paragraph{Source-domain geometry and data construction.}
+Scene completion, sensor-aware augmentation, and density variation support cross-domain LiDAR perception \citep{complete,idam,lidardg}. Mix3D and PolarMix vary the surroundings of real point-cloud instances while preserving their labels \citep{mix3d,polarmix}. We use source observations to construct both auxiliary anomalies and normal insertion controls, and organize the learning problem around their point-level semantic labels. This connects the training construction directly to the normal-reference mechanism.
+
+\section{Contextual Normal Return Fields}
+\label{sec:method}
+
+\subsection{Point-Level Prediction from Observations and Normal Context}
+
+Let $X=\{(x_i,I_i)\}_{i=1}^{n}$ denote one LiDAR scan, where $x_i\in\R^3$ is a return coordinate and $I_i$ its intensity. Each return has a direction $d_i$ and distance $r_i$ relative to the scan reference origin. The network produces a scalar $a_i\in\R$ whose ordering represents anomaly evidence. Training labels assign reliable normal points to zero, auxiliary anomaly points to one, and ambiguous points to an ignored set.
+
+The model contains an actual-observation encoder and a normal-context predictor. The observation encoder uses LitePT-S \citep{litept} with a point-detail pathway to obtain $f_i\in\R^{64}$. It integrates multi-scale scene features, raw-point detail, and the point's position within its voxel. The normal predictor partitions directions into angular blocks at three scales. For each target block $B$, it reads the surrounding blocks $C_B$ and predicts a distributional reference for the target rays. Figure~\ref{fig:method} reserves the model overview.
+
+\begin{figure}[t]
+\centering
+\figureblank{1.18in}{Model overview}
+\caption{Contextual normal return fields. The actual-observation encoder supplies point features. Block-excluded context predicts shared normal fields, which yield ray-conditioned distance distributions. A hierarchical readout combines their compatibility with the observed point into one anomaly score.}
+\label{fig:method}
+\end{figure}
+
+Points are encoded independently before their features are pooled within angular blocks. The target block is removed before any cross-block interaction. A context decoder then attends to the remaining neighborhood using learned hypothesis queries. Its outputs depend on the surrounding observations and the fixed block location and scale. At each scale, the same predicted field parameters serve all target rays in the block.
+
+\subsection{Shared Spatial Hypotheses and Return Distributions}
+\label{sec:fields}
+
+For a target block $B$, the context decoder produces $K$ normal hypotheses with weights $\pi_{Bk}$. Each hypothesis is a positive spatial rate field formed by $M$ anisotropic Gaussian components:
+\begin{align}
+\pi_{Bk}&=\operatorname{softmax}(b_B)_k,\\
+\lambda_{Bk}(x)
+&=\sum_{m=1}^{M}a_{Bkm}
+\exp\!\left[-\frac12(x-c_{Bkm})^\top
+\Sigma_{Bkm}^{-1}(x-c_{Bkm})\right].
+\label{eq:field}
+\end{align}
+The network predicts the centers $c_{Bkm}$, positive amplitudes $a_{Bkm}$, and full positive-definite covariances $\Sigma_{Bkm}$. The rate has units of inverse distance. Components within a hypothesis jointly describe one spatial arrangement, and the mixture represents alternative arrangements supported by the context.
+
+A ray queries this representation through $x_i(r)=o_i+rd_i$, with unit direction $d_i$. We model the distance of a recorded return within the interval $[L,U]$. Define the accumulated rate and its normalization by
+\begin{equation}
+H_{ik}(r)=\int_L^r\lambda_{Bk}(o_i+td_i)\,dt,
+\qquad
+Z_{ik}=1-\exp[-H_{ik}(U)].
+\label{eq:integral}
+\end{equation}
+The conditional return-distance density is
+\begin{equation}
+p_{ik}(r\given C_B,d_i,\text{recorded return})
+=\frac{\lambda_{Bk}(o_i+rd_i)\exp[-H_{ik}(r)]}{Z_{ik}},
+\qquad L\leq r\leq U.
+\label{eq:density}
+\end{equation}
+The exponential term couples the rate at distance $r$ to the accumulated rate at shorter distances. Normalization conditions the prediction on a recorded return in the interval. All target rays in $B$ use the same $\lambda_{Bk}$, so a change to a spatial component affects several distance predictions through their ray geometry.
+
+Restricting a three-dimensional Gaussian to a ray gives a one-dimensional Gaussian response. Consequently, $H_{ik}$ is evaluated analytically through Gaussian cumulative probabilities. This provides differentiable distance densities without discretizing each ray into depth samples. Appendix~\ref{app:integral} gives the derivation.
+
+\subsection{Learning a Shared Normal Explanation}
+\label{sec:normal}
+
+Let $\mathcal I_B$ contain the reliably labeled normal returns within $[L,U]$ in block $B$ of an original scan. The normal-learning objective assigns a common hypothesis to these returns:
+\begin{equation}
+P(R_B\given C_B,Q_B,N)
+=\sum_{k=1}^{K}\pi_{Bk}\prod_{i\in\mathcal I_B}p_{ik}(r_i),
+\label{eq:joint}
+\end{equation}
+where $Q_B$ contains the target ray directions and $N$ denotes normal supervision. Thus, each component is trained to explain a collection of normal returns through one spatial field. The block loss is
+\begin{equation}
+\mathcal L_B=-\frac{1}{|\mathcal I_B|}
+\log\sum_{k=1}^{K}\pi_{Bk}
+\exp\!\left[\sum_{i\in\mathcal I_B}\log p_{ik}(r_i)\right].
+\label{eq:normal}
+\end{equation}
+We average this loss over blocks containing normal targets, then over scales and reference scans. Point normalization gives each populated block a comparable contribution. This shared-hypothesis objective differs from independently mixing hypotheses for every normal point; that distinction forms one component comparison in Section~\ref{sec:experiments}.
+
+\subsection{Hierarchical Compatibility with the Observed Point}
+\label{sec:readout}
+
+At inference, the decoder compares each actual return with the hypotheses predicted for its block. For scale $s$, let $(\mu_{ikm}^s,\tau_{ikm}^s,h_{ikm}^s)$ denote the center, width, and amplitude of component $m$ after restriction to ray $i$. A shared map encodes these ray-specific parameters:
+\begin{equation}
+t_{ikm}^s=\phi\!\left[
+\mu_{ikm}^s/U,\ \log(\tau_{ikm}^s/U),\ \log(h_{ikm}^sU)
+\right]+\delta_s,
+\qquad q_i=W_qf_i+\rho(r_i/U).
+\label{eq:tokens}
+\end{equation}
+Here $\delta_s$ is a learned scale embedding, and the query $q_i$ combines observed point features with measured distance. The first attention operation gathers component information separately within each hypothesis:
+\begin{equation}
+u_{ik}^s=\operatorname{Attn}_{m}
+\big(q_i,\operatorname{key}(t_{ikm}^s),\operatorname{value}(t_{ikm}^s)\big).
+\label{eq:within}
+\end{equation}
+The decoder augments this representation with the complete hypothesis density and its context weight, then aggregates the hypotheses:
+\begin{align}
+v_{ik}^s&=\psi\!\left[u_{ik}^s,\log p_{ik}^s(r_i),\log\pi_{Bk}^s\right],\\
+e_i^s&=\operatorname{Attn}_{k}
+\big(q_i,\operatorname{key}(v_{ik}^s),\operatorname{value}(v_{ik}^s)\big).
+\label{eq:across}
+\end{align}
+This ordering preserves the grouping of Gaussian components into complete hypotheses. Both attention stages learn which predicted structures are relevant to the observed point. Field parameters remain the output of the block-excluded context predictor.
+
+We additionally provide the point's marginal normal log density,
+\begin{equation}
+\ell_i^s=\log\sum_k\pi_{Bk}^s p_{ik}^s(r_i),
+\qquad
+a_i=g\!\left[f_i,e_i^1,e_i^2,e_i^3,\ell_i^1,\ell_i^2,\ell_i^3\right].
+\label{eq:score}
+\end{equation}
+The absolute density complements the attention-weighted features when all hypotheses assign little support to the return. The output $a_i$ is the point-level anomaly score. The normal objective in Equation~\ref{eq:joint} shapes the shared representation during training; Equation~\ref{eq:score} specifies its point-wise use during inference.
+
+\subsection{Joint Optimization}
+
+Detection supervision and normal prediction train the full model together. Let $\mathcal L_{\mathrm{BCE}}$ be binary cross-entropy averaged within each present class and then across classes. We optimize
+\begin{equation}
+\mathcal L=\mathcal L_{\mathrm{BCE}}
++\alpha(t)\big(
+\widetilde{\mathcal L}_{\mathrm{AP}}
++0.1\widetilde{\mathcal L}_{\mathrm{AUC}}
++0.1\widetilde{\mathcal L}_{\mathrm{FPR95}}\big)
++0.1\mathcal L_{\mathrm{normal}}.
+\label{eq:loss}
+\end{equation}
+The ranking terms operate on the same $a_i$ across an effective batch of scans. They address the ordering of anomaly points, overall positive-negative separation, and the normal tail at high anomaly recall. Their weight $\alpha(t)$ increases from zero to one between 10\% and 20\% of the update budget. Appendix~\ref{app:loss} defines the surrogates and their sampling. Detection gradients pass through the compatibility decoder and the return densities into the normal predictor, while original normal scans provide the likelihood supervision.
+
+\section{Source Training Observations}
+\label{sec:data}
+
+\paragraph{Backgrounds and semantic supervision.}
+We construct training and development observations from the official nuScenes training and validation partitions \citep{nuscenes}. They contain 700 and 150 scenes, respectively. A source point receives normal supervision when its annotated meaning agrees with the target normal set. Ambiguous source categories receive ignored labels. Camera observations support donor verification and local label refinement; model inputs are LiDAR coordinates and intensity.
+
+\paragraph{Auxiliary anomalies and normal controls.}
+The auxiliary object collection contains 40 verified instances, divided into 27 training and 13 development donors. They include bags, refuse containers, carts, toolboxes, and suitcases. STU defines its target anomalies separately from the nuScenes debris and pushable/pullable categories \citep{stu}; these source objects supply auxiliary anomaly supervision. Normal donors are adult pedestrians, bicycles, motorcycles, and cars. Both donor roles use the same placement procedure and retain their respective semantic labels.
+
+\paragraph{Placement and recorded observations.}
+Each placement fixes one original-size donor at a world pose supported by measured road points. Independent placements cover an unrestricted base placement and requested observation ranges of 20--30, 30--40, and 40--50\,m. Vehicle motion then determines the sequence of viewing distances and directions. For each receiving scan, its recorded ray directions intersect the donor's measured open surface. A closer supported intersection replaces the corresponding return. Observations are retained within the views supported by the measured donor surface. Background points in uncertain occlusion regions retain their coordinates with ignored supervision.
+
+\begin{figure}[t]
+\centering
+\figureblank{1.0in}{Original scan, auxiliary anomaly insertion, normal insertion}
+\caption{Source supervision. Original observations provide normal-field targets. Independent auxiliary anomaly and normal-object insertions provide point-level detection labels through the same observation procedure. Panels are reserved for actual source examples.}
+\label{fig:data}
+\end{figure}
+
+\paragraph{Paired learning records.}
+Every modified observation is linked to its unmodified scan. The detection loss uses the modified points and their labels. The normal-field loss uses reliable normal returns from the original scan, including for records containing normal insertions. All versions of a scene remain in its original partition, and donor instance identities are partitioned with their source scenes. Table~\ref{tab:data} summarizes the resulting records. Each original background scan appears once in the reading index.
+
+\begin{table}[t]
+\centering
+\caption{nuScenes source data. Modified records share their original scene and scan identities; the first two rows describe the underlying background observations.}
+\label{tab:data}
+\begin{tabular}{lrr}
+\toprule
+ & Training & Development \\
+\midrule
+Background scenes & 700 & 150 \\
+Original scans & 28,130 & 6,019 \\
+Auxiliary anomaly donors & 27 & 13 \\
+Anomaly insertion records & 23,795 & 4,699 \\
+Normal insertion records & 20,895 & 4,861 \\
+Total reading records & 72,820 & 15,579 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Evaluation and Implementation}
+
+\paragraph{Evaluation.}
+The target benchmark is STU, with its public 19-sequence anomaly validation partition and 51-sequence hidden anomaly test partition \citep{stu}. The point-level evaluation uses valid labels in the 2.5--50\,m interval and aggregates eligible scans containing at least five anomaly points. We report average precision (AP), area under the receiver operating characteristic curve (AUROC), and the false-positive rate at 95\% anomaly recall (FPR95). All three metrics use the same checkpoint and unnormalized point score. Source development uses the nuScenes partition described in Section~\ref{sec:data}. Normal insertion observations additionally support an analysis of normal-point scores and false alarms.
+
+\paragraph{Training.}
+The observation backbone is initialized with official nuScenes LitePT-S weights. All model parameters are optimized jointly using AdamW, with peak learning rates of $2\times10^{-4}$ for the backbone and $2\times10^{-3}$ for the added modules. The fixed budget is 1,500 updates with eight scans per effective batch, corresponding to 12,000 scan visits. Full source-development evaluation follows the final update. The model uses 5\,cm voxels, three angular scales of $1^\circ$, $2^\circ$, and $4^\circ$, four normal hypotheses, and eight Gaussian components per hypothesis. Computation uses FP32. Appendix~\ref{app:implementation} supplies the remaining optimization and architecture details.
+
+\subsection{Benchmark Comparison}
+
+Table~\ref{tab:stu} reserves the target comparison against LiDAR anomaly methods. The validation and hidden-test partitions are reported separately. The training resources associated with the published methods and the source-trained model are specified in Appendix~\ref{app:resources}. The table records one operating model per method across AP, AUROC, and FPR95.
+
+\begin{table}[t]
+\centering
+\caption{Point-level anomaly segmentation on STU. Values are percentages. Higher AP and AUROC and lower FPR95 are better. Empty cells reserve measurements for the initial draft.}
+\label{tab:stu}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lrrrrrr}
+\toprule
+ & \multicolumn{3}{c}{Validation} & \multicolumn{3}{c}{Hidden test} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Method & AP $\uparrow$ & AUROC $\uparrow$ & FPR95 $\downarrow$ & AP $\uparrow$ & AUROC $\uparrow$ & FPR95 $\downarrow$ \\
+\midrule
+NDP \citep{ndp} & \blank & \blank & \blank & \blank & \blank & \blank \\
+REL \citep{rel} & \blank & \blank & \blank & \blank & \blank & \blank \\
+LIDO \citep{lido} & \blank & \blank & \blank & \blank & \blank & \blank \\
+COVAL \citep{coval} & \blank & \blank & \blank & \blank & \blank & \blank \\
+\midrule
+Ours & \blank & \blank & \blank & \blank & \blank & \blank \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\pending{Benchmark result analysis.}
+
+\subsection{Contribution of the Normal Representation}
+
+The component study uses a common source dataset, backbone initialization, optimization budget, and detection objective. A direct point classifier supplies the observation-only reference. A point-wise mixture variant replaces the block objective in Equation~\ref{eq:joint} with $\prod_i\sum_k\pi_k p_{ik}(r_i)$ while retaining the same field architecture and inference decoder. A marginal-density readout retains the observation feature $f_i$ and the three log densities $\ell_i^s$ in the final head. The complete model additionally reads the individual hypotheses through Equations~\ref{eq:within}--\ref{eq:across}. These comparisons separate the contribution of a normal reference, shared-hypothesis training, and structured hypothesis readout.
+
+\begin{table}[t]
+\centering
+\caption{Controlled component comparison on STU validation. Each row specifies a separately trained variant under the common source training setup.}
+\label{tab:ablation}
+\begin{tabular}{lrrr}
+\toprule
+Variant & AP $\uparrow$ & AUROC $\uparrow$ & FPR95 $\downarrow$ \\
+\midrule
+Direct point classifier & \blank & \blank & \blank \\
+Point-wise mixture objective & \blank & \blank & \blank \\
+Marginal-density readout & \blank & \blank & \blank \\
+Full model & \blank & \blank & \blank \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\pending{Component comparison results and interpretation.}
+
+\subsection{Normal Controls and Sparse Observations}
+
+Normal insertion controls expose the model to cars and other normal objects under the same road-placement and observation changes as the auxiliary anomalies. Figure~\ref{fig:analysis} reserves their score distributions alongside anomaly performance stratified by range and observed point count. An accompanying analysis groups the source results by donor instance and object type. These views relate the pooled point-level metrics to the diversity of observations represented in the data.
+
+\begin{figure}[t]
+\centering
+\figureblank{1.05in}{Normal-control scores and range/point-count analysis}
+\caption{Analysis of normal retention and sparse anomaly observations. Panels reserve normal insertion scores, range-stratified measurements, and measurements grouped by the number of observed object points.}
+\label{fig:analysis}
+\end{figure}
+
+\pending{Normal-control and sparse-observation findings.}
+
+\subsection{Qualitative Analysis}
+
+Figure~\ref{fig:qualitative} reserves examples of the observed point cloud, target annotation, direct-classifier output, and full-model output. For selected target rays, predicted distance distributions accompany the point scores. This presentation connects the learned normal reference to the final segmentation at object boundaries and under sparse observations.
+
+\begin{figure}[t]
+\centering
+\figureblank{1.05in}{Point-level predictions and normal-return distributions}
+\caption{Qualitative comparison on STU validation. Reserved panels show the input, annotations, point-classifier baseline, full-model scores, and normal-return distributions for the indicated rays.}
+\label{fig:qualitative}
+\end{figure}
+
+\pending{Qualitative findings.}
+
+\FloatBarrier
+\section{Conclusion}
+
+We introduced contextual normal return fields for point-level LiDAR anomaly segmentation. The method predicts shared spatial hypotheses from block-excluded context, converts them into return-distance distributions through analytic ray integration, and reads their compatibility with observed points through a learned decoder. Original normal scans and modified source observations supply complementary supervision within one training objective. The formulation makes normal prediction available as a structured representation for the final anomaly decision.
+\pending{Empirical conclusion to be completed from the benchmark and component results.}
+
+\section*{Writing Assistance}
+AI tools assisted with literature organization, manuscript drafting, and formatting.
+
+\clearpage
+\begingroup
+\raggedright
+\bibliography{paper}
+\bibliographystyle{vendor/iclr2027/iclr2027_conference}
+\endgroup
+
+\clearpage
+\appendix
+
+\section{Analytic Gaussian Integration Along a Ray}
+\label{app:integral}
+
+Consider one component with covariance $\Sigma=AA^\top$ and rate
+\begin{equation}
+\lambda_m(x)=a\exp\!\left[-\tfrac12(x-c)^\top\Sigma^{-1}(x-c)\right].
+\end{equation}
+For the ray $x(r)=o+rd$, define $v=A^{-1}d$ and $w=A^{-1}(o-c)$. Completing the square gives
+\begin{align}
+\mu&=-\frac{v^\top w}{v^\top v}, &
+\tau&=(v^\top v)^{-1/2}, &
+\log h&=\log a-\tfrac12\|w+\mu v\|^2,\\
+\lambda_m(o+rd)&=h\exp\!\left[-\frac{(r-\mu)^2}{2\tau^2}\right].
+\end{align}
+The integrated component rate is therefore
+\begin{equation}
+\int_L^b\lambda_m(o+rd)\,dr
+=h\tau\sqrt{2\pi}
+\left[\Phi\!\left(\frac{b-\mu}{\tau}\right)
+-\Phi\!\left(\frac{L-\mu}{\tau}\right)\right],
+\end{equation}
+where $\Phi$ is the standard Gaussian cumulative distribution function. Summing these terms over $m$ gives $H_{ik}(b)$. The conditional density integrates to one because
+\begin{equation}
+\int_L^U\lambda_{Bk}(o+rd)e^{-H_{ik}(r)}\,dr
+=\left[-e^{-H_{ik}(r)}\right]_L^U
+=1-e^{-H_{ik}(U)}.
+\end{equation}
+All field and density operations are differentiable with respect to the predicted parameters. We compute interval probabilities in the log domain, using stable tail and narrow-interval expressions. Point queries are processed in chunks of 2,048.
+
+The implemented observation model uses the scan reference origin and conditions on a recorded return in $[2.5,50]$\,m. Its learned rate is a representation for normal distance prediction. The conditioning event specifies which recorded measurements enter the likelihood objective. For returns outside $[L,U]$, log-density inputs to the readout are set to zero; these returns remain available as context.
+
+\section{Point-Level Training Objectives}
+\label{app:loss}
+
+Let $\mathcal P$ and $\mathcal N$ be anomaly and normal points across one effective batch. Binary cross-entropy averages the losses within each present class and then averages the class means. With both classes present,
+\begin{equation}
+\mathcal L_{\mathrm{BCE}}=
+\frac12\left[
+\frac1{|\mathcal P|}\sum_{p\in\mathcal P}\log(1+e^{-a_p})
++\frac1{|\mathcal N|}\sum_{n\in\mathcal N}\log(1+e^{a_n})
+\right].
+\end{equation}
+Ignored points remain available as input observations and are excluded from these supervised sets.
+
+\paragraph{Ranking samples.}
+We uniformly sample up to 256 anomaly anchors into $\mathcal A\subseteq\mathcal P$. All anomaly scores remain available when computing positive ranks and the soft recall threshold. Up to 4,096 normal points form $\mathcal S_-$. When $|\mathcal N|>4,096$, this set contains the 512 highest-scoring normal points and 3,584 uniformly sampled points from the remainder. The former have weight one and the latter have weight $(|\mathcal N|-512)/3584$. Otherwise all normal points are retained with unit weights. Denote these weights by $w_n$.
+
+\paragraph{Average-precision surrogate.}
+With temperature $\tau=1$ and logistic function $\sigma$, the soft positive and negative ranks of anomaly anchor $p$ are
+\begin{align}
+R_p^+&=1+\sum_{q\in\mathcal P\setminus\{p\}}
+\sigma\!\left(\frac{a_q-a_p}{\tau}\right), &
+R_p^-&=\sum_{n\in\mathcal S_-}w_n
+\sigma\!\left(\frac{a_n-a_p}{\tau}\right),\\
+\widetilde{\mathcal L}_{\mathrm{AP}}
+&=1-\frac1{|\mathcal A|}\sum_{p\in\mathcal A}
+\frac{R_p^+}{R_p^++R_p^-}.
+\end{align}
+
+\paragraph{Pairwise separation.}
+The AUROC-oriented term uses a smooth positive-negative ordering loss:
+\begin{equation}
+\widetilde{\mathcal L}_{\mathrm{AUC}}
+=\frac1{|\mathcal A|\,|\mathcal N|}
+\sum_{p\in\mathcal A}\sum_{n\in\mathcal S_-}w_n
+\operatorname{softplus}\!\left(\frac{a_n-a_p}{\tau}\right).
+\end{equation}
+
+\paragraph{Normal tail at high recall.}
+The soft threshold $\theta$ satisfies
+\begin{equation}
+\frac1{|\mathcal P|}\sum_{p\in\mathcal P}
+\sigma\!\left(\frac{a_p-\theta}{\tau}\right)=0.95.
+\end{equation}
+We differentiate this threshold implicitly and optimize the weighted normal exceedance:
+\begin{equation}
+\widetilde{\mathcal L}_{\mathrm{FPR95}}
+=\frac1{|\mathcal N|}\sum_{n\in\mathcal S_-}w_n
+\sigma\!\left(\frac{a_n-\theta}{\tau}\right).
+\end{equation}
+For $u_p=(a_p-\theta)/\tau$, the threshold derivative is
+$\partial\theta/\partial a_p=\sigma'(u_p)/\sum_q\sigma'(u_q)$.
+Ranking terms are zero when either class is absent. The BCE term continues to supervise the present class. The schedule is
+\begin{equation}
+\alpha(t)=\operatorname{clip}\!\left(\frac{t/T-0.1}{0.1},0,1\right),
+\qquad T=1500.
+\end{equation}
+
+\section{Architecture and Optimization Details}
+\label{app:implementation}
+
+The model contains 13,215,474 trainable parameters. Table~\ref{tab:architecture} lists its dimensions. The $2^\circ$ and $4^\circ$ grids are nested coarsenings of the $1^\circ$ grid. A target block reads the 24 other blocks in its $5\times5$ neighborhood at the selected scale. Empty neighbors use an attention mask; an entirely empty neighborhood uses a learned context token. The context predictor uses LayerNorm and block-local pooling.
+
+\begin{table}[ht]
+\centering
+\caption{Implemented model dimensions. Shared maps use the same parameters across components, hypotheses, and angular scales.}
+\label{tab:architecture}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.43\linewidth}>{\raggedright\arraybackslash}p{0.48\linewidth}}
+\toprule
+Component & Configuration \\
+\midrule
+Observation backbone & LitePT-S; 5\,cm voxel size \\
+Actual point state & 64-dimensional scene, detail, and within-voxel terms summed \\
+Context point encoder & $[x/U,y/U,z/U,I,d_x,d_y,d_z]$; $7\to64\to64$ \\
+Block representation & Mean/max pooling; 128 dimensions \\
+Hypothesis decoder & Four queries; two four-head cross-attention layers; feed-forward width 256 \\
+Spatial fields & Four hypotheses, each with eight full-covariance Gaussian components \\
+Ray-component map $\phi$ & $3\to16\to64$; 32-dimensional keys and values \\
+Hypothesis map $\psi$ & $34\to64\to64$; 32-dimensional keys and values \\
+Compatibility attention & Four heads per stage; eight dimensions per head \\
+Final point head & $163\to128\to64\to1$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The context and field decoder share parameters across scales. Covariances use Cholesky factors, and positive parameterizations give positive amplitudes. Hypothesis queries are initialized separately. Field centers are initialized across the valid distance interval in a coordinate basis determined by the target angular block. The actual-point query combines the 64-dimensional point state projected to 32 dimensions with a $1\to16\to32$ distance encoding. Hidden layers in the final head use normalization and GELU.
+
+AdamW uses $\beta=(0.9,0.999)$, $\epsilon=10^{-8}$, and weight decay $0.005$, with zero decay for biases and normalization parameters. Learning rates warm up for the first 5\% of updates from 0.1 of their peak value, then follow cosine decay to 0.01 of that value. The gradient norm is clipped at one. The fixed source run uses random seed zero and the preconstructed observations directly.
+
+Source ordering reserves up to 20\% of complete batches for observations whose anomaly-point median range is at least 30\,m. Anomaly observations are grouped by powers-of-two point-count intervals. These batches contain one to four anomaly scans, at least one original normal scan, and at least one normal insertion scan. The procedure reorders records within a traversal. Its grouping variables are measured from the saved observations.
+
+The effective batch contains eight scans. Scores from the batch are collected before computing the joint detection objective. Cached score gradients are then replayed through per-scan forward computations, with the normal-reference loss added to the same parameter update. Original reference scans require only the normal predictor. Normalization state advances once per training observation. This arrangement retains the effective-batch ranking objective while processing the backbone one scan at a time.
+
+\section{Training Resources and Observation Coverage}
+\label{app:resources}
+
+Table~\ref{tab:resources} records training resources alongside the target comparison. The model uses official nuScenes backbone initialization and nuScenes auxiliary objects. The designated source run uses nuScenes for optimization and endpoint development evaluation. STU validation is reported as a public development partition, and the hidden partition supplies the separate test evaluation.
+
+\begin{table}[ht]
+\centering
+\caption{Resources associated with the benchmark comparison. Empty entries reserve information to be completed for the exact compared checkpoints.}
+\label{tab:resources}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.13\linewidth}>{\raggedright\arraybackslash}p{0.29\linewidth}>{\raggedright\arraybackslash}p{0.22\linewidth}>{\raggedright\arraybackslash}p{0.23\linewidth}}
+\toprule
+Method & Backbone training sources & Auxiliary anomalies & Target-domain use \\
+\midrule
+NDP & & & \\
+REL & & & \\
+LIDO & & & \\
+COVAL & & & \\
+Ours & nuScenes & nuScenes donors & Public validation reporting \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The source background partitions contain disjoint acquisition logs, and donor instance identities follow the source partition. The 40 auxiliary donors originate from 21 training and 12 development scenes. Their single-observation point counts range from 8 to 601. Normal donors come from adult pedestrians, bicycles, motorcycles, and cars. Original debris and pushable/pullable labels remain ignored; verified donor surfaces receive auxiliary anomaly labels after insertion. Reliable normal supervision includes compatible source labels and 4,752 manually refined building points across six source frames.
+
+Every placement uses the donor at its measured size and a fixed world pose. A support point lies at least one meter inside the convex hull of local measured road points, and collision checks use scene observations. The receiving scan supplies the queried directions. Surface intersections replace recorded slots when they are nearer and supported by donor visibility. All independent placement versions remain with the same original scene. Table~\ref{tab:coverage} gives counts derived from the resulting observations.
+
+\begin{table}[ht]
+\centering
+\caption{Observed source coverage. Range statistics use the saved returns. The five-point condition follows the point-level evaluation eligibility rule.}
+\label{tab:coverage}
+\begin{tabular}{lrr}
+\toprule
+ & Training & Development \\
+\midrule
+Successful auxiliary placements & 1,828 & 366 \\
+Successful normal placements & 1,542 & 359 \\
+Scans with at least five anomaly points & 10,486 & 1,796 \\
+Scans with one to four anomaly points & 10,180 & 1,985 \\
+Auxiliary anomaly points in range & 235,996 & 52,341 \\
+At least five anomaly points beyond 30\,m & 494 & 223 \\
+At least five inserted normal points beyond 30\,m & 575 & 129 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Object-type analysis accompanies pooled point-level evaluation. Refuse containers contribute 44.7\% of training anomaly points and 86.8\% of development anomaly points. Source development therefore includes donor-wise and type-wise summaries, together with range and point-count strata. The original scans, insertion records, and donor identities define the units for these summaries.
+
+\section{Additional Results}
+\label{app:results}
+
+\begin{table}[ht]
+\centering
+\caption{Source-development evaluation and computational measurements. Runtime entries will specify the evaluation hardware and include both model pathways.}
+\label{tab:source}
+\begin{tabular}{lrrrr}
+\toprule
+Model & AP $\uparrow$ & AUROC $\uparrow$ & FPR95 $\downarrow$ & Time per scan \\
+\midrule
+Direct point classifier & \blank & \blank & \blank & \blank \\
+Full model & \blank & \blank & \blank & \blank \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\pending{Additional source-development and computational results.}
+
+\end{document}
