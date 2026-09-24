@@ -7,7 +7,7 @@
   BoldFont=comicbd.ttf,ItalicFont=comici.ttf,BoldItalicFont=comicz.ttf]
 \DeclareMathSizes{3.5}{3.5}{3}{3}
 \DeclareMathSizes{3.8}{3.8}{3}{3}
-\usetikzlibrary{arrows.meta,fit,backgrounds,calc}
+\usetikzlibrary{arrows.meta,fit,backgrounds,calc,decorations.pathreplacing}
 \definecolor{observed}{HTML}{287FB8}
 \definecolor{normal}{HTML}{219786}
 \definecolor{readout}{HTML}{8D75B2}
@@ -60,18 +60,20 @@
     \node[dim] at (\x,17.1) {\c};
   }
   \coordinate (#1-features-left) at (37.3,20);
-  \coordinate (#1-features-right) at (62.2,20);
   \node[op,fill=observed!9,rotate=90] (#1-fusion) at (68,20) {Fusion};
   \tensor{76}{20.7}{1.9}{64}{observed}
   \node[dim] at (76,17.1) {64};
   \node[note] at (76,24) {$f_i$};
   \draw[flow] (#1-backbone.south) -- (#1-features-left);
-  \draw[flow] (#1-features-right) -- (#1-fusion.north);
+  % The six tensors form one feature bundle; every level enters fusion.
+  \draw[draw=observed!80!black,decorate,decoration={brace,amplitude=.5mm},line width=.35pt]
+    (64.3,23.4) -- (64.3,16.6);
+  \draw[flow] (65,20) -- (#1-fusion.north);
   \draw[flow] (#1-fusion.south) -- (74.9,20);
   % Raw-point detail and offset also enter final fusion, bypassing voxel features.
   \fill[ink] (35.5,20) circle (.25mm);
   \draw[flow] (35.5,20) -- (35.5,15.1) -- (68,15.1) -- (#1-fusion.west);
-  \node[note,fill=white,inner sep=.15mm] at (51.5,15.1) {detail / offset};
+  \node[note,fill=white,inner sep=.15mm] at (51.5,15.1) {detail / geometry};
   \coordinate (#1-ob-low) at (29.8,14.5);
   \coordinate (#1-ob-high) at (78,25.2);
   \begin{scope}[on background layer]
@@ -97,12 +99,15 @@
     \draw[draw=normal!75,fill=normal!20,line width=.25pt]
       (72.5,7.1+\i*.9) rectangle ++(1.5,.9);
   \node[dim] at (73.2,5.3) {4};
+  \node[dim] at (68,4) {1° / 2° / 4°};
   \draw[flow] (#1-mlp.south) -- (36.7,8.7);
   \draw[flow] (38.7,8.7) -- (#1-pool.north);
   \draw[flow] (#1-pool.south) -- (47.5,8.7);
   \draw[flow] (51.9,8.7) -- (#1-decoder.north);
   % The cards and prior vector form one jointly decoded output bundle.
   \draw[flow] (#1-decoder.south) -- (62.4,8.7);
+  \draw[draw=normal!80!black,decorate,decoration={brace,amplitude=.5mm},line width=.35pt]
+    (75.8,11.3) -- (75.8,6.1);
   \coordinate (#1-norm-low) at (29.8,3.8);
   \coordinate (#1-norm-high) at (76.5,13.3);
   \begin{scope}[on background layer]
@@ -121,7 +126,13 @@
     \tensor{\x}{14.1}{1.7}{\c}{readout}
     \node[dim] at (\x,10.7) {\c};
   }
-  \coordinate (#1-read-low) at (90.1,9.3);
+  % Width annotations distinguish the hypothesis map, per-scale read and concat.
+  \draw[draw=readout!80!black,decorate,decoration={brace,mirror,amplitude=.3mm},line width=.3pt]
+    (95.5,9.65) -- (104.9,9.65);
+  \node[dim] at (100.2,8.35) {Map};
+  \node[dim] at (107.6,8.35) {×3};
+  \node[dim] at (111.3,8.35) {Concat};
+  \coordinate (#1-read-low) at (90.1,7.3);
   \coordinate (#1-read-high) at (113.1,19.2);
   \begin{scope}[on background layer]
     \node[region,fit=(#1-read-low)(#1-read-high)] (#1-readout) {};
@@ -132,7 +143,7 @@
   % The intermediate widths annotate the composite readout; 163 is its output.
   \draw[flow] (#1-read.south) -- (94.4,13.4) -- (94.4,17.9) --
     (111.3,17.9) -- (111.3,16.55);
-  \draw[flow] (77.2,8.7) -- (#1-ray.north);
+  \draw[flow] (76.5,8.7) -- (#1-ray.north);
   \draw[flow] (#1-ray.south) -- (87.9,8.7) -- (87.9,13.4) -- (#1-read.north);
   \draw[flow,draw=observed] (77.1,20.7) -- (92.2,20.7) -- (#1-read.east);
 
@@ -158,10 +169,10 @@
   \draw[draw=ink,line width=.5pt] (25,13) -- (26.8,13);
   \draw[flow] (26.8,13) -- (26.8,20) -- (#1-backbone.north);
   \draw[flow] (26.8,13) -- (26.8,8.7) -- (#1-mlp.north);
-  \draw[draw=ink,line width=.5pt] (26.8,8.7) -- (26.8,1.7) -- (100.2,1.7);
+  \draw[draw=ink,line width=.5pt] (26.8,8.7) -- (26.8,1.7) -- (92.2,1.7);
   \draw[flow] (83.9,1.7) -- (#1-ray.west);
-  \draw[flow] (100.2,1.7) -- (100.2,8.8);
-  \node[note,fill=white,inner sep=.15mm] at (100.2,5.2) {$r_i$};
+  \draw[flow] (92.2,1.7) -- (#1-read.west);
+  \node[note,fill=white,inner sep=.15mm] at (92.2,5.2) {$r_i$};
   \foreach \x/\y in {26.8/13,26.8/8.7,83.9/1.7}
     \fill[ink] (\x,\y) circle (.27mm);
 }
@@ -200,7 +211,7 @@
 \node[op,fill=loss!10] (detloss) at (128.5,11.3)
   {$\mathcal L_{\rm det}$: BCE + rank};
 \draw[flow] (model-score.south) -- (137.3,11.3) -- (detloss.east);
-\node[note] at (115,11.3) {$y$};
+\node[note] at (114,11.3) {$y,c$};
 \draw[flow] (116.2,11.3) -- (detloss.west);
 \coordinate (training-low) at (9.5,5.7);
 \coordinate (training-high) at (139,15);
