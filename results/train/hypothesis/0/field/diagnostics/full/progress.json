@@ -1,0 +1,598 @@
+{
+  "checkpoint_sha256": "6bae5d54ebcc53f1e7652c38dc73f83444f88d46feaaea8ed9c859477a329cc2",
+  "manifest_sha256": "6f2850207f69f95124e3760c7f4c7407826ce35bd2c92d808350b3d55929dbe9",
+  "recording_sha256": "3fb71a85910d7444b19b5df8d29fd9ef70ab23e41c00287f6e312c1cf7fc1124",
+  "update": 1250,
+  "threads": 1,
+  "status": "interrupted",
+  "total": 1796,
+  "completed": 37,
+  "workers": 2,
+  "allowed_cpus": [
+    2,
+    3,
+    4,
+    5
+  ],
+  "recording_budget_bytes": 70000000000,
+  "host_free_at_start": 86236786688,
+  "frames": [
+    {
+      "index": 47,
+      "bytes": 19058335,
+      "seconds": 14.27195991599001,
+      "recording_max_abs_difference": 0.0,
+      "worker_peak_rss_mib": 1493.36328125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00047.h5",
+        "bytes": 19052191,
+        "logical_bytes": 32862380,
+        "points": 34720,
+        "metric_points": 16593,
+        "selected_points": 85,
+        "called_modules": 368,
+        "recorded_output_calls": 1929,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 53,
+      "bytes": 19066537,
+      "seconds": 9.295115972010535,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1501.71875,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00053.h5",
+        "bytes": 19060393,
+        "logical_bytes": 32770820,
+        "points": 34656,
+        "metric_points": 16644,
+        "selected_points": 86,
+        "called_modules": 368,
+        "recorded_output_calls": 1929,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 54,
+      "bytes": 19217258,
+      "seconds": 8.747641904003103,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1501.71875,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00054.h5",
+        "bytes": 19211114,
+        "logical_bytes": 32997572,
+        "points": 34720,
+        "metric_points": 16692,
+        "selected_points": 89,
+        "called_modules": 368,
+        "recorded_output_calls": 1929,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 55,
+      "bytes": 19147099,
+      "seconds": 9.33790103699721,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1493.36328125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00055.h5",
+        "bytes": 19140955,
+        "logical_bytes": 32879536,
+        "points": 34752,
+        "metric_points": 16731,
+        "selected_points": 86,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 56,
+      "bytes": 19273515,
+      "seconds": 9.839311831994564,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1501.71875,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00056.h5",
+        "bytes": 19267371,
+        "logical_bytes": 33075468,
+        "points": 34720,
+        "metric_points": 16733,
+        "selected_points": 90,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 57,
+      "bytes": 19307983,
+      "seconds": 9.33997762799845,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1493.36328125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00057.h5",
+        "bytes": 19301839,
+        "logical_bytes": 33128816,
+        "points": 34688,
+        "metric_points": 16843,
+        "selected_points": 89,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 58,
+      "bytes": 19354207,
+      "seconds": 9.937901108001824,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1501.71875,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00058.h5",
+        "bytes": 19348063,
+        "logical_bytes": 33168440,
+        "points": 34752,
+        "metric_points": 16957,
+        "selected_points": 88,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 59,
+      "bytes": 19366970,
+      "seconds": 9.86544968301314,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1493.36328125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00059.h5",
+        "bytes": 19360826,
+        "logical_bytes": 33121676,
+        "points": 34720,
+        "metric_points": 16971,
+        "selected_points": 87,
+        "called_modules": 368,
+        "recorded_output_calls": 1929,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 60,
+      "bytes": 19432012,
+      "seconds": 10.321499201992992,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1511.41796875,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00060.h5",
+        "bytes": 19425868,
+        "logical_bytes": 33290824,
+        "points": 34752,
+        "metric_points": 16956,
+        "selected_points": 90,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 305,
+      "bytes": 23134035,
+      "seconds": 12.923265087010805,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1530.09765625,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00305.h5",
+        "bytes": 23127891,
+        "logical_bytes": 37925700,
+        "points": 34720,
+        "metric_points": 23259,
+        "selected_points": 89,
+        "called_modules": 368,
+        "recorded_output_calls": 1929,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 306,
+      "bytes": 23077742,
+      "seconds": 12.323319050992723,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1513.0859375,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00306.h5",
+        "bytes": 23071598,
+        "logical_bytes": 37708596,
+        "points": 34688,
+        "metric_points": 23268,
+        "selected_points": 85,
+        "called_modules": 368,
+        "recorded_output_calls": 1946,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 307,
+      "bytes": 23070906,
+      "seconds": 12.5085920200072,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1530.09765625,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00307.h5",
+        "bytes": 23064762,
+        "logical_bytes": 37708532,
+        "points": 34720,
+        "metric_points": 23229,
+        "selected_points": 86,
+        "called_modules": 368,
+        "recorded_output_calls": 1946,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 308,
+      "bytes": 23127984,
+      "seconds": 11.924120704992674,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1515.796875,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00308.h5",
+        "bytes": 23121840,
+        "logical_bytes": 37837392,
+        "points": 34688,
+        "metric_points": 23238,
+        "selected_points": 86,
+        "called_modules": 368,
+        "recorded_output_calls": 1946,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 315,
+      "bytes": 23067682,
+      "seconds": 12.587730731000192,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1560.2578125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00315.h5",
+        "bytes": 23061538,
+        "logical_bytes": 37789396,
+        "points": 34688,
+        "metric_points": 23257,
+        "selected_points": 86,
+        "called_modules": 368,
+        "recorded_output_calls": 1929,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 316,
+      "bytes": 23060151,
+      "seconds": 12.450826542000868,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1525.5390625,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00316.h5",
+        "bytes": 23054007,
+        "logical_bytes": 37790228,
+        "points": 34720,
+        "metric_points": 23298,
+        "selected_points": 86,
+        "called_modules": 368,
+        "recorded_output_calls": 1929,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 325,
+      "bytes": 23209404,
+      "seconds": 11.923054389990284,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1560.2578125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00325.h5",
+        "bytes": 23203260,
+        "logical_bytes": 37976964,
+        "points": 34688,
+        "metric_points": 23258,
+        "selected_points": 90,
+        "called_modules": 368,
+        "recorded_output_calls": 1946,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 326,
+      "bytes": 23039721,
+      "seconds": 11.96742068498861,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1547.05078125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00326.h5",
+        "bytes": 23033577,
+        "logical_bytes": 37697804,
+        "points": 34720,
+        "metric_points": 23211,
+        "selected_points": 86,
+        "called_modules": 368,
+        "recorded_output_calls": 1946,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 327,
+      "bytes": 23090510,
+      "seconds": 13.354713048000121,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1560.2578125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00327.h5",
+        "bytes": 23084366,
+        "logical_bytes": 37786156,
+        "points": 34688,
+        "metric_points": 23238,
+        "selected_points": 85,
+        "called_modules": 368,
+        "recorded_output_calls": 1946,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 403,
+      "bytes": 20864813,
+      "seconds": 13.343487100995844,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1547.05078125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00403.h5",
+        "bytes": 20858669,
+        "logical_bytes": 34896324,
+        "points": 34720,
+        "metric_points": 19508,
+        "selected_points": 85,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 404,
+      "bytes": 20912673,
+      "seconds": 12.487035790007212,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1560.2578125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00404.h5",
+        "bytes": 20906529,
+        "logical_bytes": 34957596,
+        "points": 34688,
+        "metric_points": 19410,
+        "selected_points": 89,
+        "called_modules": 368,
+        "recorded_output_calls": 1895,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 405,
+      "bytes": 21016302,
+      "seconds": 11.91938073199708,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1547.05078125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00405.h5",
+        "bytes": 21010158,
+        "logical_bytes": 35084444,
+        "points": 34752,
+        "metric_points": 19512,
+        "selected_points": 89,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 406,
+      "bytes": 21312658,
+      "seconds": 12.603730917006033,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1560.2578125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00406.h5",
+        "bytes": 21306514,
+        "logical_bytes": 35513740,
+        "points": 34720,
+        "metric_points": 20088,
+        "selected_points": 89,
+        "called_modules": 368,
+        "recorded_output_calls": 1895,
+        "recorded_selected_calls": 605
+      }
+    },
+    {
+      "index": 407,
+      "bytes": 21694734,
+      "seconds": 12.389802047007834,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1547.05078125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00407.h5",
+        "bytes": 21688590,
+        "logical_bytes": 36073420,
+        "points": 34784,
+        "metric_points": 20707,
+        "selected_points": 90,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 417,
+      "bytes": 20817082,
+      "seconds": 10.435448614007328,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1560.2578125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00417.h5",
+        "bytes": 20810938,
+        "logical_bytes": 34881560,
+        "points": 34720,
+        "metric_points": 19339,
+        "selected_points": 90,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 418,
+      "bytes": 20873887,
+      "seconds": 10.209301763999974,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1547.05078125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00418.h5",
+        "bytes": 20867743,
+        "logical_bytes": 34946028,
+        "points": 34720,
+        "metric_points": 19499,
+        "selected_points": 86,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 421,
+      "bytes": 21599253,
+      "seconds": 10.726847947007627,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1560.2578125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00421.h5",
+        "bytes": 21593109,
+        "logical_bytes": 35938408,
+        "points": 34784,
+        "metric_points": 20742,
+        "selected_points": 87,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 422,
+      "bytes": 21850262,
+      "seconds": 11.019640369995614,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1547.05078125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00422.h5",
+        "bytes": 21844118,
+        "logical_bytes": 36194728,
+        "points": 34752,
+        "metric_points": 21181,
+        "selected_points": 85,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 605
+      }
+    },
+    {
+      "index": 423,
+      "bytes": 22182139,
+      "seconds": 11.817376535007497,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1560.2578125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00423.h5",
+        "bytes": 22175995,
+        "logical_bytes": 36500432,
+        "points": 34720,
+        "metric_points": 21583,
+        "selected_points": 85,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 435,
+      "bytes": 21887105,
+      "seconds": 11.464540410001064,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1555.31640625,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00435.h5",
+        "bytes": 21880961,
+        "logical_bytes": 36219916,
+        "points": 34752,
+        "metric_points": 21144,
+        "selected_points": 86,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 605
+      }
+    },
+    {
+      "index": 442,
+      "bytes": 21015894,
+      "seconds": 11.257014998001978,
+      "recording_max_abs_difference": null,
+      "worker_peak_rss_mib": 1560.2578125,
+      "recording": {
+        "path": "results/train/hypothesis/0/field/diagnostics/full/frames/00442.h5",
+        "bytes": 21009750,
+        "logical_bytes": 35150792,
+        "points": 34720,
+        "metric_points": 19483,
+        "selected_points": 90,
+        "called_modules": 368,
+        "recorded_output_calls": 1912,
+        "recorded_selected_calls": 637
+      }
+    },
+    {
+      "index": 443,
+      "bytes": 20781033,
+      "finished_before_interruption": true
+    },
+    {
+      "index": 444,
+      "bytes": 20936421,
+      "finished_before_interruption": true
+    },
+    {
+      "index": 446,
+      "bytes": 21622964,
+      "finished_before_interruption": true
+    },
+    {
+      "index": 447,
+      "bytes": 21909460,
+      "finished_before_interruption": true
+    },
+    {
+      "index": 448,
+      "bytes": 22179668,
+      "finished_before_interruption": true
+    },
+    {
+      "index": 449,
+      "bytes": 22289850,
+      "finished_before_interruption": true
+    },
+    {
+      "index": 450,
+      "bytes": 22366931,
+      "finished_before_interruption": true
+    }
+  ],
+  "stored_bytes": 789215180,
+  "seconds": 182.71099233799032
+}

@@ -432,6 +432,23 @@ def full_run(args, manifest, epoch):
     report()
 
 
+def record_interruption(output):
+    """An interrupted run is partial evidence; finished frame files remain reusable."""
+    path = output / 'progress.json'
+    if not path.exists():
+        return
+    progress = json.loads(path.read_text())
+    frames = {row['index']: row for row in progress['frames']}
+    for frame in (output / 'frames').glob('*.h5'):
+        index = int(frame.stem)
+        frames.setdefault(index, dict(index=index, bytes=frame.stat().st_size,
+                                       finished_before_interruption=True))
+    progress.update(status='interrupted', completed=len(frames),
+                    stored_bytes=sum(row['bytes'] for row in frames.values()),
+                    frames=[frames[i] for i in sorted(frames)])
+    write_json(path, progress)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint', type=Path, required=True)
@@ -456,7 +473,11 @@ def main():
     if epoch['validation']['manifest_sha256'] != manifest['sha256']:
         raise ValueError('Validation population differs from the recorded checkpoint evaluation')
     if args.full:
-        full_run(args, manifest, epoch)
+        try:
+            full_run(args, manifest, epoch)
+        except KeyboardInterrupt:
+            record_interruption(args.output)
+            print('INTERRUPTED: completed frame recordings are preserved', flush=True)
         return
     if args.mechanisms:
         mechanisms(args, manifest, epoch)
