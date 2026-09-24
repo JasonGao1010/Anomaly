@@ -15,6 +15,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import resource
+import subprocess
 import time
 
 import numpy as np
@@ -22,6 +23,7 @@ import torch
 
 from src.data import file_sha256, load_manifest, write_json
 from src.evaluate import PreparedScans, evaluation_indices, load_model, memory_available
+from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
 def select_panel(records, categories):
@@ -213,6 +215,223 @@ def mechanisms(args, manifest, epoch):
         cases=output))
 
 
+def disk_available():
+    """The host volume, not the virtual ext4 size, limits persistent recordings."""
+    result = subprocess.run([
+        '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe',
+        '-NoProfile', '-Command',
+        'Get-Volume -DriveLetter E | Select-Object SizeRemaining | ConvertTo-Json -Compress'],
+        check=True, capture_output=True, text=True, timeout=20)
+    return int(json.loads(result.stdout)['SizeRemaining'])
+
+
+def init_full_worker(checkpoint, manifest, update, threads, identity):
+    global RECORDER, IDENTITY
+    from layers import Recorder
+    os.nice(19)
+    if file_sha256(checkpoint) != identity['checkpoint_sha256']:
+        raise ValueError('The preserved checkpoint changed')
+    init_worker(checkpoint, manifest, update, threads)
+    RECORDER, IDENTITY = Recorder(MODEL), identity
+
+
+def infer_full(task):
+    """Write one bounded frame locally; return no feature arrays through IPC."""
+    import h5py
+    index, path, verify = task
+    if memory_available() < 6_000_000_000:
+        raise RuntimeError('Insufficient spare RAM; protect the ongoing training')
+    path = Path(path)
+    temporary = path.with_suffix('.partial')
+    if temporary.exists():
+        temporary.unlink()  # Only a failed recording owned by this exact frame.
+    start = time.perf_counter()
+    sample = DATA[index]
+    with torch.no_grad():
+        baseline = MODEL(sample).numpy().copy() if verify else None
+        RECORDER.start(sample, DATA.records[index], temporary)
+        prediction = MODEL(sample)
+        summary = RECORDER.finish(prediction)
+    if not torch.isfinite(prediction).all():
+        raise ValueError('Nonfinite CPU predictions')
+    difference = float(np.max(abs(prediction.numpy() - baseline))) if verify else None
+    if verify and difference != 0:
+        raise ValueError(f'Recording changed same-thread CPU predictions: {difference}')
+    with h5py.File(temporary, 'a') as handle:
+        for key, value in IDENTITY.items():
+            handle.attrs[key] = value
+        handle.attrs['index'] = index
+        handle.attrs['recording_max_abs_difference'] = difference if verify else np.nan
+        handle.attrs['complete'] = True
+    temporary.rename(path)
+    summary['path'] = str(path)
+    return dict(index=index, bytes=path.stat().st_size,
+                seconds=time.perf_counter()-start, recording_max_abs_difference=difference,
+                worker_peak_rss_mib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024,
+                recording=summary)
+
+
+def aggregate_full(args, manifest, epoch, indices, identity, progress):
+    import h5py
+    records = manifest['records']
+    count = sum(records[i]['normal'] + records[i]['anomaly'] for i in indices)
+    if memory_available() < 64 * count + 1_000_000_000:
+        raise RuntimeError('Insufficient RAM for exact official pooled sorting')
+    scores, labels = np.empty(count, np.float32), np.empty(count, np.int8)
+    catalog = json.loads(Path('results/data/objects/catalog.json').read_text())
+    families = {row['instance']: row['object_group'] for row in catalog['selected']}
+    threshold = epoch['validation']['metrics']['threshold']
+    cursor, frames, groups = 0, [], defaultdict(Counter)
+    layer_values, module_calls = {}, Counter()
+    calculator = PointOODMetricsCalculator()
+    dtype = np.dtype([('score', '<f4'), ('range', '<f4'), ('slot', '<u4'),
+                      ('target', 'i1'), ('semantic', 'i1'), ('inserted', '?')])
+    for number, i in enumerate(indices, 1):
+        record = records[i]
+        with h5py.File(args.output / 'frames' / f'{i:05d}.h5', 'r') as handle:
+            if (not handle.attrs.get('complete', False) or handle.attrs.get('index') != i
+                    or any(handle.attrs[k] != v for k, v in identity.items())):
+                raise ValueError(f'Incomplete or mismatched frame {i}')
+            xyz = handle['points/xyzi'][:, :3]
+            prediction = handle['points/scores'][:]
+            target, slots = handle['points/targets'][:], handle['points/slots'][:]
+            names = handle['coverage/modules'].asstr()[:]
+            module_calls.update(dict(zip(names, map(int, handle['coverage/calls'][:] ))))
+            statistics, calls = handle['statistics/channels'][:], handle['statistics/calls'][:]
+            seen = set()
+            for call in calls:
+                begin, end = int(call['start']), int(call['stop'])
+                if (begin, end) in seen:
+                    continue  # Repeated invocations reference an aggregate, not new values.
+                seen.add((begin, end))
+                name = names[int(call['module'])]
+                values = statistics[begin:end]
+                summary = layer_values.setdefault(name, dict(values=0, nonfinite=0, minimum=None, maximum=None))
+                summary['values'] += int(values['count'].sum())
+                summary['nonfinite'] += int((values['count'] - values['finite']).sum())
+                finite = values['finite'] > 0
+                if finite.any():
+                    lo, hi = float(values['min'][finite].min()), float(values['max'][finite].max())
+                    summary['minimum'] = lo if summary['minimum'] is None else min(lo, summary['minimum'])
+                    summary['maximum'] = hi if summary['maximum'] is None else max(hi, summary['maximum'])
+        if len(target) != record['points'] or int((target == 1).sum()) != record['anomaly'] or int((target == 0).sum()) != record['normal']:
+            raise ValueError(f'Point population changed in frame {i}')
+        # Use the same official mask and >=5 anomaly rule as the GPU evaluation.
+        calculator.update(xyz, prediction, np.where(target < 0, 0, target + 1))
+        selected_scores, selected_labels = calculator.all_scores.pop(), calculator.all_labels.pop()
+        stop = cursor + len(selected_scores)
+        scores[cursor:stop], labels[cursor:stop] = selected_scores, selected_labels
+        p = np.empty(len(target), dtype=dtype)
+        p['score'], p['range'], p['slot'], p['target'] = prediction, np.linalg.norm(xyz, axis=1), slots, target
+        p['semantic'] = np.fromfile(record['label'], np.uint8)[slots]
+        p['inserted'] = False
+        with np.load(record['delta'], allow_pickle=False) as delta:
+            p['semantic'][np.isin(slots, delta['slots'])] = -1
+            p['inserted'] = np.isin(slots, delta['slots'][delta['labels'] == 2])
+        frame = dict(index=i, start=0, stop=len(p), role='eligible', scene=record['scene'],
+                     token=record['token'], instance=record['instance'], family=families[record['instance']],
+                     metric_start=cursor, metric_stop=stop,
+                     **counts(target, prediction, threshold),
+                     normal_quantiles=quantiles(prediction[target == 0]),
+                     anomaly_quantiles=quantiles(prediction[target == 1]))
+        frames.append(frame)
+        for row in group_counts(p, [frame], manifest, threshold):
+            key = row.pop('dimension'), row.pop('group')
+            groups[key].update(row)
+        cursor = stop
+        if number % 200 == 0 or number == len(indices):
+            print(f'AGGREGATE {number}/{len(indices)} | {cursor}/{count} metric points', flush=True)
+    if cursor != count or int(labels.sum()) != sum(records[i]['anomaly'] for i in indices):
+        raise ValueError('Official pooled evaluation population changed')
+    calculator.all_scores, calculator.all_labels = [scores], [labels]
+    metrics = {key: float(value) for key, value in calculator.compute_metrics().items()}
+    with (args.output / 'groups.csv').open('w') as handle:
+        writer = csv.DictWriter(handle, fieldnames=['dimension', 'group', 'positive', 'negative', 'tp', 'fp', 'frames'])
+        writer.writeheader()
+        writer.writerows(dict(dimension=key[0], group=key[1], **values) for key, values in sorted(groups.items()))
+    progress['status'] = 'complete'
+    result = dict(**identity, status='complete', scans=len(indices), points=count,
+                  actual_points=sum(records[i]['points'] for i in indices),
+                  normal=int((labels == 0).sum()), anomaly=int(labels.sum()), metrics=metrics,
+                  gpu_metrics=epoch['validation']['metrics'],
+                  cpu_minus_gpu={key: value - epoch['validation']['metrics'][key] for key, value in metrics.items()},
+                  strata_threshold=threshold, frames=frames, execution=progress,
+                  layer_numerics=layer_values, module_calls=dict(module_calls),
+                  scope='Complete 1796 official-eligible nuScenes frames, unchanged FP32 model and official pooled metrics. '
+                        'Layer recording is passive. Full raw activations are NOT retained: see per-frame coverage. '
+                        'GPU midpoint per-point scores were not retained; CPU/GPU equality is not established by aggregate agreement.')
+    write_json(args.output / 'analysis.json', result)
+    print('COMPLETE', json.dumps(metrics), flush=True)
+
+
+def full_run(args, manifest, epoch):
+    import h5py
+    indices = evaluation_indices(manifest)
+    if len(indices) != epoch['validation']['scans']:
+        raise ValueError('Official frame population differs from the midpoint evaluation')
+    # Source checks are limited to the unchanged inference and label-reading path.
+    configuration = json.loads((args.epoch.parent / 'config.json').read_text())['configuration']
+    for path, digest in configuration['code']['files'].items():
+        if path in ('src/data.py', 'src/model.py', 'src/normal.py', 'src/evaluate.py') or path.startswith(('vendor/litept/', 'vendor/stu/')):
+            if file_sha256(path) != digest:
+                raise ValueError(f'Inference source changed since training: {path}')
+    identity = dict(checkpoint_sha256=file_sha256(args.checkpoint), manifest_sha256=manifest['sha256'],
+                    recording_sha256=file_sha256(Path(__file__).with_name('layers.py')),
+                    update=epoch['successful_updates'], threads=args.threads)
+    args.output.mkdir(parents=True, exist_ok=True)
+    (args.output / 'frames').mkdir(exist_ok=True)
+    jobs, completed = [], []
+    for i in indices:
+        path = args.output / 'frames' / f'{i:05d}.h5'
+        if path.exists():
+            with h5py.File(path, 'r') as handle:
+                if (not handle.attrs.get('complete', False) or handle.attrs.get('index') != i
+                        or any(handle.attrs.get(k) != v for k, v in identity.items())):
+                    raise ValueError(f'Refusing to reuse incomplete or mismatched frame {path}')
+            completed.append(dict(index=i, bytes=path.stat().st_size, resumed=True))
+        else:
+            jobs.append((i, str(path), not completed and not jobs))
+    free = disk_available()
+    # The declared budget bounds recordings; 2 GB covers concurrent training writes,
+    # final aggregation, and a few in-flight frames before a capacity stop.
+    stored = sum(row['bytes'] for row in completed)
+    if free < 10_000_000_000 + 2_000_000_000 + max(0, args.storage_gb * 1e9 - stored):
+        raise RuntimeError('Recording budget would invade the 10 GB host-volume reserve')
+    start = time.perf_counter()
+    progress = dict(**identity, status='running', total=len(indices), completed=len(completed),
+                    workers=args.workers, allowed_cpus=sorted(os.sched_getaffinity(0)),
+                    recording_budget_bytes=int(args.storage_gb * 1e9), host_free_at_start=free,
+                    frames=completed)
+    def report():
+        progress.update(completed=len(completed), stored_bytes=sum(row['bytes'] for row in completed),
+                        seconds=time.perf_counter()-start, frames=completed)
+        write_json(args.output / 'progress.json', progress)
+        print(f'FULL {len(completed)}/{len(indices)} | {progress["seconds"]:.0f}s | '
+              f'{progress["stored_bytes"]/1e9:.2f} GB | spare RAM {memory_available()/1e9:.1f} GB', flush=True)
+    report()
+    # executor.map on 3.13 eagerly queues the iterable; explicitly bound submissions.
+    with ProcessPoolExecutor(max_workers=args.workers, mp_context=multiprocessing.get_context('spawn'),
+            initializer=init_full_worker,
+            initargs=(args.checkpoint, manifest, epoch['successful_updates'], args.threads, identity)) as pool:
+        pending, cursor = [], 0
+        while cursor < len(jobs) or pending:
+            while cursor < len(jobs) and len(pending) < args.workers:
+                pending.append(pool.submit(infer_full, jobs[cursor]))
+                cursor += 1
+            completed.append(pending.pop(0).result())
+            if len(completed) % 10 == 0 or not pending and cursor == len(jobs):
+                report()
+                if progress['stored_bytes'] > args.storage_gb * 1e9:
+                    raise RuntimeError('Recording budget exceeded; completed frames are preserved')
+                if disk_available() < 12_000_000_000:
+                    raise RuntimeError('Host volume approaching safety reserve; completed frames are preserved')
+    progress['status'] = 'aggregating'
+    report()
+    aggregate_full(args, manifest, epoch, indices, identity, progress)
+    progress['status'] = 'complete'
+    report()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint', type=Path, required=True)
@@ -222,6 +441,8 @@ def main():
     parser.add_argument('--workers', type=int, default=2)
     parser.add_argument('--threads', type=int, default=2)
     parser.add_argument('--mechanisms', action='store_true')
+    parser.add_argument('--full', action='store_true', help='Recompute every official-eligible frame with layer records')
+    parser.add_argument('--storage-gb', type=float, default=60)
     args = parser.parse_args()
     if args.workers < 1 or args.threads < 1:
         parser.error('workers and threads must be positive')
@@ -234,6 +455,9 @@ def main():
     epoch = json.loads(args.epoch.read_text())
     if epoch['validation']['manifest_sha256'] != manifest['sha256']:
         raise ValueError('Validation population differs from the recorded checkpoint evaluation')
+    if args.full:
+        full_run(args, manifest, epoch)
+        return
     if args.mechanisms:
         mechanisms(args, manifest, epoch)
         return
