@@ -38,6 +38,18 @@ class PreparedScans(Scans):
         result = (prepare_scan(sample, relations=self.relations) if self.voxel else
                   {key: torch.from_numpy(value) if isinstance(value, np.ndarray) else value
                    for key, value in sample.items()})
+        if self.manifest["version"] == SOURCE_VERSION and self.manifest["kind"] == "train":
+            record = self.records[index]
+            control = np.zeros(len(sample["targets"]), dtype=bool)
+            if record.get("group") == "control_nuscenes":
+                # Delta slots identify actual inserted returns, not the surrounding
+                # normal background or occluded/ignored replacement points.
+                with np.load(record["delta"], allow_pickle=False) as delta:
+                    inserted = delta["slots"][delta["labels"] == 1]
+                control = np.isin(sample["slots"], inserted) & (sample["targets"] == 0)
+                if int(control.sum()) != record["inserted_points"]:
+                    raise ValueError("decoded normal-control points differ from manifest")
+            result["control_mask"] = torch.from_numpy(control)
         if self.normal:
             result["observation"] = angular_observation(sample["xyzi"])
             # Only unmodified real-normal sources anchor the auxiliary task.
@@ -220,6 +232,8 @@ def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
     if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION):
         raise ValueError("checkpoint does not belong to a supported V4 experiment")
+    if saved["mode"] == "field" and "compatibility.tokens.0.weight" in saved["model"]:
+        raise ValueError("checkpoint uses the retired kernel readout; use its recorded code revision for historical evaluation")
     model = Segmentor(saved["mode"])
     model.load_state_dict(saved["model"], strict=True)
     return model.to(device).eval(), saved

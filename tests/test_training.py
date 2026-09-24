@@ -365,20 +365,65 @@ def test_native_two_passes_preserve_every_record_and_partial_final_batch():
     assert all(sorted(longer[start:start + 19]) == list(range(19)) for start in (0, 19, 38))
 
 
-def test_source_update_budget_is_exact_prefix_and_rescales_schedule():
+def test_source_role_quotas_cover_each_pool_before_reuse_and_spread_observations():
     from src.data import SOURCE_VERSION
-    from src.train import source_order, ranking_weight, progress_line
-    records = [dict(group="normal_nuscenes", normal=10, anomaly=0) for _ in range(35)]
+    from src.train import progress_line
+    records = []
+    for group, counts in (("anomaly_nuscenes", [2, 8]), ("control_nuscenes", [0])):
+        for count in counts:
+            for donor in range(2):
+                for scene in range(2):
+                    for band, distance in ((0, 8.), (3, 35.)):
+                        for frame in range(5):
+                            records.append(dict(group=group, normal=20, anomaly=count,
+                                inserted_points=3 if group == "control_nuscenes" else count,
+                                inserted_point_histogram=[3 if i == band else 0 for i in range(5)],
+                                instance=f"donor-{donor}", scene=f"scene-{scene}", timestamp=frame,
+                                point_range_median=distance, variant="r1", segment=0))
+    records += [dict(group="normal_nuscenes", normal=20, anomaly=0,
+                     scene=f"scene-{scene}", timestamp=frame) for scene in range(2) for frame in range(12)]
+    excluded = len(records)
+    records += [dict(group="anomaly_nuscenes", normal=20, anomaly=0),
+                dict(group="control_nuscenes", normal=20, anomaly=0, inserted_points=0)]
     manifest = dict(version=SOURCE_VERSION, records=records)
-    for updates in (2, 6):
-        expected = source_order(records, 7, 0, 0) + source_order(records, 7, 1, 35)
-        order = pilot_order(manifest, 7, updates, passes=None)
-        assert order == expected[:updates * 8]
-        assert len(order) == updates * 8
-        assert len(set(order[:min(35, len(order))])) == min(35, len(order))
+    rng_state = deepcopy(np.random.get_state())
+    order = pilot_order(manifest, 7, 47, passes=None)
+    assert order == pilot_order(manifest, 7, 47, passes=None)
+    assert order[:11 * 8] == pilot_order(manifest, 7, 11, passes=None)
+    np.testing.assert_equal(np.random.get_state(), rng_state)
+    assert len(order) == 47 * 8 and not set(range(excluded, len(records))) & set(order)
+
+    def role(row):
+        if row["group"] == "anomaly_nuscenes":
+            return "dense" if row["anomaly"] >= 5 else "sparse"
+        return row["group"]
+
+    quotas = dict(dense=3, sparse=1, control_nuscenes=2, normal_nuscenes=2)
+    for batch in effective_batches(order):
+        assert len(set(batch)) == 8
+        assert {key: sum(role(records[i]) == key for i in batch) for key in quotas} == quotas
+    for key in quotas:
+        pool = {i for i in range(excluded) if role(records[i]) == key}
+        visits = [i for i in order if role(records[i]) == key]
+        for start in range(0, len(visits), len(pool)):
+            cycle = visits[start:start + len(pool)]
+            assert len(cycle) == len(set(cycle))
+            if len(cycle) == len(pool):
+                assert set(cycle) == pool
+    originals = [records[i] for i in order if role(records[i]) == "normal_nuscenes"]
+    assert {r["scene"] for r in originals[:2]} == {"scene-0", "scene-1"}
+    for scene in ("scene-0", "scene-1"):
+        frames = [r["timestamp"] for r in originals if r["scene"] == scene][:3]
+        assert min(abs(a - b) for a in frames for b in frames if a != b) >= 3
+    assert any(records[i].get("point_range_median", 0) >= 30 for i in order[:8])
     assert lr_factor(75, 1500) == 1 and lr_factor(1500, 1500) == .01
     assert ranking_weight(150, 1500) == 0 and ranking_weight(300, 1500) == 1
     assert "预计剩余 00:01:40" in progress_line(5, 10, .5, 100, 3_000_000_000)
+    with pytest.raises(ValueError, match="explicit update budget"):
+        pilot_order(manifest, 7, 47, passes=1)
+    incomplete = dict(manifest, records=[row for row in records if row["group"] != "control_nuscenes"])
+    with pytest.raises(ValueError, match="eligible control"):
+        pilot_order(incomplete, 7, 3, passes=None)
 
 
 def test_ndp_complete_passes_keep_sparse_anomalies_and_pair_original_geometry():
@@ -441,7 +486,8 @@ def source_manifest(tmp_path):
             delta = tmp_path / f"delta-{count}.npz"
             np.savez(delta, slots=slots, xyzi=xyzi, token=record["token"],
                      labels=np.full(len(slots), 2 if count else 1, dtype=np.uint32))
-            record.update(delta=str(delta), group="anomaly_nuscenes" if count else "control_nuscenes")
+            record.update(delta=str(delta), group="anomaly_nuscenes" if count else "control_nuscenes",
+                          inserted_points=count if count else 1)
         records.append(record)
     return dict(version=SOURCE_VERSION, kind="train", mapping=mapping, records=records, sha256="fixture"), raw
 
@@ -577,14 +623,16 @@ def test_relation_ablation_gradient_and_chunk_recomputation(monkeypatch):
 
 
 def test_nuscenes_raw_order_intensity_and_ignored_context(tmp_path):
-    from src.data import nuscenes_mapping, read_nuscenes
-    categories = json.loads(Path("results/data/labels.json").read_text())["nuscenes"]
+    from src.data import NUSCENES_NORMAL, nuscenes_mapping, read_nuscenes
+    names = sorted(NUSCENES_NORMAL) + ["static.other", "noise"]
+    names.extend(f"ignored-{i}" for i in range(32 - len(names)))
+    categories = [dict(raw=i, name=name) for i, name in enumerate(names)]
     (tmp_path / "lidarseg").mkdir()
     (tmp_path / "lidarseg/category.json").write_text(json.dumps(
         [dict(index=row["raw"], name=row["name"]) for row in categories]))
     mapping = nuscenes_mapping(tmp_path)
-    assert mapping == categories
-    assert len(mapping) == 32 and sum(row["target"] for row in mapping) == 20
+    assert [(r["raw"], r["name"]) for r in mapping] == [(r["raw"], r["name"]) for r in categories]
+    assert len(mapping) == 32 and sum(row["target"] for row in mapping) == 18
     indices = {row["name"]: row["raw"] for row in mapping}
     raw = np.array([[4, 0, 0, 255, 0], [70, 0, 0, 127.5, 31],
                     [5, 0, 0, 128, 15], [6, 0, 0, 10, 3]], np.float32)
@@ -1341,15 +1389,21 @@ def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(
             assert recompute == (not bounded)
             self.normal = nn.Linear(3, 4)
             self.bn = nn.BatchNorm1d(4)
-        def forward(self, sample, *, normal_loss=False):
+        def forward(self, sample, *, normal_loss=False, query_indices=None):
             hidden = self.bn(self.backbone(sample["xyzi"]))
             normal = self.normal(sample["xyzi"])
             score = self.head(self.dropout(hidden + normal)).flatten()
+            if query_indices is not None:
+                score = score[query_indices]
             nll = normal.square().mean() if sample["normal_training"] else normal.sum() * 0
             return (score, nll) if normal_loss else score
     class Data(_ToyScans):
         def __getitem__(self, index):
-            return dict(super().__getitem__(index), normal_training=not self.records[index]["anomaly"])
+            sample = dict(super().__getitem__(index), normal_training=not self.records[index]["anomaly"])
+            sample["control_mask"] = torch.zeros_like(sample["targets"], dtype=torch.bool)
+            if self.records[index]["group"] == "control_nuscenes":
+                sample["control_mask"][0] = True
+            return sample
     monkeypatch.setattr(training, "Segmentor", Model)
     monkeypatch.setattr(training, "PreparedScans", Data)
     monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a: None)
@@ -1359,6 +1413,13 @@ def test_field_training_loop_uses_joint_cache_arbitrary_passes_and_exact_resume(
     manifest = dict(version=version, sha256="fixture-train", records=[
         dict(group="normal_nuscenes" if i % 2 else "anomaly_nuscenes", normal=5, anomaly=0 if i % 2 else 5)
         for i in range(35 if bounded else 7)])
+    if bounded:
+        manifest["records"] = [dict(group=group, normal=5, anomaly=count, scene=f"scene-{i}",
+            instance=f"donor-{i % 3}", point_range_median=12. if count else None,
+            inserted_points=1 if group == "control_nuscenes" else 0,
+            inserted_point_histogram=[0, 1, 0, 0, 0] if group == "control_nuscenes" else [0]*5)
+            for group, count in (("anomaly_nuscenes", 5), ("anomaly_nuscenes", 2),
+                                 ("control_nuscenes", 0), ("normal_nuscenes", 0)) for i in range(12)]
     config = dict(version=version, model="field", updates=3, eval_every=3, epochs=None if bounded else 3, microbatch=2,
                   recipe="field", objective="metrics", world_size=1, train_manifest="fixture-train",
                   sampling="bounded" if bounded else "complete passes", sampling_segment=0, optimizer_state="reset",

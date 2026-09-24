@@ -2,7 +2,7 @@
 
 import argparse
 import copy
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 import gc
 import importlib.metadata
 import json
@@ -52,60 +52,101 @@ def epoch_order(count, seed, stage, epoch):
     return generator.permutation(count).tolist()
 
 
-def source_order(records, seed, epoch, offset, far_updates=None):
-    """Reorder one complete pass without changing its records or boundary."""
-    order = epoch_order(len(records), seed, 1, epoch)
-    # Cross-pass remainder batches stay mixed; only complete aligned batches
-    # inside this pass can be deliberately specialized for distant positives.
-    first = (-offset) % BATCH_SIZE
-    starts = list(range(first, len(order) - BATCH_SIZE + 1, BATCH_SIZE))
-    limit = len(starts) // 5
-    bins, normal, controls = defaultdict(list), [], []
-    for index in order:
+def source_order(records, seed, updates, far_updates=None):
+    """Fixed role quotas with complete, hierarchically interleaved pool cycles."""
+    pools = {name: [] for name in ("dense", "sparse", "control", "original")}
+    for index, row in enumerate(records):
+        group, count = row.get("group"), int(row.get("anomaly", 0))
+        if group == "anomaly_nuscenes" and count > 0:
+            pools["dense" if count >= 5 else "sparse"].append(index)
+        elif group == "control_nuscenes" and int(row.get("inserted_points", 0)) > 0:
+            pools["control"].append(index)
+        elif group == "normal_nuscenes" and row.get("normal", 0) > 0 and not row.get("delta"):
+            pools["original"].append(index)
+    quotas = dict(dense=3, sparse=1, control=2, original=2)
+    for role, quota in quotas.items():
+        if len(pools[role]) < quota:
+            raise ValueError(f"source sampling requires at least {quota} eligible {role} records")
+
+    def path(index, role):
         row = records[index]
-        points, distance = int(row.get("anomaly", 0)), row.get("point_range_median")
-        if points > 0 and distance is not None and np.isfinite(distance) and distance >= 30.:
-            # Counts within one bin differ by less than a factor of two.
-            bins[points.bit_length() - 1].append(index)
-        elif points == 0 and row.get("normal", 0) > 0:
-            if row.get("group") == "normal_nuscenes":
-                normal.append(index)
-            elif row.get("group") == "control_nuscenes":
-                controls.append(index)
-    if not limit or not bins or not normal or not controls:
-        return order
-    generator = np.random.default_rng(np.random.SeedSequence([seed, 719, epoch]))
-    candidates = [indices[start:start + 4] for indices in bins.values()
-                  for start in range(0, len(indices), 4)]
-    batches = []
-    for candidate in generator.permutation(len(candidates)):
-        positives = candidates[int(candidate)]
-        needed = BATCH_SIZE - len(positives)
-        if not normal or not controls or len(normal) + len(controls) < needed:
-            continue
-        originals = min(len(normal), max(1, needed // 2, needed - len(controls)))
-        originals = min(originals, needed - 1)
-        batch = positives + [normal.pop() for _ in range(originals)]
-        batch += [controls.pop() for _ in range(needed - originals)]
-        batches.append(generator.permutation(batch).tolist())
-        if len(batches) == limit:
-            break
-    if not batches:
-        return order
-    positions = generator.choice(starts, len(batches), replace=False).tolist()
-    assigned = dict(zip(positions, batches))
-    selected = {index for batch in batches for index in batch}
-    mixed = iter(index for index in order if index not in selected)
-    result, position = [], 0
-    while position < len(order):
-        if position in assigned:
-            result.extend(assigned[position])
-            position += BATCH_SIZE
+        if role == "original":
+            return (row["scene"],)
+        count = int(row["anomaly"] if role != "control" else row["inserted_points"])
+        if role == "control":
+            histogram = row["inserted_point_histogram"]
+            if len(histogram) != 5 or sum(histogram) != count:
+                raise ValueError("control range strata require all supervised inserted points")
+            band = int(np.searchsorted(np.cumsum(histogram), (count + 1) // 2))
         else:
-            result.append(next(mixed))
-            position += 1
-    if far_updates is not None:
-        far_updates.extend(sorted((offset + position) // BATCH_SIZE for position in positions))
+            distance = row.get("point_range_median")
+            if distance is None or not np.isfinite(distance) or not LOWER <= distance <= UPPER:
+                raise ValueError("anomaly range strata require supervised-point median range")
+            band = int(np.searchsorted([10., 20., 30., 40.], distance, side="right"))
+        return (band, row["instance"], row["scene"], count.bit_length() - 1,
+                row.get("variant", ""), row.get("segment", 0))
+
+    def permutation(role, cycle):
+        role_id = tuple(quotas).index(role)
+        rng = np.random.default_rng(np.random.SeedSequence([seed, 719, role_id, cycle]))
+        tree = {}
+        for index in pools[role]:
+            node = tree
+            for key in path(index, role):
+                node = node.setdefault(key, {})
+            node.setdefault(None, []).append(index)
+
+        def interleave(node):
+            if None in node:
+                ordered = sorted(node[None], key=lambda i: (records[i].get("timestamp", records[i].get("frame", i)), i))
+                intervals, result = deque([(0, len(ordered))]), []
+                # Visit separated temporal representatives before adjacent frames.
+                while intervals:
+                    left, right = intervals.popleft()
+                    middle = (left + right) // 2
+                    result.append(ordered[middle])
+                    children = [(left, middle), (middle + 1, right)]
+                    for child in rng.permutation(2):
+                        a, b = children[int(child)]
+                        if a < b:
+                            intervals.append((a, b))
+                return result
+            keys = list(node)
+            queues = deque(deque(interleave(node[keys[int(i)]])) for i in rng.permutation(len(keys)))
+            result = []
+            while queues:
+                queue = queues.popleft()
+                result.append(queue.popleft())
+                if queue:
+                    queues.append(queue)
+            return result
+
+        return interleave(tree)
+
+    cycles, queues = dict.fromkeys(quotas, 0), {role: deque() for role in quotas}
+    rng = np.random.default_rng(np.random.SeedSequence([seed, 720]))
+    result = []
+    for update in range(updates):
+        batch = []
+        for role, quota in quotas.items():
+            for _ in range(quota):
+                if not queues[role]:
+                    queues[role].extend(permutation(role, cycles[role]))
+                    cycles[role] += 1
+                # A cycle boundary must not duplicate an observation within a batch.
+                while queues[role][0] in batch:
+                    queues[role].rotate(-1)
+                batch.append(queues[role].popleft())
+        # Shuffle role positions without reversing either side of a pool boundary.
+        positions = rng.permutation([role for role, quota in quotas.items() for _ in range(quota)])
+        offset, parts = 0, {}
+        for role, quota in quotas.items():
+            parts[role] = deque(batch[offset:offset + quota])
+            offset += quota
+        result.extend(parts[role].popleft() for role in positions)
+        if far_updates is not None and any(records[i].get("anomaly", 0) > 0 and
+                records[i]["point_range_median"] >= 30. for i in batch):
+            far_updates.append(update)
     return result
 
 
@@ -141,23 +182,14 @@ def material_order(order, manifest, indices, start, stop):
 def pilot_order(manifest, seed, updates, *, sampling=None, segment=0, paired=False, background=None, passes=2,
                 far_updates=None):
     """Source quotas stay fixed; a new segment gets its own reproducible permutation."""
-    if manifest.get("version") in (NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION):
-        bounded = passes is None
-        if bounded:
-            if manifest["version"] != SOURCE_VERSION or updates < 1 or segment:
-                raise ValueError("an update budget requires source-only data and segment zero")
-            passes = math.ceil(updates * BATCH_SIZE / len(manifest["records"]))
+    if manifest.get("version") == SOURCE_VERSION:
+        if passes is not None or updates < 1 or segment:
+            raise ValueError("source role quotas require an explicit update budget and segment zero")
+        return source_order(manifest["records"], seed, updates, far_updates)
+    if manifest.get("version") in (NATIVE_VERSION, NDP_VERSION):
         order = []
         for epoch in range(passes * segment, passes * segment + passes):
-            current = (source_order(manifest["records"], seed, epoch, len(order), far_updates)
-                       if manifest["version"] == SOURCE_VERSION else
-                       epoch_order(len(manifest["records"]), seed, 1, epoch))
-            order.extend(current)
-        if bounded:
-            # Use a prefix of the same shuffled stream, never a new data selection.
-            if far_updates is not None:
-                far_updates[:] = [step for step in far_updates if step < updates]
-            return order[:updates * BATCH_SIZE]
+            order.extend(epoch_order(len(manifest["records"]), seed, 1, epoch))
         if updates != math.ceil(len(order) / BATCH_SIZE):
             raise ValueError("native training must finish the configured complete data passes")
         return order
@@ -233,6 +265,8 @@ def source_counts(manifest, order):
         counts["frames"] += 1
         counts["normal"] += row["normal"]
         counts["anomaly"] += row["anomaly"]
+        if row["group"] == "control_nuscenes":
+            counts["inserted_normal"] = counts.get("inserted_normal", 0) + int(row.get("inserted_points", 0))
     return result
 
 
@@ -337,21 +371,23 @@ def cached_backward(model, samples, device, *, rank_weight, rank_seed, microbatc
             for name, value in model.named_buffers():
                 value.copy_(saved[name])
 
-    cached, scores, labels = [], [], []
+    cached, scores, labels, controls = [], [], [], []
     for begin in range(0, len(samples), microbatch):
         state = dict(rng=rng_state(device), buffers=buffers(), begin=begin)
         pair = [to_device(sample, device) for sample in samples[begin:begin + microbatch]]
         with torch.no_grad(), autocast(device):
-            prediction = [model(sample) for sample in pair]
+            query_indices = [(sample["targets"] >= 0).nonzero().flatten() for sample in pair]
+            prediction = [model(sample, query_indices=indices) for sample, indices in zip(pair, query_indices)]
         scores.extend(prediction)
-        labels.extend(sample["targets"] for sample in pair)
+        labels.extend(sample["targets"][indices] for sample, indices in zip(pair, query_indices))
+        controls.extend(sample["control_mask"][indices] for sample, indices in zip(pair, query_indices))
         cached.append(state)
         del pair, prediction
     final_rng, final_buffers = rng_state(device), buffers()
     leaf = torch.cat(scores).detach().requires_grad_()
     targets = torch.cat(labels)
     counts = torch.stack([(targets == label).sum() for label in (0, 1)])
-    bce = balanced_loss(leaf, targets, counts)
+    bce = balanced_loss(leaf, targets, counts, control_mask=torch.cat(controls))
     rank, details = ranking_loss(leaf, targets, rank_seed) if rank_weight else (bce * 0, {})
     detection = bce + rank_weight * rank
     if not torch.isfinite(detection):
@@ -376,7 +412,8 @@ def cached_backward(model, samples, device, *, rank_weight, rank_seed, microbatc
             # neither the eight-scan ranking pool nor BN's forward batch changes.
             for sample in pair:
                 with autocast(device):
-                    prediction, normal = model(sample, normal_loss=True)
+                    query_indices = (sample["targets"] >= 0).nonzero().flatten()
+                    prediction, normal = model(sample, normal_loss=True, query_indices=query_indices)
                 stop = offset + len(prediction)
                 reference = leaf.detach()[offset:stop]
                 error = (prediction.detach() - reference).abs().max()
@@ -664,6 +701,8 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 code=code_record())
     if recipe == "field":
         bounded = passes is None and updates is not None and updates > 0 and train["version"] == SOURCE_VERSION
+        if train["version"] == SOURCE_VERSION and not bounded:
+            raise ValueError("source role quotas require --updates; complete-pass epochs do not define these quotas")
         if (train["version"] not in (NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION) or world_size != 1
                 or not (bounded or passes is not None and passes > 0 and updates is None)
                 or file_sha256(initial) != WEIGHTS_SHA256 or optimizer_state != "reset"):
@@ -671,12 +710,15 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
         visits = updates * BATCH_SIZE if bounded else passes * len(train["records"])
         updates = math.ceil(visits / BATCH_SIZE)
         result.update(version=train["version"], model="field", recipe="field", epochs=passes, updates=updates,
-            normal_numerics="stable_logcdf_backward",
+            normal_numerics="stable_logcdf_backward", architecture="hypothesis_readout",
             scan_visits=visits, initial=str(initial.resolve()), initial_sha256=WEIGHTS_SHA256,
             optimizer_state="reset", peak_lr=PEAK_LR[0], microbatch=2, objective="metrics", precision="torch.float32",
             eval_every=eval_every or updates, sampling_segment=0,
             sampling="complete shuffled passes; last effective batch may contain fewer than eight scans",
-            loss=dict(bce="class means over all effective-batch supervised points", ranking_scope="effective batch",
+            loss=dict(bce="group means over all effective-batch supervised points",
+                group_weights=dict(anomaly=.5, inserted_normal=.25, remaining_normal=.25),
+                missing_groups="renormalize present weights; source quotas retain all three groups",
+                ranking_scope="effective batch",
                 tau=1., ap_weight=1., auc_weight=.1, fpr95_weight=.1, normal_weight=.1,
                 positive_anchors=256, positive_references="all", normal_top=512, normal_random=3584,
                 normal_weights="top: 1; rest: population / sample; normalize by full normal count",
@@ -685,30 +727,31 @@ def configuration(train, val, device, world_size, *, updates=None, initial=None,
                 normal_reduction="mean of point-normalized block joint NLLs, then scales, then eligible normal scans"),
             normal_field=dict(scales=SCALES, hypotheses=HYPOTHESES, kernels=KERNELS,
                 ray_chunk=RAY_CHUNK, range_m=[LOWER, UPPER], ray_origin="scan reference origin approximation",
-                compatibility="within-hypothesis kernels, then complete hypotheses with conditional log density and context log prior",
+                context_projection="once per independent block and layer, then gather the same 24 non-self neighbors",
+                compatibility="complete-hypothesis log density and context log prior; shared 2-16-64 map and hypothesis attention",
                 precision="FP32 field, ray density, compatibility and output head", normal_pretraining=False),
             model_precision="FP32 including backbone; fixed kernel-offset sparse convolution reduction; at most two full attention patches per chunk, recomputed in backward",
             gradient_cache=dict(microbatch=2, score_atol=1e-5, score_rtol=1e-5,
-                forwards="one score pass plus one replay; per-scan activation release; BN advances once"),
+                forwards="one score pass plus one replay; per-scan activation release; BN advances once",
+                queries="supervised points only; full observed point context retained in both passes"),
             validation="explicit development manifest; checkpoint selection permitted; not an independent final test")
         if train["version"] == SOURCE_VERSION:
-            selected = pilot_order(train, seed, updates, passes=None) if bounded else range(len(train["records"]))
-            paired_visits = sum(bool(train["records"][i].get("delta")) for i in selected) * (1 if bounded else passes)
+            selected = pilot_order(train, seed, updates, passes=None)
+            paired_visits = sum(bool(train["records"][i].get("delta")) for i in selected)
             result.update(data_recipe=train.get("recipe", {}), normal_source_visits=visits,
                 paired_normal_source_visits=paired_visits, shared_normal_source_visits=visits - paired_visits,
-                sampling="complete passes without replacement; at most 20% deliberately distant-positive batches; mixed cross-pass remainders",
-                far_batch=dict(max_update_fraction=.2, positive_median_range_min_m=30.,
-                    positive_count_bins="powers of two", positive_scans=[1, 4],
-                    normal_scans="at least one original and one normal insertion; no repeated records",
-                    metadata="point_range_median describes supervised inserted points, never object-center distance"),
-                source_groups=source_counts(train, selected),
-                data_roles=dict(training="raw nuScenes scans, synthetic road obstacles and normal placement controls",
+                sampling="fixed 3 dense anomaly / 1 sparse anomaly / 2 observed normal control / 2 original; complete role-pool cycles before reuse",
+                source_sampling=dict(quota=dict(dense_anomaly=3, sparse_anomaly=1, inserted_normal=2, original=2),
+                    dense="at least five supervised anomaly points", sparse="one to four supervised anomaly points",
+                    control="at least one inserted normal point within 2.5-50 m",
+                    order="interleave distance band, donor, scene, point-count bin and placement; temporally separated frames first",
+                    range="anomaly: supervised-point median; control: median band of inserted-point histogram",
+                    repeats="only after all records in the same role pool were visited; never within one effective batch"),
+                source_groups=source_counts(train, selected), data_passes_equivalent=visits / len(train["records"]),
+                data_roles=dict(training="raw nuScenes scans, synthetic road obstacles and observed normal placement controls",
                     positive="explicit synthetic obstacle returns; original debris and void remain ignored",
                     normal_auxiliary="unchanged nuScenes source; paired original for every modified scan, shared prediction for unmodified scans",
                     development="explicit development manifest; official pooled-point metrics"))
-            if bounded:
-                result.update(sampling="fixed update budget; prefix of complete shuffled source passes",
-                              data_passes_equivalent=visits / len(train["records"]))
         if train["version"] == NDP_VERSION:
             result.update(data_recipe=train["recipe"], normal_source_visits=visits,
                 comparison=dict(reference="NDP-EE, arXiv:2604.09232v2 Table 1",
@@ -889,6 +932,8 @@ def write_result(directory, state, config):
 
 def train_stage(args, train, val, seed, method, device, config):
     global STOP
+    if method == "field" and config.get("recording"):
+        raise ValueError("field supervised-query training cannot record full-point scores; ignored scores are not computed")
     if seed != 0 and not config.get("decoder_comparison") and method != "field":
         raise ValueError("F240-R2 fixes the sole experiment seed to 0")
     rank, world_size = rank_info()
@@ -1047,14 +1092,18 @@ def train_stage(args, train, val, seed, method, device, config):
             raise ValueError("local weighting must reuse every material-control input position")
         if native and rank == 0:
             executed = full_order[config.get("start_update", 0) * BATCH_SIZE:total * BATCH_SIZE]
-            distant = (dict(scheduled_far_updates=far_updates,
-                            scheduled_far_fraction=len(far_updates) / schedule_total)
+            distant = (dict(far_positive_updates=far_updates,
+                            far_positive_fraction=len(far_updates) / schedule_total,
+                            sampling=config.get("source_sampling"),
+                            dense_anomaly_visits=sum(train["records"][i]["anomaly"] >= 5 for i in executed),
+                            sparse_anomaly_visits=sum(0 < train["records"][i]["anomaly"] < 5 for i in executed))
                        if train["version"] == SOURCE_VERSION else {})
             write_json(directory / "sampling.json", dict(train_manifest=train["sha256"], order=full_order,
                 sources=source_counts(train, executed), distinct_records=len(set(executed)),
                 executed_order=executed, start_update=config.get("start_update", 0),
                 replaced_visits=sum(a!=b for a,b in zip(reference_order,full_order)),
-                passes=None if branch else config.get("epochs", 2), scans_per_pass=len(train["records"]), visits=len(executed),
+                passes=None if branch else config.get("epochs", 2),
+                scans_per_pass=None if train["version"] == SOURCE_VERSION else len(train["records"]), visits=len(executed),
                 **distant))
         if config.get("recipe") == "paired" and rank == 0:
             paired_updates = min(total, PAIRED_UPDATES)
@@ -1410,7 +1459,7 @@ def main():
     parser.add_argument("--initial", type=Path, default=Path("assets/nuscenes.pth"))
     budget = parser.add_mutually_exclusive_group(required=True)
     budget.add_argument("--epochs", type=int, help="explicit complete training-data passes")
-    budget.add_argument("--updates", type=int, help="fixed source-only update budget; may stop within a data pass")
+    budget.add_argument("--updates", type=int, help="fixed source-only update budget with 4 anomaly / 2 normal control / 2 original scans")
     parser.add_argument("--retain-activations", action="store_true", help="retain model/normal activations instead of recomputing; uses more VRAM")
     parser.add_argument("--progress", action="store_true", help="compact live progress; detailed JSON remains in log.jsonl")
     parser.add_argument("--eval-every", type=int, help="updates between development evaluations; default: endpoint only")

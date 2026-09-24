@@ -301,13 +301,19 @@ class Segmentor(nn.Module):
         return dict(sha256=digest, revision=WEIGHTS_REVISION, loaded=sorted(state),
                     removed=ignored, trainable=sum(p.numel() for p in self.backbone.parameters()))
 
-    def forward(self, sample, *, normal_loss=False):
+    def forward(self, sample, *, normal_loss=False, query_indices=None):
+        if query_indices is not None and self.mode != "field":
+            raise ValueError("selected point queries require the field model")
         # FP32 avoids amplification of sparse-kernel rounding at BF16 boundaries.
         # Legacy checkpoints keep their original externally selected precision.
         with torch.autocast(sample["xyzi"].device.type,
                             enabled=torch.is_autocast_enabled(sample["xyzi"].device.type) and self.mode != "field"):
             fields = self.normal(sample["observation"]) if self.normal is not None else None
             xyzi, inverse = sample["xyzi"], sample["inverse"]
+            queries = (torch.arange(len(xyzi), device=xyzi.device) if query_indices is None
+                       else query_indices)
+            if queries.ndim != 1 or queries.dtype != torch.long:
+                raise ValueError("point queries must be a vector of original point indices")
             detail = torch.cat([
                 self._checkpoint(self.detail, torch.cat((xyzi[start:start + POINT_CHUNK, :3] / 50,
                                                           xyzi[start:start + POINT_CHUNK, 3:4],
@@ -346,23 +352,24 @@ class Segmentor(nn.Module):
                                             recompute=self.recompute)
                 output, probabilities = [], []
                 chunk = RAY_CHUNK if fields is not None else POINT_CHUNK
-                for start in range(0, len(xyzi), chunk):
-                    end = min(start + chunk, len(xyzi))
-                    def score_points(e, context, offset, begin=start, stop=end):
+                for chosen in queries.split(chunk):
+                    if not len(chosen):
+                        continue
+                    def score_points(e, context, offset, indices=chosen):
                         state = context + self.point_detail(e) + self.point_position(offset)
                         if fields is not None:
                             # Casting BEFORE the compatibility/head computation preserves
                             # FP32 ranking precision; a cast of BF16 logits would not.
                             with torch.autocast(xyzi.device.type, enabled=False):
-                                hidden, prob = self.compatibility(state.float(), sample["observation"], fields, begin, stop)
+                                hidden, prob = self.compatibility(state.float(), sample["observation"], fields, indices)
                                 return self.head(hidden).squeeze(-1), prob
                         return self.head(state).squeeze(-1).float()
-                    result = self._checkpoint(score_points, detail[start:end], unified[inverse[start:end]],
-                                              sample["offset"][start:end])
+                    result = self._checkpoint(score_points, detail[chosen], unified[inverse[chosen]],
+                                              sample["offset"][chosen])
                     output.append(result[0] if fields is not None else result)
                     if fields is not None and normal_loss and sample.get("normal_training", False):
                         probabilities.append(result[1])
-                scores = torch.cat(output)
+                scores = torch.cat(output) if output else unified.sum(-1)[:0]
                 if normal_loss:
                     auxiliary = scores.sum() * 0
                     if "normal_reference" in sample:
@@ -372,7 +379,13 @@ class Segmentor(nn.Module):
                         observation = sample["observation"]
                         selected = ((sample["targets"] == 0) & (observation["distance"] >= LOWER)
                                     & (observation["distance"] <= UPPER))
+                        # The scene encoders still see every input point. Only the
+                        # independent final queries are sparse; block targets stay intact.
                         prob = torch.cat(probabilities)
+                        prob = prob.new_zeros((len(xyzi), len(SCALES), prob.shape[-1])).index_copy(0, queries, prob)
+                        covered = torch.zeros_like(selected).index_fill(0, queries, True)
+                        if bool((selected & ~covered).any()):
+                            raise ValueError("normal auxiliary queries omitted supervised normal points")
                         with torch.autocast(xyzi.device.type, enabled=False):
                             auxiliary = sum(joint_nll(prob[:, i], fields[str(size)]["log_weights"],
                                                       observation["grids"][str(size)], selected)
@@ -408,10 +421,27 @@ def scatter_scores(scores, slots, slot_count):
     return output.scatter(0, slots.long(), scores)
 
 
-def balanced_loss(logits, targets, counts):
-    """Global effective-batch class means, not the mean of microbatch means."""
+def balanced_loss(logits, targets, counts, control_mask=None):
+    """Effective-batch means, optionally reserving normal mass for insertion controls."""
     if counts.dtype != torch.int64 or counts.shape != (2,):
         raise ValueError("class counts must be int64[normal, anomaly]")
+    if control_mask is not None:
+        if control_mask.shape != targets.shape or control_mask.dtype != torch.bool:
+            raise ValueError("normal-control mask must match point targets")
+        if bool((control_mask & (targets != 0)).any()):
+            raise ValueError("normal controls must be verified normal targets")
+        # Preserve equal normal/anomaly mass, while giving inserted normal
+        # objects half of the normal mass instead of diluting them in road points.
+        groups = ((targets == 1, -1, .5), (control_mask, 1, .25),
+                  ((targets == 0) & ~control_mask, 1, .25))
+        result, mass = logits.float().sum() * 0, 0.
+        for selected, sign, weight in groups:
+            if bool(selected.any()):
+                result = result + weight * F.softplus(sign * logits[selected].float()).mean()
+                mass += weight
+        if not mass:
+            raise ValueError("training scan has no supervised points")
+        return result / mass
     present = int((counts > 0).sum())
     if not present:
         raise ValueError("effective batch contains no supervised points")

@@ -110,17 +110,30 @@ class NormalField(nn.Module):
             return checkpoint(function, *args, use_reentrant=False)
         return function(*args)
 
-    def decode(self, tokens, neighbors, position, basis):
-        count = len(tokens)
+    def project_context(self, tokens):
+        """Project each independent block once before repeated neighbor gathering."""
+        context = torch.cat((tokens, tokens.new_zeros((1, 128)), self.empty[None]))
+        return tuple(F.linear(context, layer["attention"].in_proj_weight[128:],
+                              layer["attention"].in_proj_bias[128:]) for layer in self.layers)
+
+    def decode(self, projected, neighbors, position, basis):
+        count = len(projected[0]) - 2
         present = neighbors < count
-        # Exclude self in the index construction BEFORE any cross-block mixing.
-        context = F.pad(tokens, (0, 0, 0, 1))[neighbors]
         empty = ~present.any(1)
-        context = torch.cat((context, self.empty.expand(len(neighbors), 1, -1)), 1)
+        # Independent projections mix no blocks; self is still excluded before attention.
+        indices = torch.cat((neighbors, neighbors.new_full((len(neighbors), 1), count + 1)), 1)
         mask = torch.cat((~present, ~empty[:, None]), 1)
         state = self.queries[None] + self.position(position)[:, None]
-        for layer in self.layers:
-            update = layer["attention"](state, context, context, key_padding_mask=mask, need_weights=False)[0]
+        for layer, context in zip(self.layers, projected):
+            attention = layer["attention"]
+            query = F.linear(state, attention.in_proj_weight[:128], attention.in_proj_bias[:128])
+            key, value = context[indices].chunk(2, -1)
+            query, key, value = (item.reshape(len(neighbors), -1, 4, 32).transpose(1, 2)
+                                 for item in (query, key, value))
+            update = F.scaled_dot_product_attention(query, key, value,
+                attn_mask=~mask[:, None, None], dropout_p=attention.dropout if self.training else 0.)
+            update = update.transpose(1, 2).reshape(len(neighbors), HYPOTHESES, 128)
+            update = attention.out_proj(update)
             state = layer["norm"](state + update)
             state = layer["final_norm"](state + layer["feedforward"](state))
         raw = self.parameters_out(state).reshape(-1, HYPOTHESES, KERNELS, 10)
@@ -148,7 +161,8 @@ class NormalField(nn.Module):
                 pooled = torch.cat((segment_csr(ordered, grid["pointer"], reduce="mean"),
                                     segment_csr(ordered, grid["pointer"], reduce="max")), -1)
                 tokens = self.pool(pooled) + self.position(grid["position"])
-                parts = [self._run(self.decode, tokens, grid["neighbors"][start:start + BLOCK_CHUNK],
+                projected = self.project_context(tokens)
+                parts = [self._run(self.decode, projected, grid["neighbors"][start:start + BLOCK_CHUNK],
                                    grid["position"][start:start + BLOCK_CHUNK], grid["basis"][start:start + BLOCK_CHUNK])
                          for start in range(0, len(tokens), BLOCK_CHUNK)]
                 fields[str(size)] = dict(zip(("center", "inverse", "log_amplitude", "log_weights"),
@@ -157,21 +171,25 @@ class NormalField(nn.Module):
 
     def likelihood(self, observation, targets):
         """Normal auxiliary loss on a clean companion, without another backbone pass."""
-        fields = self(observation)
         distance = observation["distance"]
         selected = (targets == 0) & (distance >= LOWER) & (distance <= UPPER)
+        indices = selected.nonzero().flatten()
+        if not len(indices):
+            # Preserve zero gradients, including optimizer decay semantics.
+            return sum(parameter.sum() * 0 for parameter in self.parameters())
+        fields = self(observation)
         losses = []
         for size in SCALES:
             grid, field = observation["grids"][str(size)], fields[str(size)]
             parts = []
-            for start in range(0, len(distance), RAY_CHUNK):
-                stop = min(start + RAY_CHUNK, len(distance))
+            for chosen in indices.split(RAY_CHUNK):
                 def probability(group, origin, direction, measured, parameters=field):
                     return ray_log_prob(*ray_parameters(parameters, group, origin, direction), measured)
-                parts.append(self._run(probability, grid["group"][start:stop],
-                    observation["origins"][start:stop], observation["directions"][start:stop],
-                    distance[start:stop].clamp(LOWER, UPPER)))
-            losses.append(joint_nll(torch.cat(parts), field["log_weights"], grid, selected))
+                parts.append(self._run(probability, grid["group"][chosen],
+                    observation["origins"][chosen], observation["directions"][chosen], distance[chosen]))
+            # Keep the full block membership and its original averaging rule.
+            probability = distance.new_zeros((len(distance), HYPOTHESES)).index_copy(0, indices, torch.cat(parts))
+            losses.append(joint_nll(probability, field["log_weights"], grid, selected))
         return torch.stack(losses).mean()
 
 
@@ -328,34 +346,28 @@ class Compatibility(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.tokens = network(3, 16, 64)
-        self.hypotheses = network(34, 64, 64)
+        self.hypotheses = network(2, 16, 64)
         self.scale = nn.Parameter(torch.randn(len(SCALES), 64) * .02)
         self.query = nn.Linear(64, 32)
         self.range = network(1, 16, 32)
 
-    def forward(self, state, observation, fields, begin, end):
-        distance = observation["distance"][begin:end]
+    def forward(self, state, observation, fields, indices):
+        distance = observation["distance"][indices]
         query = (self.query(state.float()) + self.range(distance[:, None] / UPPER)).reshape(-1, 4, 8)
         features, marginals, probabilities = [], [], []
         valid = (distance >= LOWER) & (distance <= UPPER)
         for index, size in enumerate(SCALES):
-            group = observation["grids"][str(size)]["group"][begin:end]
+            group = observation["grids"][str(size)]["group"][indices]
             field = fields[str(size)]
-            mu, tau, log_h = ray_parameters(field, group, observation["origins"][begin:end],
-                                            observation["directions"][begin:end])
+            mu, tau, log_h = ray_parameters(field, group, observation["origins"][indices],
+                                            observation["directions"][indices])
             weights = field["log_weights"][group]
-            parameters = torch.stack((mu / UPPER, (tau / UPPER).log(), log_h + math.log(UPPER)), -1)
-            tokens = self.tokens(parameters) + self.scale[index]
-            key, value = (part.reshape(-1, HYPOTHESES, KERNELS, 4, 8) for part in tokens.chunk(2, -1))
-            # Kernels coexist within a hypothesis; never pool across hypotheses here.
-            attention = ((query[:, None, None] * key).sum(-1) / math.sqrt(8)).softmax(2)
-            context = (attention[..., None] * value).sum(2).flatten(2)
             # Outside protocol support, keep point logits but provide no density
             # evidence. Such returns remain context and are never NLL targets.
             prob = ray_log_prob(mu, tau, log_h, distance.clamp(LOWER, UPPER))
             density = torch.where(valid[:, None], prob, 0.)
-            hypotheses = self.hypotheses(torch.cat((context, density[..., None], weights[..., None]), -1))
+            # The complete ray density already integrates every coexisting kernel.
+            hypotheses = self.hypotheses(torch.stack((density, weights), -1)) + self.scale[index]
             key, value = (part.reshape(-1, HYPOTHESES, 4, 8) for part in hypotheses.chunk(2, -1))
             # This is learned evidence aggregation, not a posterior update of the
             # normal field. Shared maps make both kernel and hypothesis order arbitrary.
