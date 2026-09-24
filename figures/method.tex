@@ -1,224 +1,117 @@
-% Rebuild with figures/draw.py. ML Visuals grids; OSFormer Fig. 3 layout reference.
-% Provenance and licenses are in assets/LICENSES.md.
+% Rebuild with figures/draw.py. ML Visuals grids; provenance in assets/LICENSES.md.
 \documentclass[tikz,border=0pt]{standalone}
 \usepackage{fix-cm,amsmath,amssymb}
 \usepackage[no-math]{fontspec}
 \setmainfont{comic.ttf}[Path=/mnt/c/Windows/Fonts/,
   BoldFont=comicbd.ttf,ItalicFont=comici.ttf,BoldItalicFont=comicz.ttf]
-\DeclareMathSizes{3.5}{3.5}{3}{3}
+\DeclareMathSizes{3.2}{3.2}{3}{3}
 \DeclareMathSizes{3.8}{3.8}{3}{3}
-\usetikzlibrary{arrows.meta,fit,backgrounds,calc,decorations.pathreplacing}
+\usetikzlibrary{arrows.meta,fit,backgrounds,calc}
 \definecolor{observed}{HTML}{287FB8}
 \definecolor{normal}{HTML}{219786}
 \definecolor{readout}{HTML}{8D75B2}
-\definecolor{loss}{HTML}{C8783C}
 \definecolor{ink}{HTML}{26333D}
-% Grid cells are schematic; compressed height follows feature width (#4).
-\newcommand{\tensor}[5]{\begin{scope}[shift={(#1,#2)}]
-  \pgfmathsetmacro{\hh}{2.1+.346*ln(#4)/ln(2)}
-  \pgfmathtruncatemacro{\rows}{max(3,round(2*\hh/#3))}
-  \fill[#5!20] (-#3/2,-\hh/2) rectangle (#3/2,\hh/2);
-  \draw[draw=#5!75!black,line width=.18pt] (0,-\hh/2) -- (0,\hh/2);
-  \foreach \row in {1,...,\numexpr\rows-1\relax}
-    \draw[draw=#5!75!black,line width=.18pt]
-      (-#3/2,-\hh/2+\row*\hh/\rows) -- (#3/2,-\hh/2+\row*\hh/\rows);
-  \draw[draw=#5!75!black,line width=.3pt]
-    (-#3/2,-\hh/2) rectangle (#3/2,\hh/2);
-\end{scope}}
-% Flames denote parameters optimized during source training.
-\newcommand{\status}[2]{\node[inner sep=0] at (#1,#2)
-  {\includegraphics[width=2.1mm]{flame.pdf}};}
-% A center-free neighborhood is a scientific operation, not a feature decoration.
-\newcommand{\neighbors}[3]{\begin{scope}[shift={(#1,#2)},scale=#3]
-  \foreach \x in {0,...,4} \foreach \y in {0,...,4} {
-    \ifnum\x=2 \ifnum\y=2
-      \draw[draw=normal!80,line width=.3pt] (\x*.7,\y*.7) rectangle ++(.6,.6);
-    \else \fill[normal!55] (\x*.7,\y*.7) rectangle ++(.6,.6); \fi
-    \else \fill[normal!55] (\x*.7,\y*.7) rectangle ++(.6,.6); \fi
-  }
-\end{scope}}
-\newcommand{\fields}[3]{\begin{scope}[shift={(#1,#2)},scale=#3]
-  \foreach \i in {0,...,3} {
-    \draw[draw=normal!75,fill=normal!10,line width=.3pt]
-      (\i*.65,\i*.4) rectangle ++(3.2,3.1);
-    \foreach \j in {1,2}
-      \draw[draw=normal!75,line width=.18pt]
-        (\i*.65,\i*.4+\j*1.03) -- ++(3.2,0);
-    \draw[draw=normal!75,line width=.18pt] (\i*.65+1.6,\i*.4) -- ++(0,3.1);
-  }
-\end{scope}}
-\newcommand{\network}[2]{%
-  \node[inner sep=0] (#1-scan) at (12.5,13)
-    {\includegraphics[page=#2,width=22.5mm]{observations.pdf}};
-  \node[note] at (12.5,3.2) {$X$};
-  % Composite observation encoder: six extracted widths, then conditional fusion.
-  \node[op,fill=observed!9,rotate=90,align=center,inner xsep=.55mm]
-    (#1-backbone) at (32.3,20)
-    {LitePT-S\\+ detail};
-  \foreach \x/\c in {38.5/36,43/72,47.5/144,52/252,56.5/504,61/72} {
-    \tensor{\x}{20.7}{1.9}{\c}{observed}
-    \node[dim] at (\x,17.1) {\c};
-  }
-  \coordinate (#1-features-left) at (37.3,20);
-  \node[op,fill=observed!9,rotate=90] (#1-fusion) at (68,20) {Fusion};
-  \tensor{76}{20.7}{1.9}{64}{observed}
-  \node[dim] at (76,17.1) {64};
-  \node[note] at (76,24) {$f_i$};
-  \draw[flow] (#1-backbone.south) -- (#1-features-left);
-  % The six tensors form one feature bundle; every level enters fusion.
-  \draw[draw=observed!80!black,decorate,decoration={brace,amplitude=.5mm},line width=.35pt]
-    (64.3,23.4) -- (64.3,16.6);
-  \draw[flow] (65,20) -- (#1-fusion.north);
-  \draw[flow] (#1-fusion.south) -- (74.9,20);
-  % Raw-point detail and offset also enter final fusion, bypassing voxel features.
-  \fill[ink] (35.5,20) circle (.25mm);
-  \draw[flow] (35.5,20) -- (35.5,15.1) -- (68,15.1) -- (#1-fusion.west);
-  \node[note,fill=white,inner sep=.15mm] at (51.5,15.1) {detail / geometry};
-  \coordinate (#1-ob-low) at (29.8,14.5);
-  \coordinate (#1-ob-high) at (78,25.2);
+% Composite modules use gridded rectangles; channel widths label actual tensors.
+\newcommand{\gridlines}[2]{%
+  \begin{scope}
+    \clip (#1.south west) rectangle (#1.north east);
+    \foreach \t in {0.2,0.4,0.6,0.8}
+      \draw[#2!60,line width=.15pt]
+        ($(#1.south west)!\t!(#1.north west)$) -- ($(#1.south east)!\t!(#1.north east)$);
+    \foreach \t in {0.25,0.5,0.75}
+      \draw[#2!60,line width=.15pt]
+        ($(#1.south west)!\t!(#1.south east)$) -- ($(#1.north west)!\t!(#1.north east)$);
+  \end{scope}
+}
+\newcommand{\gridnode}[6]{%
+  \pgfmathsetmacro{\hh}{2.5+.29*ln(#4)/ln(2)}
+  \node[draw=#5!80!black,fill=#5!16,minimum width=2.2mm,
+    minimum height=\hh mm,inner sep=0,line width=.3pt] (#1) at (#2,#3) {};
+  \gridlines{#1}{#5}
+  \node[dim,fill=#5!8,inner sep=.12mm] at (#1.center) {#6};
+}
+\newcommand{\module}[6]{%
+  \node[draw=#5!80!black,fill=#5!12,minimum width=#4 mm,
+    minimum height=6mm,inner sep=0,line width=.3pt] (#1) at (#2,#3) {};
+  \gridlines{#1}{#5}
+  \node[note,align=center,fill=#5!7,inner sep=.3mm] at (#1.center) {#6};
+  \learn{#1}
+}
+\newcommand{\learn}[1]{\node[anchor=south east,inner sep=0]
+  at ([xshift=.2mm,yshift=-.55mm]#1.north west)
+  {\includegraphics[width=1.35mm]{flame.pdf}};}
+\newcommand{\groupbox}[4]{%
+  \coordinate (#1-low) at #2; \coordinate (#1-high) at #3;
   \begin{scope}[on background layer]
-    \node[region,fit=(#1-ob-low)(#1-ob-high)] (#1-observed) {};
+    \node[region,fit=(#1-low)(#1-high)] (#1) {};
   \end{scope}
   \node[regiontitle,anchor=east,fill=white,inner sep=.2mm]
-    at ([xshift=-.7mm]#1-observed.north east) {Observation encoder};
-  \status{30.8}{24.2}
-  \status{66.4}{24.2}
-
-  % Independent block encoding precedes exclusion and cross-block attention.
-  \node[op,fill=normal!9,rotate=90] (#1-mlp) at (32.3,8.7) {MLP};
-  \tensor{37.7}{9.3}{1.6}{64}{normal}
-  \node[dim] at (35.3,5.3) {7–64–64};
-  \node[op,fill=normal!9,rotate=90] (#1-pool) at (43.4,8.7) {Block embed};
-  \neighbors{48}{7.1}{1}
-  \node[dim] at (49.7,5.3) {128};
-  \node[op,fill=normal!9,rotate=90] (#1-decoder) at (57.7,8.7) {Decoder};
-  \node[dim] at (57.7,4.5) {128};
-  \fields{63}{7}{1}
-  \node[dim] at (65.5,5.3) {4×8×10};
-  \foreach \i in {0,...,3}
-    \draw[draw=normal!75,fill=normal!20,line width=.25pt]
-      (72.5,7.1+\i*.9) rectangle ++(1.5,.9);
-  \node[dim] at (73.2,5.3) {4};
-  \node[dim] at (68,4) {1° / 2° / 4°};
-  \draw[flow] (#1-mlp.south) -- (36.7,8.7);
-  \draw[flow] (38.7,8.7) -- (#1-pool.north);
-  \draw[flow] (#1-pool.south) -- (47.5,8.7);
-  \draw[flow] (51.9,8.7) -- (#1-decoder.north);
-  % The cards and prior vector form one jointly decoded output bundle.
-  \draw[flow] (#1-decoder.south) -- (62.4,8.7);
-  \draw[draw=normal!80!black,decorate,decoration={brace,amplitude=.5mm},line width=.35pt]
-    (75.8,11.3) -- (75.8,6.1);
-  \coordinate (#1-norm-low) at (29.8,3.8);
-  \coordinate (#1-norm-high) at (76.5,13.3);
-  \begin{scope}[on background layer]
-    \node[region,fit=(#1-norm-low)(#1-norm-high)] (#1-normal) {};
-  \end{scope}
-  \node[regiontitle,anchor=east,fill=white,inner sep=.2mm]
-    at ([xshift=-.7mm,yshift=-.65mm]#1-normal.north east) {Normal field predictor};
-  \status{30.8}{12.3}
-  \status{41.9}{12.3}
-  \status{56.3}{12.3}
-
-  % Ray evidence is analytic; readout includes range-conditioned query and concat.
-  \node[op,fill=ink!5,rotate=90] (#1-ray) at (83.9,8.7) {Ray evidence};
-  \node[op,fill=readout!10,rotate=90] (#1-read) at (92.2,13.4) {Readout};
-  \foreach \x/\c in {96.5/2,100.2/16,103.9/64,107.6/32,111.3/163} {
-    \tensor{\x}{14.1}{1.7}{\c}{readout}
-    \node[dim] at (\x,10.7) {\c};
-  }
-  % Width annotations distinguish the hypothesis map, per-scale read and concat.
-  \draw[draw=readout!80!black,decorate,decoration={brace,mirror,amplitude=.3mm},line width=.3pt]
-    (95.5,9.65) -- (104.9,9.65);
-  \node[dim] at (100.2,8.35) {Map};
-  \node[dim] at (107.6,8.35) {×3};
-  \node[dim] at (111.3,8.35) {Concat};
-  \coordinate (#1-read-low) at (90.1,7.3);
-  \coordinate (#1-read-high) at (113.1,19.2);
-  \begin{scope}[on background layer]
-    \node[region,fit=(#1-read-low)(#1-read-high)] (#1-readout) {};
-  \end{scope}
-  \node[regiontitle,anchor=east,fill=white,inner sep=.2mm]
-    at ([xshift=-.7mm]#1-readout.north east) {Hypothesis readout};
-  \status{91.1}{18.2}
-  % The intermediate widths annotate the composite readout; 163 is its output.
-  \draw[flow] (#1-read.south) -- (94.4,13.4) -- (94.4,17.9) --
-    (111.3,17.9) -- (111.3,16.55);
-  \draw[flow] (76.5,8.7) -- (#1-ray.north);
-  \draw[flow] (#1-ray.south) -- (87.9,8.7) -- (87.9,13.4) -- (#1-read.north);
-  \draw[flow,draw=observed] (77.1,20.7) -- (92.2,20.7) -- (#1-read.east);
-
-  \foreach \x/\c in {120/163,124.6/128,129.2/64,133.8/1} {
-    \tensor{\x}{14.1}{1.7}{\c}{observed}
-    \node[dim] at (\x,10.7) {\c};
-  }
-  \foreach \x in {121.1,125.7,130.3}
-    \draw[flow] (\x,14.1) -- ++(2.3,0);
-  \node[note] (#1-score) at (137.3,14.1) {$a_i$};
-  \draw[flow] (134.9,14.1) -- (136.2,14.1);
-  \coordinate (#1-head-low) at (117.5,9.3);
-  \coordinate (#1-head-high) at (138.6,19.2);
-  \begin{scope}[on background layer]
-    \node[region,fit=(#1-head-low)(#1-head-high)] (#1-head) {};
-  \end{scope}
-  \node[regiontitle,anchor=east,fill=white,inner sep=.2mm]
-    at ([xshift=-.7mm]#1-head.north east) {Point head};
-  \status{118.5}{18.2}
-  \draw[flow] (112.4,14.1) -- (118.9,14.1);
-
-  % A single source junction supplies both encoders and the measured ray geometry.
-  \draw[draw=ink,line width=.5pt] (25,13) -- (26.8,13);
-  \draw[flow] (26.8,13) -- (26.8,20) -- (#1-backbone.north);
-  \draw[flow] (26.8,13) -- (26.8,8.7) -- (#1-mlp.north);
-  \draw[draw=ink,line width=.5pt] (26.8,8.7) -- (26.8,1.7) -- (92.2,1.7);
-  \draw[flow] (83.9,1.7) -- (#1-ray.west);
-  \draw[flow] (92.2,1.7) -- (#1-read.west);
-  \node[note,fill=white,inner sep=.15mm] at (92.2,5.2) {$r_i$};
-  \foreach \x/\y in {26.8/13,26.8/8.7,83.9/1.7}
-    \fill[ink] (\x,\y) circle (.27mm);
+    at ([xshift=-.6mm]#1.north east) {#4};
 }
 \begin{document}
 \begin{tikzpicture}[x=.9mm,y=1mm,text=ink,
-  note/.style={font=\fontsize{3.8}{4.6}\selectfont,inner sep=.15mm},
-  dim/.style={font=\fontsize{3.5}{4.2}\selectfont,inner sep=.1mm},
+  note/.style={font=\fontsize{3.8}{4.6}\selectfont,inner sep=.18mm},
+  dim/.style={font=\fontsize{3.2}{3.8}\selectfont,inner sep=.12mm},
   regiontitle/.style={font=\fontsize{3.3}{4}\selectfont},
-  title/.style={anchor=west,font=\fontsize{6.5}{7.3}\selectfont\bfseries},
-  op/.style={note,draw=ink!70,rounded corners=.65mm,inner xsep=.8mm,inner ysep=.65mm},
-  region/.style={draw=ink!55,densely dashed,rounded corners=.9mm,
-    fill=ink!3,line width=.4pt,inner sep=.45mm},
-  flow/.style={-{Stealth[length=.9mm]},draw=ink,line width=.5pt}]
-\path[use as bounding box] (0,4.5) rectangle (140,44.5);
-\node[title] at (1,42.9) {Forward pass};
-\begin{scope}[shift={(0,16.5)}]
-  \network{model}{2}
-\end{scope}
-% The clean companion runs only the shared normal predictor and analytic rays.
-\node[inner sep=0] at (15,11.3)
-  {\includegraphics[page=1,width=7.2mm]{observations.pdf}};
-\node[note] at (21,11.3) {$X^0$};
-\node[op,fill=normal!9,minimum height=4.2mm] (shared) at (37,11.3)
-  {\hspace{2.4mm}Shared normal predictor};
-\node[anchor=north west,inner sep=.25mm] at (shared.north west)
-  {\includegraphics[width=1.7mm]{flame.pdf}};
-\node[op,fill=ink!5] (auxray) at (56,11.3) {Ray evidence};
-\node[op,fill=loss!10] (normalnll) at (75,11.3) {$\mathcal L_{\rm normal}$: Joint NLL};
-\draw[flow] (22.7,11.3) -- (shared.west);
-\draw[flow] (shared.east) -- (auxray.west);
-\draw[flow] (auxray.east) -- (normalnll.west);
-\fill[ink] (24.3,11.3) circle (.25mm);
-\draw[flow] (24.3,11.3) -- (24.3,7.5) -- (56,7.5) -- (auxray.south);
-\node[note] at (89,11.3) {$y^0$};
-\draw[flow] (87.8,11.3) -- (normalnll.east);
-\node[op,fill=loss!10] (detloss) at (128.5,11.3)
-  {$\mathcal L_{\rm det}$: BCE + rank};
-\draw[flow] (model-score.south) -- (137.3,11.3) -- (detloss.east);
-\node[note] at (114,11.3) {$y,c$};
-\draw[flow] (116.2,11.3) -- (detloss.west);
-\coordinate (training-low) at (9.5,5.7);
-\coordinate (training-high) at (139,15);
-\begin{scope}[on background layer]
-  \node[region,fit=(training-low)(training-high)] (training) {};
-\end{scope}
-\node[regiontitle,anchor=west,fill=white,inner sep=.2mm]
-  at ([xshift=.7mm]training.north west) {Training only};
+  analytic/.style={note,align=center,draw=ink!70,rounded corners=.6mm,
+    inner xsep=.65mm,inner ysep=.55mm,fill=ink!4},
+  region/.style={draw=ink!50,densely dashed,rounded corners=.8mm,
+    fill=ink!2,line width=.35pt,inner sep=.45mm},
+  wire/.style={draw=ink,line width=.4pt},
+  flow/.style={wire,-{Stealth[length=.8mm]}},
+  bridge/.style={preaction={draw=white,line width=1.5pt}}]
+\path[use as bounding box] (0,12) rectangle (140,41.5);
+
+% The encoders have independent parameters and meet only at the readout.
+\node[inner sep=0] (scan) at (8,27)
+  {\includegraphics[page=2,width=14.4mm]{observations.pdf}};
+\node[note] at (8,20.7) {$X\in\mathbb R^{N\times4}$};
+\coordinate (source) at (19,27);
+\draw[wire] (scan.east) -- (source);
+\fill[ink] (source) circle (.22mm);
+\module{observed}{40}{35}{15}{observed}{LitePT-S\\+ point detail}
+\groupbox{observedgroup}{(29.5,30.8)}{(50.5,39.2)}{Observation encoder}
+\gridnode{state}{59}{35}{64}{observed}{64}
+\node[dim,anchor=south] at (59,37.5) {$f_i$};
+\draw[flow] (source) -- (19,35) -- (observed.west);
+\draw[flow] (observed.east) -- (state.west);
+
+% Expand the defining normal mechanism; the decoder predicts priors as well.
+\module{context}{31.5}{22}{10}{normal}{Context\\exclude target}
+\module{hypotheses}{51.5}{22}{10.5}{normal}{4 hypotheses}
+\node[dim,anchor=north] at (51.5,18.8) {4 × 8 × 10};
+\draw[flow] (source) -- (19,22) -- (context.west);
+\draw[flow] (context.east) -- (hypotheses.west);
+\groupbox{normalgroup}{(24.8,16.8)}{(58.5,28)}{Normal field $G_\theta$ · 3 scales}
+
+\node[analytic,minimum height=5.4mm] (ray) at (70,22) {Ray\\evidence};
+\draw[flow] (hypotheses.east) -- (ray.west);
+\node[dim,anchor=south] at (62,22.4) {$\Phi,\pi$};
+% Ray geometry enters the analytic evaluation; priors are passed through.
+\draw[wire] (19,22) -- (19,14) -- (81,14);
+\fill[ink] (19,22) circle (.18mm);
+\draw[flow] (70,14) -- (ray.south);
+\fill[ink] (70,14) circle (.18mm);
+\node[dim,fill=white] at (70,16.4) {$o_i,d_i,r_i$};
+
+% This composite readout includes attention, marginals and the point-feature bypass.
+\module{readout}{92}{28}{11.4}{readout}{Hypothesis\\readout}
+\draw[flow] (state.east) -- (92,35) -- (readout.north);
+\draw[flow] (ray.east) -- (92,22) -- (readout.south);
+\node[dim,anchor=south] at (85.9,22.3) {$\log p,\log\pi$};
+\draw[flow,bridge] (81,14) -- (81,28) -- (readout.west);
+\node[dim,fill=white] at (81,18) {$r_i$};
+
+\gridnode{head1}{112}{28}{128}{observed}{128}
+\gridnode{head2}{120}{28}{64}{observed}{64}
+\gridnode{head3}{128}{28}{1}{observed}{1}
+\learn{head1}\learn{head2}\learn{head3}
+\draw[flow] (readout.east) -- (head1.west);
+\node[dim,anchor=south] at (104,28.3) {163};
+\draw[flow] (head1.east) -- (head2.west);
+\draw[flow] (head2.east) -- (head3.west);
+\node[note] (score) at (137,28) {$a_i$};
+\draw[flow] (head3.east) -- (score.west);
+\groupbox{headgroup}{(109.5,24.6)}{(130.5,32.5)}{Point head}
 \end{tikzpicture}
 \end{document}

@@ -177,7 +177,7 @@ def main():
         if "Missing character" in run.stdout or "Font Warning" in run.stdout:
             raise RuntimeError(run.stdout[-3000:])
         (ROOT / "figures/method.pdf").write_bytes((Path(build) / "method.pdf").read_bytes())
-    print(f"{ROOT / 'figures/method.pdf'}: shared forward path and training objectives; source-data scenes")
+    print(f"{ROOT / 'figures/method.pdf'}: pointwise model forward path; source-data scene")
 
 
 if __name__ == "__main__":
