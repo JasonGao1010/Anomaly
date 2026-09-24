@@ -72,7 +72,7 @@ The model contains an actual-observation encoder and a normal-context predictor 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{figures/method.pdf}
-\caption{Contextual normal return fields. Block-excluded context predicts normal hypotheses, and analytic ray integration evaluates their support for each return. Hypothesis features and marginal log densities join actual-observation features in one point-level head. Normal-path parameters are shared across scales. During training, the unmodified companion $X^0$ supplies the separate block-likelihood objective.}
+\caption{Contextual normal return fields. (a) Detection and original-scan likelihood jointly train the model. (b) Inference outputs one anomaly score per point. Ray evidence computes hypothesis log densities and marginal log density $\ell_i^s$, bundling densities with decoder log priors as $z_i^s$. Readout includes query formation, hypothesis attention and feature concatenation. The auxiliary path shares the normal predictor. Arrows show forward data dependencies; dashed boxes group computations. Flames mark trainable modules; snowflakes mark fixed inference parameters. Gray operators are analytic. Layer glyphs are schematic. The real nuScenes scenes share a viewpoint; orange marks auxiliary labels.}
 \label{fig:method}
 \end{figure}
 

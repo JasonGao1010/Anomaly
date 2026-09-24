@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,14 +49,6 @@ def records():
 
 
 def main():
-    # Keep TeX intermediates outside the repository; only export the figure PDF.
-    with tempfile.TemporaryDirectory(prefix="ajae-method.") as build:
-        run = subprocess.run(["pdflatex", "-interaction=nonstopmode", "-halt-on-error",
-                              "-output-directory", build, "figures/method.tex"],
-                             cwd=ROOT, capture_output=True, text=True)
-        if run.returncode:
-            raise RuntimeError(run.stdout[-3000:])
-        (ROOT / "figures/method.pdf").write_bytes((Path(build) / "method.pdf").read_bytes())
     # Embed the requested text font and retain standard mathematical glyphs.
     matplotlib.rcParams.update({
         "font.family": "Times New Roman", "font.size": 8.5,
@@ -65,14 +58,15 @@ def main():
         "ytick.major.size": 2, "savefig.facecolor": "white",
     })
     mapping, chosen = records()
+    frames = [read_nuscenes(record, mapping) for record in chosen]
+    inserted_masks = []
     fig, axes = plt.subplots(2, 3, figsize=(5.5, 3.05),
                              gridspec_kw={"height_ratios": [4, 1]})
     fig.subplots_adjust(left=.092, right=.985, bottom=.24, top=.86,
                         wspace=.22, hspace=.30)
     titles = ("(a) Original scan", "(b) Auxiliary anomaly", "(c) Normal insertion")
     stats = []
-    for col, record in enumerate(chosen):
-        frame = read_nuscenes(record, mapping)
+    for col, (record, frame) in enumerate(zip(chosen, frames)):
         xyz, target = frame.xyzi[:, :3], point_targets(frame)
         inserted = np.zeros(len(xyz), dtype=bool)
         changed_ignore = inserted.copy()
@@ -81,6 +75,7 @@ def main():
                 slots, labels = delta["slots"], delta["labels"]
                 inserted[slots[labels > 0]] = True
                 changed_ignore[slots[labels == 0]] = True
+        inserted_masks.append(inserted)
         # One common crop is applied to all panels; every retained point is drawn.
         crop = ((xyz[:, 0] >= 0) & (xyz[:, 0] <= 8)
                 & (xyz[:, 1] >= -24) & (xyz[:, 1] <= -16)
@@ -131,6 +126,60 @@ def main():
                               "Author": "Anonymous authors"})
     plt.close(fig)
     print(f"{out}: scene-0042, token={TOKEN}, inserted_counts_and_ranges={stats}")
+
+    # Scenes show measured source data, not model predictions. Generate them in
+    # the TeX build directory so the final vector figure remains self-contained.
+    with tempfile.TemporaryDirectory(prefix="ajae-method.") as build:
+        (Path(build) / "Box.sty").write_bytes((ROOT / "figures/assets/Box.sty").read_bytes())
+        for name, color in (("flame", "#D86B2B"), ("snowflake", "#287FB8")):
+            subprocess.run([
+                "/usr/bin/python3", "-c",
+                "import sys,cairosvg; from pathlib import Path; "
+                "s=Path(sys.argv[1]).read_text().replace('currentColor',sys.argv[3]); "
+                "cairosvg.svg2pdf(bytestring=s.encode(),write_to=sys.argv[2])",
+                str(ROOT / f"figures/assets/{name}.svg"), str(Path(build) / f"{name}.pdf"), color,
+            ], check=True)
+        # The same camera and crop preserve spatial context across observations.
+        eye = np.array([12., 7., 9.])
+        forward = np.array([0., -20., -1.8]) - eye
+        forward /= np.linalg.norm(forward)
+        right = np.cross(forward, [0., 0., 1.])
+        right /= np.linalg.norm(right)
+        up = np.cross(right, forward)
+
+        def project(xyz):
+            shifted = xyz - eye
+            depth = shifted @ forward
+            return shifted @ right / depth, shifted @ up / depth, depth
+
+        with PdfPages(Path(build) / "observations.pdf") as pdf:
+            for index in (0, 1, 0):
+                xyz = frames[index].xyzi[:, :3]
+                u, v, depth = project(xyz)
+                crop = ((np.abs(xyz[:, 0]) <= 25) & (xyz[:, 1] >= -45)
+                        & (xyz[:, 1] <= 5) & (xyz[:, 2] >= -3.5)
+                        & (xyz[:, 2] <= 8) & (depth > 1))
+                order = np.flatnonzero(crop)[np.argsort(-depth[crop])]
+                inserted = inserted_masks[index]
+                fig = plt.figure(figsize=(32 / 25.4, 22 / 25.4))
+                ax = fig.add_axes([0, 0, 1, 1])
+                ax.scatter(u[order], v[order], s=.32, c="#697782", linewidths=0)
+                ax.scatter(u[inserted], v[inserted], s=1.3, c=ORANGE, linewidths=0)
+                ax.set_xlim(-.85, .85)
+                ax.set_ylim(-.57, .5)
+                ax.set_aspect("equal")
+                ax.set_axis_off()
+                pdf.savefig(fig)
+                plt.close(fig)
+        run = subprocess.run(["xelatex", "-interaction=nonstopmode", "-halt-on-error",
+                              str(ROOT / "figures/method.tex")],
+                             cwd=build, capture_output=True, text=True)
+        if run.returncode:
+            raise RuntimeError(run.stdout[-3000:])
+        if "Missing character" in run.stdout or "Font Warning" in run.stdout:
+            raise RuntimeError(run.stdout[-3000:])
+        (ROOT / "figures/method.pdf").write_bytes((Path(build) / "method.pdf").read_bytes())
+    print(f"{ROOT / 'figures/method.pdf'}: training and inference; source-data scenes")
 
 
 if __name__ == "__main__":
