@@ -1,0 +1,68 @@
+% Compile with pdfLaTeX; the diagram uses the ICLR template's Times setup.
+\documentclass[tikz,border=0pt]{standalone}
+\usepackage{times,amsmath,amssymb}
+\usetikzlibrary{arrows.meta}
+\definecolor{observed}{HTML}{0077BB}
+\definecolor{normal}{HTML}{008877}
+\definecolor{ink}{HTML}{26333D}
+\begin{document}
+\begin{tikzpicture}[x=1mm,y=1mm,
+  font=\fontsize{9}{10}\selectfont,text=ink,
+  box/.style={draw=ink!60,rounded corners=1.1mm,line width=.5pt,
+    align=center,inner sep=1mm,minimum height=12mm},
+  flow/.style={-{Stealth[length=1.6mm]},line width=.65pt,draw=ink},
+  reference/.style={flow,draw=normal},
+  note/.style={font=\fontsize{8}{9}\selectfont,align=center}]
+\path[use as bounding box] (0,0) rectangle (139.7,68);
+\node[anchor=west,font=\fontsize{9}{10}\selectfont\bfseries] at (1,65)
+  {One observed scan, one anomaly score per point};
+
+\node[box,fill=observed!6,minimum width=17mm] (scan) at (9,51)
+  {Observed\\scan $X$};
+\node[box,draw=observed,fill=observed!5,minimum width=33mm] (encoder) at (45,51)
+  {Actual-observation\\encoder};
+\node[box,draw=observed,fill=observed!5,minimum width=29mm] (head) at (117,51)
+  {Point-level head\\$a_i=g[f_i,\{e_i^s\},\{\ell_i^s\}]$};
+\draw[flow] (scan) -- (encoder);
+\draw[flow,draw=observed] (encoder) -- node[above] {$f_i$} (head);
+
+\node[box,draw=normal,fill=normal!5,minimum width=27mm] (context) at (27,28)
+  {Block-excluded\\context};
+\node[box,draw=normal,fill=normal!5,minimum width=26mm] (field) at (59,28)
+  {Shared normal fields\\$\lambda_{Bk},\ \pi_{Bk}$};
+\node[box,draw=normal,fill=normal!5,minimum width=25mm] (ray) at (90,28)
+  {Analytic ray density\\$\log p_{ik}(r_i)$};
+\node[box,draw=normal,fill=normal!5,minimum width=26mm] (readout) at (123,28)
+  {Hypothesis readout\\$\psi[\log p_{ik},\log\pi_{Bk}]$};
+\draw[reference] (9,45) -- (9,28) -- (context.west);
+\draw[reference] (context) -- (field);
+\draw[reference] (field) -- (ray);
+\draw[reference] (ray) -- (readout);
+\node[note,text=normal] at (27,18.5) {$1^\circ,2^\circ,4^\circ$ blocks};
+\node[note,text=normal] at (59,18.5) {4 fields; 8 Gaussians each};
+
+% Measured range is used for evaluation and reading, never field prediction.
+\draw[flow] (9,28) -- (9,12) -- (82,12) -- (82,22);
+\node[note,fill=white,inner sep=.6mm] at (47,12)
+  {Measured ray and return: $o_i,d_i,r_i$};
+\fill[ink] (9,28) circle (.55mm);
+\draw[flow,draw=observed] (78,51) -- (78,40) -- (116,40) -- (116,34);
+\fill[observed] (78,51) circle (.55mm);
+\node[note,fill=white,inner sep=.6mm,text=observed] at (94,40)
+  {Query from $f_i,r_i$};
+\draw[reference] (124,34) -- (124,45);
+\node[note,anchor=west,text=normal] at (124,39) {$\{e_i^s\}$};
+% Marginal density bypasses attention so absolute support reaches the head.
+\draw[reference] (96,22) -- (96,15.5) -- (138,15.5) -- (138,51) -- (head.east);
+\node[note,fill=white,inner sep=.4mm,text=normal] at (116,15.5)
+  {Marginal densities $\{\ell_i^s\}$};
+
+% This is a separate pass on the unmodified companion, with shared parameters.
+\draw[draw=ink!45,dashed,rounded corners=1mm,line width=.5pt,fill=ink!2]
+  (1,.5) rectangle (138.7,8);
+\node[note,anchor=west] at (3,4.2)
+  {\textbf{Training:} original $X^0$ $\rightarrow$ shared normal path $\rightarrow$ block NLL};
+\node[note,anchor=east] at (137,4.2)
+  {Labels $\rightarrow$ grouped BCE + ranking on $a_i$};
+\end{tikzpicture}
+\end{document}

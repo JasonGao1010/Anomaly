@@ -71,8 +71,8 @@ The model contains an actual-observation encoder and a normal-context predictor 
 
 \begin{figure}[t]
 \centering
-\figureblank{1.18in}{Model overview}
-\caption{Contextual normal return fields. The actual-observation encoder supplies point features. Block-excluded context predicts shared normal fields, which yield ray-conditioned distance distributions. A hypothesis readout combines their compatibility with the observed point into one anomaly score.}
+\includegraphics[width=\linewidth]{figures/method.pdf}
+\caption{Contextual normal return fields. Block-excluded context predicts normal hypotheses, and analytic ray integration evaluates their support for each return. Hypothesis features and marginal log densities join actual-observation features in one point-level head. Normal-path parameters are shared across scales. During training, the unmodified companion $X^0$ supplies the separate block-likelihood objective.}
 \label{fig:method}
 \end{figure}
 
@@ -186,8 +186,10 @@ Each placement fixes one original-size donor at a world pose supported by measur
 
 \begin{figure}[t]
 \centering
-\figureblank{1.0in}{Original scan, auxiliary anomaly insertion, normal insertion}
-\caption{Source supervision. Original observations provide normal-field targets. Independent auxiliary anomaly and normal-object insertions provide point-level detection labels through the same observation procedure.}
+% Regenerate with figures/draw.py; training scene-0042, receiving frame 3 (0-based),
+% token 955bce79c1aa4f7d80e8060d5c255a49; anomaly_r3 and control placements.
+\includegraphics[width=\linewidth]{figures/data.pdf}
+\caption{Realized source observations from one nuScenes training scan. Columns show the original, an auxiliary toolbox insertion (11 returns), and a normal motorcycle insertion (22 returns). Top and bottom rows show horizontal and height projections of the same crop, with equal distance scales on both axes. The insertions use independent world poses and the same observation procedure. Crosses mark background returns retained with ignored supervision in uncertain occlusion regions.}
 \label{fig:data}
 \end{figure}
 
@@ -280,6 +282,9 @@ Normal insertion controls test whether the learned decision retains normal objec
 
 \begin{figure}[t]
 \centering
+% Use one completed checkpoint for all panels. Retain raw scores and the
+% evaluation eligibility rule; report point/scan counts for every stratum.
+% Normal-control distributions require their own inference on those records.
 \figureblank{1.05in}{Normal-control scores and range/point-count analysis}
 \caption{Normal retention and sparse anomaly observations: score distributions for inserted normal objects, range-stratified measurements, and measurements grouped by observed object point count.}
 \label{fig:analysis}
@@ -293,6 +298,9 @@ The qualitative comparison pairs point-level predictions with the normal-return 
 
 \begin{figure}[t]
 \centering
+% Pair input, labels, baseline, and full-model predictions on identical scans
+% and crops. Use one shared score scale; include successes and errors. Extract
+% return distributions from those same forward passes, never illustrative curves.
 \figureblank{1.05in}{Point-level predictions and normal-return distributions}
 \caption{Qualitative comparison on STU validation: input points, annotations, direct-classifier predictions, full-model scores, and normal-return distributions for selected rays.}
 \label{fig:qualitative}
@@ -307,7 +315,7 @@ We introduced contextual normal return fields for point-level LiDAR anomaly segm
 % Add the empirical conclusion supported by benchmark and component results.
 
 \section*{AI Use Statement}
-We used OpenAI Codex to assist with literature search and synthesis, refinement of research hypotheses and the model formulation, mathematical derivations, training-data construction and annotation review, experimental design, implementation and debugging, and interpretation of development results. Codex also assisted with manuscript drafting and editing, reference organization, and document formatting. Synthetic point clouds are produced by the nuScenes-based geometric procedure in Section~\ref{sec:data}; AI assistance included designing and implementing that procedure. Checks of the assisted implementation include numerical evaluation of return densities and gradients, metric recomputation, and verification of source labels and generated observations. The authors take responsibility for the final text, claims, code, and data artifacts.
+We used OpenAI Codex to assist with literature search and synthesis, refinement of research hypotheses and the model formulation, mathematical derivations, training-data construction and annotation review, experimental design, implementation and debugging, and interpretation of development results. Codex also assisted with manuscript drafting and editing, reference organization, figure design and plotting code, and document formatting. Synthetic point clouds are produced by the nuScenes-based geometric procedure in Section~\ref{sec:data}; AI assistance included designing and implementing that procedure. Checks of the assisted implementation include numerical evaluation of return densities and gradients, metric recomputation, and verification of source labels and generated observations. The authors take responsibility for the final text, claims, code, and data artifacts.
 
 \section*{Reproducibility Statement}
 Section~\ref{sec:method} defines the model and learning objectives, and Section~\ref{sec:data} describes the source-data construction and partitioning. Appendices~\ref{app:integral}--\ref{app:implementation} provide the analytic derivation, loss definitions, model dimensions, optimization settings, and sampling procedure. Appendix~\ref{app:resources} records the training resources and observation coverage.
