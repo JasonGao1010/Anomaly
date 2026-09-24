@@ -1,15 +1,28 @@
 # Figure assets
 
 Network-layer assets selected from the user-provided DRAW resource catalog.
-Box dimensions and colors are set in method.tex; icons are recolored at export.
+Grid dimensions and colors are set in method.tex; icons are recolored at export.
 
-## PlotNeuralNet (Box.sty)
+## ML Visuals (flat grid glyphs)
 
-Source: https://raw.githubusercontent.com/HarisIqbal88/PlotNeuralNet/master/LICENSE
+Repository: https://github.com/dair-ai/ml-visuals
+
+Source slides: https://docs.google.com/presentation/d/11mR1nkIR9fbHegFkcFq8z9oDQ5sjv8E3JJp1LfLGKuk/edit
+
+The flat grids in method.tex adapt the editable matrix shapes on slide 7 of the
+official slide export. The slide notes credit Elvis Saravia as the author.
+The grids are redrawn in TikZ, resized and recolored for the method diagram.
+Full source slide exports are not retained in this repository.
+
+Layout reference: OSFormer, Figure 3 (compact nested regions and orthogonal
+connections), https://www.ecva.net/papers/eccv_2022/papers_ECCV/papers/136780019.pdf.
+The method diagram is independently drawn for the implemented model.
+
+License source: https://raw.githubusercontent.com/dair-ai/ml-visuals/master/LICENSE
 
 MIT License
 
-Copyright (c) 2018 HarisIqbal88
+Copyright (c) 2020 dair.ai
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -30,7 +43,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-## Lucide (flame.svg and snowflake.svg)
+## Lucide (flame.svg)
 
 Source: https://raw.githubusercontent.com/lucide-icons/lucide/main/LICENSE
 

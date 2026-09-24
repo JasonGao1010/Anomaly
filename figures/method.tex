@@ -1,175 +1,214 @@
-% Rebuild with figures/draw.py. Layer glyphs use PlotNeuralNet; see assets/LICENSES.md.
+% Rebuild with figures/draw.py. ML Visuals grids; OSFormer Fig. 3 layout reference.
+% Provenance and licenses are in assets/LICENSES.md.
 \documentclass[tikz,border=0pt]{standalone}
-\usepackage{amsmath,amssymb,fontspec,Box}
-\setmainfont{Times New Roman}
-\DeclareMathSizes{6.5}{6}{5}{5}
-\usetikzlibrary{arrows.meta,quotes,calc}
+\usepackage{fix-cm,amsmath,amssymb}
+\usepackage[no-math]{fontspec}
+\setmainfont{comic.ttf}[Path=/mnt/c/Windows/Fonts/,
+  BoldFont=comicbd.ttf,ItalicFont=comici.ttf,BoldItalicFont=comicz.ttf]
+\DeclareMathSizes{3.5}{3.5}{3}{3}
+\DeclareMathSizes{3.8}{3.8}{3}{3}
+\usetikzlibrary{arrows.meta,fit,backgrounds,calc}
 \definecolor{observed}{HTML}{287FB8}
 \definecolor{normal}{HTML}{219786}
 \definecolor{readout}{HTML}{8D75B2}
 \definecolor{loss}{HTML}{C8783C}
 \definecolor{ink}{HTML}{26333D}
-% PlotNeuralNet boxes depict feature layers, not individual convolution operators.
-\newcommand{\layer}[7]{\pic[draw=ink!45,line width=.28pt] at (#1,#2)
-  {Box={name=#7,width={#3},height=#4,depth=#5,scale=1,fill=#6!55,opacity=.95}};}
-\newcommand{\status}[3]{\node[inner sep=0] at (#1,#2)
-  {\includegraphics[width=2.5mm]{#3.pdf}};}
-\newcommand{\network}[3]{%
-  % #1 names the pass, #2 its parameter state, #3 the source observation page.
-  \draw[region,draw=normal!60] (34.5,6.5) rectangle (70,28);
-  \node[note,anchor=west,text=normal,fill=white,inner sep=.4mm]
-    at (35,28) {Normal field};
-  \node[note,text=normal,fill=white,inner sep=.4mm]
-    at (52.5,6.5) {$1^\circ,2^\circ,4^\circ$};
-  \draw[region,draw=readout!55] (73,6.5) rectangle (120,54);
-  \node[note,anchor=west,text=readout,fill=white,inner sep=.4mm]
-    at (74,54) {Compatibility};
-  \node[inner sep=0] at (15.5,30)
-    {\includegraphics[page=#3,width=29mm]{observations.pdf}};
-  \node[note] at (14,18.7) {Scan $X$};
-
-  \node[module,draw=observed!55,fill=observed!3,minimum width=30mm,
-    minimum height=16mm] (#1-obs) at (52,42) {};
-  \status{39}{48.2}{#2}
-  \layer{42}{43.4}{1.4}{9}{5}{observed}{#1-o1}
-  \layer{46}{43.4}{1.4}{8}{5}{observed}{#1-o2}
-  \layer{50}{43.4}{1.4}{6.5}{5}{observed}{#1-o3}
-  \layer{54}{43.4}{1.4}{6.5}{5}{observed}{#1-o4}
-  \layer{58}{43.4}{1.4}{8}{5}{observed}{#1-o5}
-  \layer{62}{43.4}{1.4}{9}{5}{observed}{#1-o6}
-  \node[note] at (52,36) {LitePT-S + detail};
-
-  \node[module,draw=normal!55,fill=normal!3,minimum width=15mm,
-    minimum height=16mm] (#1-context) at (44,17) {};
-  \status{38.5}{23.2}{#2}
-  \layer{40}{18}{1,1}{8}{4}{normal}{#1-c}
-  % The unfilled center denotes exclusion before cross-block context mixing.
-  \foreach \xx in {0,...,4} \foreach \yy in {0,...,4} {
-    \ifnum\xx=2 \ifnum\yy=2
-      \draw[draw=normal!80,line width=.35pt] (44.5+\xx*1.12,15+\yy*1.12)
-        rectangle ++(.92,.92);
-    \else \fill[normal!55] (44.5+\xx*1.12,15+\yy*1.12) rectangle ++(.92,.92); \fi
-    \else \fill[normal!55] (44.5+\xx*1.12,15+\yy*1.12) rectangle ++(.92,.92); \fi
+% Grid cells are schematic; compressed height follows feature width (#4).
+\newcommand{\tensor}[5]{\begin{scope}[shift={(#1,#2)}]
+  \pgfmathsetmacro{\hh}{2.1+.346*ln(#4)/ln(2)}
+  \pgfmathtruncatemacro{\rows}{max(3,round(2*\hh/#3))}
+  \fill[#5!20] (-#3/2,-\hh/2) rectangle (#3/2,\hh/2);
+  \draw[draw=#5!75!black,line width=.18pt] (0,-\hh/2) -- (0,\hh/2);
+  \foreach \row in {1,...,\numexpr\rows-1\relax}
+    \draw[draw=#5!75!black,line width=.18pt]
+      (-#3/2,-\hh/2+\row*\hh/\rows) -- (#3/2,-\hh/2+\row*\hh/\rows);
+  \draw[draw=#5!75!black,line width=.3pt]
+    (-#3/2,-\hh/2) rectangle (#3/2,\hh/2);
+\end{scope}}
+% Mark optimized parameters only in the training panel; all are fine-tuned.
+\newif\iftrainingstatus
+\newcommand{\status}[2]{\iftrainingstatus
+  \node[inner sep=0] at (#1,#2) {\includegraphics[width=2.1mm]{flame.pdf}};
+\fi}
+% A center-free neighborhood is a scientific operation, not a feature decoration.
+\newcommand{\neighbors}[3]{\begin{scope}[shift={(#1,#2)},scale=#3]
+  \foreach \x in {0,...,4} \foreach \y in {0,...,4} {
+    \ifnum\x=2 \ifnum\y=2
+      \draw[draw=normal!80,line width=.3pt] (\x*.7,\y*.7) rectangle ++(.6,.6);
+    \else \fill[normal!55] (\x*.7,\y*.7) rectangle ++(.6,.6); \fi
+    \else \fill[normal!55] (\x*.7,\y*.7) rectangle ++(.6,.6); \fi
   }
-  \node[note] at (44,11) {Context};
-
-  \node[module,draw=normal!55,fill=normal!3,minimum width=15mm,
-    minimum height=16mm] (#1-field) at (61,17) {};
-  \status{55.5}{23.2}{#2}
-  \layer{57}{18}{1,1}{8}{4}{normal}{#1-f}
+\end{scope}}
+\newcommand{\fields}[3]{\begin{scope}[shift={(#1,#2)},scale=#3]
   \foreach \i in {0,...,3} {
-    \draw[draw=normal!75,fill=normal!12,line width=.4pt]
-      (60.8+\i*.8,14.8+\i*.6) rectangle ++(3.3,5.8);
+    \draw[draw=normal!75,fill=normal!10,line width=.3pt]
+      (\i*.65,\i*.4) rectangle ++(3.2,3.1);
+    \foreach \j in {1,2}
+      \draw[draw=normal!75,line width=.18pt]
+        (\i*.65,\i*.4+\j*1.03) -- ++(3.2,0);
+    \draw[draw=normal!75,line width=.18pt] (\i*.65+1.6,\i*.4) -- ++(0,3.1);
   }
-  \node[note] at (61,11) {Decoder};
+\end{scope}}
+\newcommand{\network}[2]{%
+  \node[inner sep=0] (#1-scan) at (12.5,13)
+    {\includegraphics[page=#2,width=22.5mm]{observations.pdf}};
+  \node[note] at (12.5,3.2) {$X$};
+  % Composite observation encoder: six extracted widths, then conditional fusion.
+  \node[op,fill=observed!9,rotate=90,align=center,inner xsep=.55mm]
+    (#1-backbone) at (32.3,20)
+    {LitePT-S\\+ detail};
+  \foreach \x/\c in {38.5/36,43/72,47.5/144,52/252,56.5/504,61/72} {
+    \tensor{\x}{20.7}{1.9}{\c}{observed}
+    \node[dim] at (\x,17.1) {\c};
+  }
+  \coordinate (#1-features-left) at (37.3,20);
+  \coordinate (#1-features-right) at (62.2,20);
+  \node[op,fill=observed!9,rotate=90] (#1-fusion) at (68,20) {Fusion};
+  \tensor{76}{20.7}{1.9}{64}{observed}
+  \node[dim] at (76,17.1) {64};
+  \node[note] at (76,24) {$f_i$};
+  \draw[flow] (#1-backbone.south) -- (#1-features-left);
+  \draw[flow] (#1-features-right) -- (#1-fusion.north);
+  \draw[flow] (#1-fusion.south) -- (74.9,20);
+  % Raw-point detail and offset also enter final fusion, bypassing voxel features.
+  \fill[ink] (35.5,20) circle (.25mm);
+  \draw[flow] (35.5,20) -- (35.5,15.1) -- (68,15.1) -- (#1-fusion.west);
+  \node[note,fill=white,inner sep=.15mm] at (51.5,15.1) {detail / offset};
+  \coordinate (#1-ob-low) at (29.8,14.5);
+  \coordinate (#1-ob-high) at (78,25.2);
+  \begin{scope}[on background layer]
+    \node[region,fit=(#1-ob-low)(#1-ob-high)] (#1-observed) {};
+  \end{scope}
+  \node[regiontitle,anchor=east,fill=white,inner sep=.2mm]
+    at ([xshift=-.7mm]#1-observed.north east) {Observation encoder};
+  \status{30.8}{24.2}
+  \status{66.4}{24.2}
 
-  % This composite analytic node computes densities and marginals and forwards
-  % decoder priors. Priors are never produced by ray integration.
-  \node[module,draw=ink!35,fill=ink!2,minimum width=22mm,
-    minimum height=16mm] (#1-ray) at (86,17) {};
-  \node[font=\fontsize{12}{13}\selectfont] at (86,19) {$\int\!\lambda\,\mathrm dr$};
-  \node[note] at (86,11) {Ray evidence};
+  % Independent block encoding precedes exclusion and cross-block attention.
+  \node[op,fill=normal!9,rotate=90] (#1-mlp) at (32.3,8.7) {MLP};
+  \tensor{37.7}{9.3}{1.6}{64}{normal}
+  \node[dim] at (35.3,5.3) {7–64–64};
+  \node[op,fill=normal!9,rotate=90] (#1-pool) at (43.4,8.7) {Block embed};
+  \neighbors{48}{7.1}{1}
+  \node[dim] at (49.7,5.3) {128};
+  \node[op,fill=normal!9,rotate=90] (#1-decoder) at (57.7,8.7) {Decoder};
+  \node[dim] at (57.7,4.5) {128};
+  \fields{63}{7}{1}
+  \node[dim] at (65.5,5.3) {4×8×10};
+  \foreach \i in {0,...,3}
+    \draw[draw=normal!75,fill=normal!20,line width=.25pt]
+      (72.5,7.1+\i*.9) rectangle ++(1.5,.9);
+  \node[dim] at (73.2,5.3) {4};
+  \draw[flow] (#1-mlp.south) -- (36.7,8.7);
+  \draw[flow] (38.7,8.7) -- (#1-pool.north);
+  \draw[flow] (#1-pool.south) -- (47.5,8.7);
+  \draw[flow] (51.9,8.7) -- (#1-decoder.north);
+  % The cards and prior vector form one jointly decoded output bundle.
+  \draw[flow] (#1-decoder.south) -- (62.4,8.7);
+  \coordinate (#1-norm-low) at (29.8,3.8);
+  \coordinate (#1-norm-high) at (76.5,13.3);
+  \begin{scope}[on background layer]
+    \node[region,fit=(#1-norm-low)(#1-norm-high)] (#1-normal) {};
+  \end{scope}
+  \node[regiontitle,anchor=east,fill=white,inner sep=.2mm]
+    at ([xshift=-.7mm,yshift=-.65mm]#1-normal.north east) {Normal field predictor};
+  \status{30.8}{12.3}
+  \status{41.9}{12.3}
+  \status{56.3}{12.3}
 
-  % Compatibility.forward returns cat(f, e, ell), so no external f/ell bypass
-  % is drawn. Raw range still enters query formation independently.
-  \node[module,draw=readout!65,fill=readout!4,minimum width=22mm,
-    minimum height=20mm] (#1-read) at (108,42) {};
-  \status{99}{50.2}{#2}
-  \layer{101}{43}{1.3,1.3}{10}{4}{readout}{#1-map}
-  \layer{106}{43}{1.3,1.3}{10}{4}{readout}{#1-attn}
-  \layer{113}{43}{.9,.9,.9}{10}{4}{readout}{#1-cat}
-  \node[note] at (108,34.5) {Readout + concat};
+  % Ray evidence is analytic; readout includes range-conditioned query and concat.
+  \node[op,fill=ink!5,rotate=90] (#1-ray) at (83.9,8.7) {Ray evidence};
+  \node[op,fill=readout!10,rotate=90] (#1-read) at (92.2,13.4) {Readout};
+  \foreach \x/\c in {96.5/2,100.2/16,103.9/64,107.6/32,111.3/163} {
+    \tensor{\x}{14.1}{1.7}{\c}{readout}
+    \node[dim] at (\x,10.7) {\c};
+  }
+  \coordinate (#1-read-low) at (90.1,9.3);
+  \coordinate (#1-read-high) at (113.1,19.2);
+  \begin{scope}[on background layer]
+    \node[region,fit=(#1-read-low)(#1-read-high)] (#1-readout) {};
+  \end{scope}
+  \node[regiontitle,anchor=east,fill=white,inner sep=.2mm]
+    at ([xshift=-.7mm]#1-readout.north east) {Hypothesis readout};
+  \status{91.1}{18.2}
+  % The intermediate widths annotate the composite readout; 163 is its output.
+  \draw[flow] (#1-read.south) -- (94.4,13.4) -- (94.4,17.9) --
+    (111.3,17.9) -- (111.3,16.55);
+  \draw[flow] (77.2,8.7) -- (#1-ray.north);
+  \draw[flow] (#1-ray.south) -- (87.9,8.7) -- (87.9,13.4) -- (#1-read.north);
+  \draw[flow,draw=observed] (77.1,20.7) -- (92.2,20.7) -- (#1-read.east);
 
-  \node[module,draw=observed!55,fill=observed!3,minimum width=16mm,
-    minimum height=18mm] (#1-head) at (130.5,42) {};
-  \status{124.5}{49.2}{#2}
-  \layer{125.5}{43}{.9}{9}{3}{observed}{#1-h1}
-  \layer{128.5}{43}{.9}{7}{3}{observed}{#1-h2}
-  \layer{131.5}{43}{.9}{5}{3}{observed}{#1-h3}
-  \layer{134.5}{43}{.9}{2.5}{2}{observed}{#1-h4}
-  \node[note] at (130.5,35) {Point head};
+  \foreach \x/\c in {120/163,124.6/128,129.2/64,133.8/1} {
+    \tensor{\x}{14.1}{1.7}{\c}{observed}
+    \node[dim] at (\x,10.7) {\c};
+  }
+  \foreach \x in {121.1,125.7,130.3}
+    \draw[flow] (\x,14.1) -- ++(2.3,0);
+  \node[note] (#1-score) at (137.3,14.1) {$a_i$};
+  \draw[flow] (134.9,14.1) -- (136.2,14.1);
+  \coordinate (#1-head-low) at (117.5,9.3);
+  \coordinate (#1-head-high) at (138.6,19.2);
+  \begin{scope}[on background layer]
+    \node[region,fit=(#1-head-low)(#1-head-high)] (#1-head) {};
+  \end{scope}
+  \node[regiontitle,anchor=east,fill=white,inner sep=.2mm]
+    at ([xshift=-.7mm]#1-head.north east) {Point head};
+  \status{118.5}{18.2}
+  \draw[flow] (112.4,14.1) -- (118.9,14.1);
 
-  % A single scan junction supplies the two encoders and the raw ray geometry.
-  \draw[draw=ink,line width=.55pt] (30,30) -- (32,30);
-  \draw[flow] (32,30) -- (32,42) -- (#1-obs.west);
-  \draw[flow] (32,30) -- (32,17) -- (#1-context.west);
-  \fill[ink] (32,30) circle (.35mm);
-  \fill[ink] (32,17) circle (.35mm);
-  \draw[normalflow] (#1-context.east) -- (#1-field.west);
-  \draw[normalflow] (#1-field.east) -- (#1-ray.west);
-  \node[note,text=normal] at (71.8,22) {$\Phi$\\$\log\pi$};
-  \draw[flow,draw=observed] (#1-obs.east) -- node[above,note] {$f_i$} (#1-read.west);
-  \draw[normalflow] (#1-ray.north) -- (86,35) -- (97,35);
-  \node[note,text=normal] at (91,37.3) {$z_i^s,\ell_i^s$};
-  \draw[flow] (#1-read.east) -- (#1-head.west);
-
-  \draw[draw=ink,line width=.55pt] (32,17) -- (32,3) -- (114,3);
-  \node[note,fill=white,inner sep=.4mm] at (53,3) {$o_i,d_i,r_i$};
-  \fill[ink] (82,3) circle (.35mm);
-  \draw[flow] (82,3) -- (82,9);
-  \draw[flow] (114,3) -- (114,32);
-  \node[note,fill=white,inner sep=.4mm] at (114,20) {$r_i$};
+  % A single source junction supplies both encoders and the measured ray geometry.
+  \draw[draw=ink,line width=.5pt] (25,13) -- (26.8,13);
+  \draw[flow] (26.8,13) -- (26.8,20) -- (#1-backbone.north);
+  \draw[flow] (26.8,13) -- (26.8,8.7) -- (#1-mlp.north);
+  \draw[draw=ink,line width=.5pt] (26.8,8.7) -- (26.8,1.7) -- (100.2,1.7);
+  \draw[flow] (83.9,1.7) -- (#1-ray.west);
+  \draw[flow] (100.2,1.7) -- (100.2,8.8);
+  \node[note,fill=white,inner sep=.15mm] at (100.2,5.2) {$r_i$};
+  \foreach \x/\y in {26.8/13,26.8/8.7,83.9/1.7}
+    \fill[ink] (\x,\y) circle (.27mm);
 }
 \begin{document}
-\begin{tikzpicture}[x=1mm,y=1mm,z={(-.55mm,-.28mm)},
-  font=\fontsize{7}{8}\selectfont,text=ink,
-  module/.style={rounded corners=.8mm,line width=.45pt,inner sep=.3mm,align=center},
-  region/.style={dashed,rounded corners=1mm,line width=.4pt},
-  flow/.style={-{Stealth[length=1.2mm]},line width=.55pt,draw=ink},
-  normalflow/.style={flow,draw=normal},
-  note/.style={font=\fontsize{6.5}{7.3}\selectfont,align=center},
-  title/.style={anchor=west,font=\fontsize{8}{9}\selectfont\bfseries}]
-\path[use as bounding box] (0,0) rectangle (140,134);
-\draw[rounded corners=1.2mm,draw=ink!25,line width=.45pt]
-  (.5,59.5) rectangle (139.5,133.5);
-\node[title] at (3,130) {(a) Training};
-\node[note,anchor=west] at (3,125.5)
-  {$\mathcal L=\mathcal L_{\rm det}+0.1\mathcal L_{\rm normal}$};
-\begin{scope}[shift={(0,78)}]
-  \network{train}{flame}{2}
+\begin{tikzpicture}[x=.9mm,y=1mm,text=ink,
+  note/.style={font=\fontsize{3.8}{4.6}\selectfont,inner sep=.15mm},
+  dim/.style={font=\fontsize{3.5}{4.2}\selectfont,inner sep=.1mm},
+  regiontitle/.style={font=\fontsize{3.3}{4}\selectfont},
+  title/.style={anchor=west,font=\fontsize{6.5}{7.3}\selectfont\bfseries},
+  op/.style={note,draw=ink!70,rounded corners=.65mm,inner xsep=.8mm,inner ysep=.65mm},
+  region/.style={draw=ink!55,densely dashed,rounded corners=.9mm,
+    fill=ink!3,line width=.4pt,inner sep=.45mm},
+  flow/.style={-{Stealth[length=.9mm]},draw=ink,line width=.5pt}]
+\path[use as bounding box] (0,0) rectangle (140,61);
+\node[title] at (1,59.4) {(a) Training};
+\begin{scope}[shift={(0,33)}]
+  \trainingstatustrue
+  \network{train}{2}
 \end{scope}
-\node[module,draw=loss!75,fill=loss!5,minimum width=20mm,
-  minimum height=7mm,note] (detloss) at (128.5,97.5)
-  {$\mathcal L_{\rm det}$\\BCE + rank};
-\draw[flow] (train-head.south) -- (130.5,101);
-\node[note,anchor=east] at (129.5,106.5) {$\{a_i\}$};
-\node[note] at (128.5,89) {Labels + groups};
-\draw[flow] (128.5,91) -- (detloss.south);
-\status{4.5}{82}{flame}
-\node[note,anchor=west] at (6.5,82) {Trainable};
-
-% NormalField.likelihood processes the original companion; the two green layer
-% glyphs reuse the context/decoder weights, while ray evaluation is analytic.
-\node[inner sep=0] at (12,68)
-  {\includegraphics[page=1,width=20mm]{observations.pdf}};
-\node[note] at (27.5,68) {$X^0$};
-\node[module,draw=normal!55,fill=normal!3,minimum width=51mm,
-  minimum height=10mm] (normalpass) at (61.5,68) {};
-\status{38.2}{71.4}{flame}
-\status{54.2}{71.4}{flame}
-\layer{42}{68}{1,1,1}{6}{3.5}{normal}{aux-context}
-\layer{48}{68}{1,1}{6}{3.5}{normal}{aux-blocks}
-\layer{58}{68}{1,1,1}{6}{3.5}{normal}{aux-decoder}
-\layer{64}{68}{1,1}{6}{3.5}{normal}{aux-field}
-\node[text=ink!75,font=\fontsize{10}{11}\selectfont] at (78,68) {$\int\!\lambda\,\mathrm dr$};
-\node[note,text=normal] at (61.5,61.4) {Shared normal predictor + rays};
-\draw[flow] (30,68) -- (normalpass.west);
-\node[module,draw=loss!75,fill=loss!5,minimum width=25mm,
-  minimum height=8mm,note] (normalnll) at (123.5,68)
-  {$\mathcal L_{\rm normal}$\\Joint NLL};
-\draw[normalflow] (normalpass.east) -- node[above,note] {$\log p^0,\log\pi^0$} (normalnll.west);
-\node[note] at (123.5,76.5) {Normal labels / blocks};
-\draw[flow] (123.5,74.8) -- (normalnll.north);
-
-\draw[rounded corners=1.2mm,draw=ink!25,line width=.45pt]
-  (.5,.5) rectangle (139.5,57.5);
-\node[title] at (3,53.5) {(b) Inference};
-\begin{scope}[shift={(0,1.5)}]
-  \network{infer}{snowflake}{3}
-  \draw[flow] (infer-head.south) -- (130.5,29);
-  \node[note,anchor=north] at (130.5,28.5) {$a_i$ per point};
+% The clean companion runs only the shared normal predictor and analytic rays.
+\node[inner sep=0] at (15,31.3)
+  {\includegraphics[page=1,width=7.2mm]{observations.pdf}};
+\node[note] at (21,31.3) {$X^0$};
+\node[op,fill=normal!9,minimum height=4.2mm] (shared) at (37,31.3)
+  {\hspace{2.4mm}Shared normal predictor};
+\node[anchor=north west,inner sep=.25mm] at (shared.north west)
+  {\includegraphics[width=1.7mm]{flame.pdf}};
+\node[op,fill=ink!5] (auxray) at (56,31.3) {Ray evidence};
+\node[op,fill=loss!10] (normalnll) at (75,31.3) {$\mathcal L_{\rm normal}$: Joint NLL};
+\draw[flow] (22.7,31.3) -- (shared.west);
+\draw[flow] (shared.east) -- (auxray.west);
+\draw[flow] (auxray.east) -- (normalnll.west);
+\fill[ink] (24.3,31.3) circle (.25mm);
+\draw[flow] (24.3,31.3) -- (24.3,28.9) -- (56,28.9) -- (auxray.south);
+\node[note] at (89,31.3) {$y^0$};
+\draw[flow] (87.8,31.3) -- (normalnll.east);
+\node[op,fill=loss!10] (detloss) at (128.5,31.3)
+  {$\mathcal L_{\rm det}$: BCE + rank};
+\draw[flow] (train-score.south) -- (137.3,31.3) -- (detloss.east);
+\node[note] at (115,31.3) {$y$};
+\draw[flow] (116.2,31.3) -- (detloss.west);
+\draw[draw=ink!20,line width=.35pt] (.5,27.9) -- (139.5,27.9);
+\node[title] at (1,26.7) {(b) Inference};
+\begin{scope}[shift={(0,.2)}]
+  \network{infer}{3}
 \end{scope}
-\status{4.5}{6}{snowflake}
-\node[note,anchor=west] at (6.5,6) {Fixed parameters};
 \end{tikzpicture}
 \end{document}

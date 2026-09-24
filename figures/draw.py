@@ -130,15 +130,13 @@ def main():
     # Scenes show measured source data, not model predictions. Generate them in
     # the TeX build directory so the final vector figure remains self-contained.
     with tempfile.TemporaryDirectory(prefix="ajae-method.") as build:
-        (Path(build) / "Box.sty").write_bytes((ROOT / "figures/assets/Box.sty").read_bytes())
-        for name, color in (("flame", "#D86B2B"), ("snowflake", "#287FB8")):
-            subprocess.run([
-                "/usr/bin/python3", "-c",
-                "import sys,cairosvg; from pathlib import Path; "
-                "s=Path(sys.argv[1]).read_text().replace('currentColor',sys.argv[3]); "
-                "cairosvg.svg2pdf(bytestring=s.encode(),write_to=sys.argv[2])",
-                str(ROOT / f"figures/assets/{name}.svg"), str(Path(build) / f"{name}.pdf"), color,
-            ], check=True)
+        subprocess.run([
+            "/usr/bin/python3", "-c",
+            "import sys,cairosvg; from pathlib import Path; "
+            "s=Path(sys.argv[1]).read_text().replace('currentColor','#D86B2B'); "
+            "cairosvg.svg2pdf(bytestring=s.encode(),write_to=sys.argv[2])",
+            str(ROOT / "figures/assets/flame.svg"), str(Path(build) / "flame.pdf"),
+        ], check=True)
         # The same camera and crop preserve spatial context across observations.
         eye = np.array([12., 7., 9.])
         forward = np.array([0., -20., -1.8]) - eye

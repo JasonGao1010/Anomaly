@@ -71,8 +71,8 @@ The model contains an actual-observation encoder and a normal-context predictor 
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\linewidth]{figures/method.pdf}
-\caption{Contextual normal return fields. (a) Detection and original-scan likelihood jointly train the model. (b) Inference outputs one anomaly score per point. Ray evidence computes hypothesis log densities and marginal log density $\ell_i^s$, bundling densities with decoder log priors as $z_i^s$. Readout includes query formation, hypothesis attention and feature concatenation. The auxiliary path shares the normal predictor. Arrows show forward data dependencies; dashed boxes group computations. Flames mark trainable modules; snowflakes mark fixed inference parameters. Gray operators are analytic. Layer glyphs are schematic. The real nuScenes scenes share a viewpoint; orange marks auxiliary labels.}
+\includegraphics[width=.9\linewidth]{figures/method.pdf}
+\caption{Contextual normal return fields. (a) Detection and original-scan likelihood jointly train the model using labels $y$ and $y^0$. The original companion uses the shared normal predictor and analytic ray evidence. (b) Inference outputs one anomaly score $a_i$ per point. Solid boxes denote operations; grids depict feature tensors, with widths annotated. The observation encoder combines five encoder features, the final decoder feature, and point detail. Block embedding combines mean/max pooling with learned feature and position projections. The normal predictor excludes the target block, and decodes four hypotheses with two 128-dimensional attention layers. Each hypothesis contains eight Gaussian components; priors are predicted separately. Hypothesis readout includes query formation, evidence attention, and concatenation: $64+3\times32+3=163$ channels. Dashed regions group computations; arrows show forward dependencies. Flames mark parameters optimized during source training, including the pretrained backbone; gray operations are analytic. Real nuScenes scenes share a viewpoint; orange marks auxiliary labels.}
 \label{fig:method}
 \end{figure}
 
