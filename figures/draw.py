@@ -151,7 +151,7 @@ def main():
             return shifted @ right / depth, shifted @ up / depth, depth
 
         with PdfPages(Path(build) / "observations.pdf") as pdf:
-            for index in (0, 1, 0):
+            for index in (0, 1):
                 xyz = frames[index].xyzi[:, :3]
                 u, v, depth = project(xyz)
                 crop = ((np.abs(xyz[:, 0]) <= 25) & (xyz[:, 1] >= -45)
@@ -177,7 +177,7 @@ def main():
         if "Missing character" in run.stdout or "Font Warning" in run.stdout:
             raise RuntimeError(run.stdout[-3000:])
         (ROOT / "figures/method.pdf").write_bytes((Path(build) / "method.pdf").read_bytes())
-    print(f"{ROOT / 'figures/method.pdf'}: training and inference; source-data scenes")
+    print(f"{ROOT / 'figures/method.pdf'}: shared forward path and training objectives; source-data scenes")
 
 
 if __name__ == "__main__":

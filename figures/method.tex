@@ -25,11 +25,9 @@
   \draw[draw=#5!75!black,line width=.3pt]
     (-#3/2,-\hh/2) rectangle (#3/2,\hh/2);
 \end{scope}}
-% Mark optimized parameters only in the training panel; all are fine-tuned.
-\newif\iftrainingstatus
-\newcommand{\status}[2]{\iftrainingstatus
-  \node[inner sep=0] at (#1,#2) {\includegraphics[width=2.1mm]{flame.pdf}};
-\fi}
+% Flames denote parameters optimized during source training.
+\newcommand{\status}[2]{\node[inner sep=0] at (#1,#2)
+  {\includegraphics[width=2.1mm]{flame.pdf}};}
 % A center-free neighborhood is a scientific operation, not a feature decoration.
 \newcommand{\neighbors}[3]{\begin{scope}[shift={(#1,#2)},scale=#3]
   \foreach \x in {0,...,4} \foreach \y in {0,...,4} {
@@ -177,38 +175,39 @@
   region/.style={draw=ink!55,densely dashed,rounded corners=.9mm,
     fill=ink!3,line width=.4pt,inner sep=.45mm},
   flow/.style={-{Stealth[length=.9mm]},draw=ink,line width=.5pt}]
-\path[use as bounding box] (0,0) rectangle (140,61);
-\node[title] at (1,59.4) {(a) Training};
-\begin{scope}[shift={(0,33)}]
-  \trainingstatustrue
-  \network{train}{2}
+\path[use as bounding box] (0,4.5) rectangle (140,44.5);
+\node[title] at (1,42.9) {Forward pass};
+\begin{scope}[shift={(0,16.5)}]
+  \network{model}{2}
 \end{scope}
 % The clean companion runs only the shared normal predictor and analytic rays.
-\node[inner sep=0] at (15,31.3)
+\node[inner sep=0] at (15,11.3)
   {\includegraphics[page=1,width=7.2mm]{observations.pdf}};
-\node[note] at (21,31.3) {$X^0$};
-\node[op,fill=normal!9,minimum height=4.2mm] (shared) at (37,31.3)
+\node[note] at (21,11.3) {$X^0$};
+\node[op,fill=normal!9,minimum height=4.2mm] (shared) at (37,11.3)
   {\hspace{2.4mm}Shared normal predictor};
 \node[anchor=north west,inner sep=.25mm] at (shared.north west)
   {\includegraphics[width=1.7mm]{flame.pdf}};
-\node[op,fill=ink!5] (auxray) at (56,31.3) {Ray evidence};
-\node[op,fill=loss!10] (normalnll) at (75,31.3) {$\mathcal L_{\rm normal}$: Joint NLL};
-\draw[flow] (22.7,31.3) -- (shared.west);
+\node[op,fill=ink!5] (auxray) at (56,11.3) {Ray evidence};
+\node[op,fill=loss!10] (normalnll) at (75,11.3) {$\mathcal L_{\rm normal}$: Joint NLL};
+\draw[flow] (22.7,11.3) -- (shared.west);
 \draw[flow] (shared.east) -- (auxray.west);
 \draw[flow] (auxray.east) -- (normalnll.west);
-\fill[ink] (24.3,31.3) circle (.25mm);
-\draw[flow] (24.3,31.3) -- (24.3,28.9) -- (56,28.9) -- (auxray.south);
-\node[note] at (89,31.3) {$y^0$};
-\draw[flow] (87.8,31.3) -- (normalnll.east);
-\node[op,fill=loss!10] (detloss) at (128.5,31.3)
+\fill[ink] (24.3,11.3) circle (.25mm);
+\draw[flow] (24.3,11.3) -- (24.3,7.5) -- (56,7.5) -- (auxray.south);
+\node[note] at (89,11.3) {$y^0$};
+\draw[flow] (87.8,11.3) -- (normalnll.east);
+\node[op,fill=loss!10] (detloss) at (128.5,11.3)
   {$\mathcal L_{\rm det}$: BCE + rank};
-\draw[flow] (train-score.south) -- (137.3,31.3) -- (detloss.east);
-\node[note] at (115,31.3) {$y$};
-\draw[flow] (116.2,31.3) -- (detloss.west);
-\draw[draw=ink!20,line width=.35pt] (.5,27.9) -- (139.5,27.9);
-\node[title] at (1,26.7) {(b) Inference};
-\begin{scope}[shift={(0,.2)}]
-  \network{infer}{3}
+\draw[flow] (model-score.south) -- (137.3,11.3) -- (detloss.east);
+\node[note] at (115,11.3) {$y$};
+\draw[flow] (116.2,11.3) -- (detloss.west);
+\coordinate (training-low) at (9.5,5.7);
+\coordinate (training-high) at (139,15);
+\begin{scope}[on background layer]
+  \node[region,fit=(training-low)(training-high)] (training) {};
 \end{scope}
+\node[regiontitle,anchor=west,fill=white,inner sep=.2mm]
+  at ([xshift=.7mm]training.north west) {Training only};
 \end{tikzpicture}
 \end{document}
