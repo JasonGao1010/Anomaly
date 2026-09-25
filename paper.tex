@@ -32,7 +32,14 @@ LiDAR semantic segmentation assigns observed points to a fixed set of known clas
 
 Normal semantic annotations provide a way to learn this assessment without enumerating future unknown objects. LIDO organizes LiDAR features around semantic prototypes \citep{lido}, PixOOD models multiple normal feature configurations \citep{pixood}, and RbA identifies image regions rejected by known classes \citep{rba}. These methods use learned class support to recognize observations that fall outside the known vocabulary. We investigate an additional source of support: whether a candidate class can predict a physical measurement from the surrounding scene.
 
-The spatial structure of LiDAR observations makes this prediction possible. Neighboring returns constrain how a surface can continue through a local region, and a candidate class further specifies the normal structures expected there. Under a road hypothesis, nearby ground returns constrain the range along a held-out direction. A measurement that departs from that continuation weakens the road hypothesis. A vehicle class can provide an alternative explanation for a normal car at the same location. The relevant decision is therefore whether a single known class supports both the observed point features and the measured range.
+The spatial structure of LiDAR observations makes this prediction possible. Neighboring returns constrain how a surface can continue through a local region, and a candidate class further specifies the normal structures expected there. Under a road hypothesis, nearby ground returns constrain the range along a held-out direction. A measurement that departs from that continuation weakens the road hypothesis. A vehicle class can provide an alternative explanation for a normal car at the same location. The relevant decision is therefore whether a single known class supports both the observed point features and the measured range (Figure~\ref{fig:motivation}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/motivation.pdf}
+\caption{A normal explanation requires support for the same class. Both illustrative cases share identical appearance support. When appearance and return evidence favor the same class, its joint support is strong. When they favor different classes, both joint supports are weak and the unknown score rises. Return support is the predictive density at the observed range divided by a common bound $M$. Class probabilities follow by normalizing the joint supports.}
+\label{fig:motivation}
+\end{figure}
 
 To obtain this measurement evidence, the predictor must infer the target range from surrounding observations. SERVE excludes every return in the target angular cell before combining neighboring measurements. Its full-scan semantic encoder separately preserves the observed geometry and point details. Because normal objects vary in pose, shape, and visibility, the context encoder predicts a distribution of plausible ranges for each class. Evaluating this distribution at the measured range supplies class-specific observation support. A normalized density accounts for both prediction error and predictive spread.
 

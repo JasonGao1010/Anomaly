@@ -1,4 +1,4 @@
-"""Draw the current normal-only network: python figures/draw.py.
+"""Draw the motivation and current network: python figures/draw.py.
 
 Layer stacks and attention blocks follow ML Visuals conventions; see
 assets/LICENSES.md. The input is a real STU training scan; density curves are schematic.
@@ -17,6 +17,57 @@ import numpy as np
 OUT = Path(__file__).resolve().parent
 INK, BLUE, TEAL, PURPLE, RED = "#263747", "#377EAB", "#20867A", "#8065A8", "#B95245"
 OBSERVED = "#F00000"
+
+
+def motivation():
+    # Illustrative bounded class supports, independent of scans and model outputs.
+    appearance = np.array([.9, .1])
+    cases = [((.9, .1), "(a) A shared class explanation", BLUE, "#F5F9FC"),
+             ((.1, .9), "(b) Conflicting class explanations", RED, "#FCF6F3")]
+    fig = plt.figure(figsize=(5.5, 2.35))
+    ax = fig.add_axes([.008, .012, .984, .976])
+    ax.set(xlim=(0, 16), ylim=(0, 6.4))
+    ax.set_axis_off()
+
+    def label(x, y, value, size=8, **kw):
+        ax.text(x, y, value, ha=kw.pop("ha", "center"), va="center",
+                fontsize=size, **kw)
+
+    for k, (measurement, title, edge, fill) in enumerate(cases):
+        x = .10 + 8.08*k
+        joint = appearance * np.asarray(measurement)
+        best = joint.max()
+        ax.add_patch(FancyBboxPatch((x, .86), 7.72, 5.34,
+                     boxstyle="round,pad=0.02,rounding_size=0.14",
+                     ec=edge, fc=fill, lw=.7))
+        label(x+3.86, 5.82, title, 8, weight="bold")
+        columns = (2.54, 4.53, 6.52)
+        for col, name, symbol in zip(columns, ("Appearance", "Return", "Joint"),
+                                     (r"$a_c$", r"$b_c=p_c/M$", r"$a_cb_c$")):
+            label(x+col, 5.03, name, 7.5)
+            label(x+col, 4.58, symbol, 8)
+        for j, (name, color) in enumerate((("Car", BLUE), ("Road", TEAL))):
+            y = 3.83 - .99*j
+            label(x+.37, y, name, 8, ha="left", color=color, weight="bold")
+            for col, value in zip(columns, (appearance[j], measurement[j], joint[j])):
+                label(x+col, y, f"{value:.2f}", 8.5, color=color)
+                # Every track spans the same [0, 1] support scale.
+                ax.add_patch(Rectangle((x+col-.64, y-.36), 1.28, .12,
+                                      ec="none", fc="#DEE5E8"))
+                ax.add_patch(Rectangle((x+col-.64, y-.36), 1.28*value, .12,
+                                      ec="none", fc=color))
+            label(x+3.535, y, r"$\times$", 9)
+            label(x+5.525, y, r"$=$", 9)
+        ax.plot([x+.25, x+7.47], [2.20, 2.20], color=edge, alpha=.45, lw=.5)
+        label(x+3.86, 1.83, rf"Best joint support: $\max_c a_cb_c={best:.2f}$", 8)
+        label(x+3.86, 1.26, rf"Unknown score: $-\log({best:.2f})\approx{-np.log(best):.2f}$",
+              8, color=edge)
+    label(8, .36, "Illustrative bounded supports; bars share a 0–1 scale.", 7.5)
+    fig.savefig(OUT / "motivation.pdf", metadata={
+        "Title": "Same class evidence in SERVE: illustrative supports",
+        "Author": "Anonymous authors"})
+    plt.close(fig)
+    print(OUT / "motivation.pdf")
 
 
 def scene(root):
@@ -60,6 +111,7 @@ def main():
                          "mathtext.fontset": "cm", "pdf.fonttype": 42,
                          "ps.fonttype": 42, "svg.fonttype": "none",
                          "text.color": INK, "axes.unicode_minus": False})
+    motivation()
     uv, height, cmap, norm = scene(args.stu_root)
     colors = cmap(norm(height))
     # Export a readable standalone view as well as the compact architecture inset.

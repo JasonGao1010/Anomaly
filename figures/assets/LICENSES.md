@@ -10,6 +10,10 @@ height, without label filtering, interpolation, or model inference. Colors
 represent height. `scene.png` provides a standalone view of the same points.
 Density curves remain schematic.
 
+The motivation diagram is an original mathematical illustration drawn by the
+same script. Its bounded support values illustrate the paper's classwise
+product and unknown score; they are independent of scans and model outputs.
+
 Reference: https://github.com/dair-ai/ml-visuals
 Transformer example: https://github.com/dair-ai/ml-visuals/blob/master/2.png
 License: https://github.com/dair-ai/ml-visuals/blob/master/LICENSE
