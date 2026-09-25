@@ -1,0 +1,51 @@
+{
+  "version": "AJAE-cross-evidence",
+  "architecture": "frozen_litept_cross_level_evidence",
+  "score_version": "joint_deep_support_cross_level_normal_nll",
+  "initial_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+  "seed": 206,
+  "features": "results/train/support",
+  "training_points": 4435245,
+  "development_points": 1588931,
+  "epochs": 40,
+  "batch_size": 16384,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0001,
+  "training": "all cached singleton normal points; each point once per epoch",
+  "weighting": "80% target / 20% source; within each domain inverse-square-root class frequency",
+  "selection": "mean class normal NLL, classes with >=128 points; odd 64-frame STU201 blocks plus missing-class source normal development",
+  "calibration": "even 64-frame STU201 blocks; original16 predicted class with optional continuous log-range; no actual-spacing conditioning",
+  "calibration_bandwidths": [
+    0.0,
+    0.25,
+    0.5,
+    1.0
+  ],
+  "candidates": [
+    {
+      "modes": 1,
+      "semantic_weight": 0.0
+    },
+    {
+      "modes": 1,
+      "semantic_weight": 0.1
+    },
+    {
+      "modes": 4,
+      "semantic_weight": 0.0
+    },
+    {
+      "modes": 4,
+      "semantic_weight": 0.1
+    }
+  ],
+  "backbone_frozen": true,
+  "no_synthetic_anomalies": true,
+  "val19_used_for_selection": false,
+  "evaluation": "repeated val19 evaluation after normal-only selection",
+  "deadline": 1790380800.0,
+  "modes": 4,
+  "semantic_weight": 0.0,
+  "calibrated": true,
+  "calibration_bandwidth": 0.5
+}

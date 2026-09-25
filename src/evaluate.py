@@ -247,7 +247,7 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
     from .model import NormalHypothesis, NORMAL_VERSION
-    from .normal import FeatureSupport, CrossEvidence, SUPPORT_VERSION, CROSS_VERSION
+    from .normal import FeatureSupport, CrossEvidence, ScoreCalibration, SUPPORT_VERSION, CROSS_VERSION
     if saved.get("version") in (SUPPORT_VERSION, CROSS_VERSION):
         from .model import FrozenSupport
         if (not saved.get("frozen") or not saved.get("complete") or not saved.get("selected")
@@ -255,6 +255,9 @@ def load_model(path, device):
             raise ValueError("frozen support requires completed normal-only model selection")
         scorer_type = CrossEvidence if saved["version"] == CROSS_VERSION else FeatureSupport
         model = FrozenSupport(scorer=scorer_type(modes=saved["config"]["modes"]))
+        if saved["version"] == CROSS_VERSION:
+            model.scorer.calibration = ScoreCalibration(
+                range_bandwidth=saved["config"].get("calibration_bandwidth", 0.))
         model.load_state_dict(saved["model"], strict=True)
         return model.to(device).eval(), saved
     if saved.get("version") in (NORMAL_VERSION, "AJAE-normal-hypothesis"):

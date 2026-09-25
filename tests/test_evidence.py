@@ -540,11 +540,126 @@ def test_score_calibration_ties_fallback_and_state_roundtrip():
     torch.save(calibration.state_dict(), checkpoint)
     checkpoint.seek(0)
     restored = ScoreCalibration()
-    restored.load_state_dict(torch.load(checkpoint, weights_only=True))
+    state = torch.load(checkpoint, weights_only=True)
+    assert set(state) == {"probabilities", "knots", "levels", "lengths", "counts", "groups",
+                          "minimum_points", "fitted", "enabled"}
+    restored.load_state_dict(state, strict=True)
+    ScoreCalibration(range_bandwidth=0.).load_state_dict(state, strict=True)
     torch.testing.assert_close(restored(probes, classes, conditions[:5]), expected, rtol=0, atol=0)
     if torch.cuda.is_available():
         actual = restored.cuda()(probes.cuda(), classes.cuda(), conditions[:5].cuda()).cpu()
         torch.testing.assert_close(actual, expected, rtol=2e-6, atol=2e-6)
+
+
+def test_range_calibration_matches_weighted_quantiles_and_is_continuous():
+    from src.normal import ScoreCalibration
+
+    rng = np.random.default_rng(73)
+    distance = np.linspace(np.log(2.5), np.log(50), 16384)
+    scores = 6 * distance + rng.normal(0, .5, len(distance))
+    conditions = torch.from_numpy(np.column_stack((distance, np.zeros(len(distance)))))
+    classes = torch.zeros(len(distance), dtype=torch.long)
+    calibration = ScoreCalibration(range_bandwidth=.5)
+    report = calibration.fit(scores, classes, conditions)
+    assert report["range_fallback_anchors"][1] == 0
+    calibration.enabled.fill_(True)
+
+    # Independent empirical inverse CDF verifies the scientific q99 threshold.
+    order = np.argsort(scores)
+    quantiles = []
+    for anchor in calibration.range_anchors.numpy():
+        weights = np.exp(-.5 * ((distance[order] - anchor) / .5) ** 2)
+        indices = np.searchsorted(np.cumsum(weights), calibration.probabilities.numpy() * weights.sum())
+        quantiles.append(scores[order[indices]])
+    quantiles = np.asarray(quantiles, dtype=np.float32)
+    np.testing.assert_array_equal(calibration.range_knots[1].numpy(), quantiles)
+    anchor = calibration.range_anchors.numpy()
+    probe_range = anchor[9] * .65 + anchor[10] * .35
+    threshold = quantiles[9, 8] * .65 + quantiles[10, 8] * .35
+    at_threshold = calibration(torch.tensor([threshold]), torch.zeros(1, dtype=torch.long),
+                               torch.tensor([[probe_range, 0.]]))
+    assert float(at_threshold[0]) == pytest.approx(-np.log(.01), abs=2e-5)
+
+    probes = torch.linspace(-10, 50, 128)
+    context = torch.tensor([[probe_range, 0.]]).repeat(len(probes), 1)
+    output = calibration(probes, classes[:len(probes)], context)
+    assert (output.diff() > 0).all() and output[-1] > -np.log(.001)
+    shifted_spacing = context.clone()
+    shifted_spacing[:, 1] = float("nan")
+    torch.testing.assert_close(calibration(probes, classes[:len(probes)], shifted_spacing), output, rtol=0, atol=0)
+    for position in anchor[1:-1]:
+        near = torch.tensor([[position - 1e-6, 0.], [position, 0.], [position + 1e-6, 0.]])
+        values = calibration(torch.full((3,), 16.), classes[:3], near)
+        assert float((values - values[1]).abs().max()) < 1e-4
+    endpoints = torch.tensor([[anchor[0], 0.], [anchor[-1], 0.]])
+    assert calibration(torch.full((2,), 16.), classes[:2], endpoints).diff().abs().item() > .1
+    invalid = context.clone()
+    invalid[0, 0] = float("inf")
+    with pytest.raises(ValueError, match="log range"):
+        calibration(probes, classes[:len(probes)], invalid)
+    with pytest.raises(ValueError, match="log range"):
+        calibration.fit(probes, classes[:len(probes)], invalid)
+
+
+def test_range_calibration_effective_sample_fallback_and_rare_class_global():
+    from src.normal import ScoreCalibration
+
+    first = np.linspace(np.log(2.5), np.log(50), 3072)
+    second = np.linspace(np.log(2.5), np.log(50), 12288)
+    distance = np.concatenate((first, second, first[:7]))
+    scores = np.concatenate((np.linspace(0, 1, len(first)), 8 + 2 * second, np.zeros(7)))
+    classes = torch.tensor([0] * len(first) + [1] * len(second) + [2] * 7)
+    conditions = torch.from_numpy(np.column_stack((distance, np.zeros(len(distance)))))
+    calibration = ScoreCalibration(range_bandwidth=.25)
+    report = calibration.fit(scores, classes, conditions)
+    assert report["range_fallback_anchors"][1] == 16
+    assert calibration.range_groups_enabled[1]
+    torch.testing.assert_close(calibration.range_knots[1], calibration.knots[1].expand(16, -1), rtol=0, atol=0)
+    assert calibration.groups[3] == 0 and calibration.range_groups_enabled[0]
+    calibration.enabled.fill_(True)
+    probes = torch.full((2,), 12.)
+    context = torch.tensor([[np.log(2.5), 0.], [np.log(50), 0.]])
+    rare = calibration(probes, torch.full((2,), 2), context)
+    absent = calibration(probes, torch.full((2,), 15), context)
+    torch.testing.assert_close(rare, absent, rtol=0, atol=0)
+    assert rare.diff().abs().item() > .1
+
+
+def test_range_calibration_atoms_keep_class_cdf_and_local_atoms_fall_back():
+    from src.normal import ScoreCalibration
+
+    size = 16384
+    continuous = np.linspace(0, 100, size)
+    local_atom = (continuous > 28) & (continuous < 48)
+    continuous[local_atom] = 38
+    scores = np.concatenate((np.repeat([0., 1.], 4096), continuous))
+    distance = np.full(len(scores), np.log(50))
+    distance[8192:][local_atom] = np.log(2.5)
+    conditions = np.column_stack((distance, np.zeros(len(scores))))
+    classes = torch.tensor([0] * 8192 + [1] * size)
+    calibration = ScoreCalibration(range_bandwidth=.25)
+    calibration.fit(scores, classes, conditions)
+    assert not calibration.range_groups_enabled[1]
+    assert calibration.lengths[1] == 3  # Linear empirical median lies between the two atoms.
+    assert calibration.range_groups_enabled[2]
+    # The local atom has >2048 effective points; duplicate quantiles cause fallback.
+    weights = np.exp(-.5 * ((distance[8192:] - np.log(2.5)) / .25) ** 2)
+    assert weights.sum() ** 2 / np.square(weights).sum() > 2048
+    torch.testing.assert_close(calibration.range_knots[2, 0], calibration.knots[2], rtol=0, atol=0)
+    assert not torch.equal(calibration.range_knots[2, -1], calibration.knots[2])
+    calibration.enabled.fill_(True)
+    original = ScoreCalibration()
+    original.fit(scores, classes, conditions)
+    original.enabled.fill_(True)
+    probes = torch.tensor([-1., .5, 3.])
+    context = torch.tensor([[np.log(2.5), 0.], [np.log(20), 0.], [np.log(50), 0.]])
+    torch.testing.assert_close(calibration(probes, torch.zeros(3, dtype=torch.long), context),
+                               original(probes, torch.zeros(3, dtype=torch.long), context), rtol=0, atol=0)
+    restored = ScoreCalibration(range_bandwidth=1.)
+    restored.load_state_dict(calibration.state_dict(), strict=True)
+    assert float(restored.range_bandwidth) == .25
+    torch.testing.assert_close(restored(probes, torch.ones(3, dtype=torch.long), context),
+                               calibration(probes, torch.ones(3, dtype=torch.long), context), rtol=0, atol=0)
 
 
 def test_cross_evidence_calibrates_one_raw_score_using_supplied_official_prediction():
@@ -571,3 +686,51 @@ def test_cross_evidence_calibrates_one_raw_score_using_supplied_official_predict
     expected = model.calibration(raw, supplied, conditions)
     torch.testing.assert_close(model(features, conditions, supplied), expected, rtol=0, atol=0)
     assert expected[0] != expected[1]
+
+
+def test_support_queries_and_cache_preserve_coarse_normal_candidate_sets(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from src import data
+    from src.train import SupportScans, support_cache
+
+    points = np.zeros((12, 4), dtype=np.float32)
+    points[:, 0] = np.arange(4, 16)
+    points[:, 3] = .2
+    points[[0, 11], 0] = [2., 55.]
+    allowed = np.zeros((len(points), 19), dtype=bool)
+    allowed[1, 0], allowed[4, 3], allowed[7, 12] = True, True, True
+    allowed[2, [5, 6]] = True
+    allowed[3, [8, 9, 10, 11]] = True
+    allowed[6, [14, 15]] = True
+    slots = np.array([1, 4, 6, 8, 12, 15, 17, 20, 25, 27, 30, 31])
+    # read_normal_record already clears out-of-range and untrusted label sets;
+    # every returned row still represents an actual return in the input context.
+    raw = dict(xyzi=points, allowed=allowed, slots=slots, slot_count=32)
+    monkeypatch.setattr(data, "read_normal_record", lambda record: raw)
+    records = [dict(source="nuscenes", scene="normal-fixture")]
+    expected = np.flatnonzero(allowed.any(1))
+    semantic = np.array([0, -1, -1, 3, -1, 12], dtype=np.int16)
+    for development in (False, True):
+        sample = SupportScans(records, development=development)[0]
+        np.testing.assert_array_equal(sample["queries"].numpy(), expected)
+        np.testing.assert_array_equal(sample["slots"].numpy(), slots[expected])
+        np.testing.assert_array_equal(sample["allowed"].numpy(), allowed[expected])
+        np.testing.assert_array_equal(sample["semantic"].numpy(), semantic)
+        assert sample["allowed"].dtype == torch.bool
+        assert len(sample["inverse"]) == len(points)
+        assert np.all(np.any(points[expected, :3] != 0, axis=1))
+        assert np.all((np.linalg.norm(points[expected, :3], axis=1) >= 2.5)
+                      & (np.linalg.norm(points[expected, :3], axis=1) <= 50))
+
+    def encode(sample, indices):
+        return dict(features=indices[:, None].float().expand(-1, 252))
+
+    model = SimpleNamespace(perception=SimpleNamespace(encode=encode))
+    info = support_cache(model, records, tmp_path, torch.device("cpu"), workers=0)
+    assert info["labels"] == "normal_candidate_sets_v1" and info["count"] == len(expected)
+    np.testing.assert_array_equal(np.load(info["paths"]["allowed"])[:info["count"]], allowed[expected])
+    np.testing.assert_array_equal(np.load(info["paths"]["semantic"])[:info["count"]], semantic)
+    np.testing.assert_array_equal(np.load(info["paths"]["slot"])[:info["count"]], slots[expected])
+    np.testing.assert_array_equal(np.load(info["paths"]["features"])[:info["count"], 0], expected)
+    with pytest.raises(ValueError, match="will not overwrite"):
+        support_cache(model, records, tmp_path, torch.device("cpu"), workers=0)

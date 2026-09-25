@@ -89,10 +89,12 @@ class FeatureSupport(nn.Module):
 
 
 class ScoreCalibration(nn.Module):
-    """Rescale one score using normal references grouped by frozen 16-class output."""
+    """Normal score quantiles by frozen class, optionally continuous in log range."""
 
-    def __init__(self):
+    def __init__(self, range_bandwidth=0.):
         super().__init__()
+        if not math.isfinite(range_bandwidth) or range_bandwidth < 0:
+            raise ValueError("calibration range bandwidth must be finite and nonnegative")
         self.register_buffer("probabilities", torch.tensor(
             [.01, .05, .1, .25, .5, .75, .9, .95, .99, .995, .999], dtype=torch.float64))
         self.register_buffer("knots", torch.zeros(17, 11))
@@ -103,6 +105,13 @@ class ScoreCalibration(nn.Module):
         self.register_buffer("minimum_points", torch.tensor(2048, dtype=torch.long))
         self.register_buffer("fitted", torch.tensor(False))
         self.register_buffer("enabled", torch.tensor(False))
+        # Keep the default state identical to existing class-only checkpoints.
+        if range_bandwidth > 0:
+            self.register_buffer("range_bandwidth", torch.tensor(range_bandwidth, dtype=torch.float64))
+            self.register_buffer("range_anchors", torch.linspace(
+                math.log(2.5), math.log(50), 16, dtype=torch.float64))
+            self.register_buffer("range_knots", torch.zeros(17, 16, 11))
+            self.register_buffer("range_groups_enabled", torch.zeros(17, dtype=torch.bool))
 
     @staticmethod
     def _validate(scores, predicted, conditions):
@@ -118,7 +127,6 @@ class ScoreCalibration(nn.Module):
 
     @torch.no_grad()
     def fit(self, scores, predicted, conditions):
-        # Class-only references retain range and spacing evidence in the raw score.
         scores = torch.as_tensor(scores).detach().to(device="cpu", dtype=torch.float64)
         predicted = torch.as_tensor(predicted).detach().cpu()
         conditions = torch.as_tensor(conditions).detach().cpu()
@@ -133,8 +141,18 @@ class ScoreCalibration(nn.Module):
         lengths = torch.zeros_like(self.lengths, device="cpu")
         groups = torch.zeros_like(self.groups, device="cpu")
         minimum = int(self.minimum_points)
+        conditional = hasattr(self, "range_anchors")
+        if conditional:
+            if not bool(torch.isfinite(conditions[:, 0]).all()):
+                raise ValueError("normal calibration log range must be finite")
+            range_knots = torch.zeros_like(self.range_knots, device="cpu")
+            range_enabled = torch.zeros_like(self.range_groups_enabled, device="cpu")
+            range_fallback = [len(self.range_anchors)] * 17
+            anchors = self.range_anchors.cpu().numpy()
+            bandwidth = float(self.range_bandwidth)
         for group in range(17):
-            values = scores if group == 0 else scores[predicted == group - 1]
+            selected = slice(None) if group == 0 else predicted == group - 1
+            values = scores[selected]
             counts[group] = len(values)
             if group and len(values) < minimum:
                 continue
@@ -150,16 +168,42 @@ class ScoreCalibration(nn.Module):
             knots[group, size:] = float(unique[-1])
             levels[group, :size] = torch.from_numpy(quantile_levels[repetitions.cumsum() - 1])
             lengths[group], groups[group] = size, group
+            if conditional and size == len(probabilities):
+                # Atoms keep their original merged class CDF. Interpolate only
+                # strictly increasing quantiles, without artificial epsilon bins.
+                range_enabled[group] = True
+                range_knots[group] = torch.from_numpy(quantiles)
+                order = np.argsort(values.numpy(), kind="stable")
+                ordered_scores = values.numpy()[order]
+                distances = conditions[selected, 0].double().numpy()[order]
+                for anchor_index, anchor in enumerate(anchors):
+                    weights = np.exp(-.5 * ((distances - anchor) / bandwidth) ** 2)
+                    weight_sum, square_sum = weights.sum(), np.dot(weights, weights)
+                    if square_sum == 0 or weight_sum ** 2 / square_sum < minimum:
+                        continue
+                    indices = np.searchsorted(np.cumsum(weights), probabilities * weight_sum, side="left")
+                    local = ordered_scores[indices.clip(max=len(order) - 1)].astype(np.float32)
+                    if np.any(np.diff(local) <= 0):
+                        continue
+                    range_knots[group, anchor_index] = torch.from_numpy(local)
+                    range_fallback[group] -= 1
         for name, value in (("knots", knots), ("levels", levels), ("counts", counts),
                             ("lengths", lengths), ("groups", groups)):
             getattr(self, name).copy_(value)
         self.fitted.fill_(True)
         self.enabled.fill_(False)
-        return dict(points=len(scores), minimum_points=minimum,
+        report = dict(points=len(scores), minimum_points=minimum,
                     class_counts=counts[1:].tolist(),
                     fallback_classes=(groups[1:] == 0).nonzero().flatten().tolist(),
                     class_quantile_counts=lengths[1:].tolist(),
                     conditions="frozen official 16-class prediction only; no range or spacing bins")
+        if conditional:
+            self.range_knots.copy_(range_knots)
+            self.range_groups_enabled.copy_(range_enabled)
+            report.update(range_bandwidth=bandwidth, range_groups_enabled=range_enabled.tolist(),
+                          range_fallback_anchors=range_fallback,
+                          conditions="frozen official 16-class prediction and continuous log range; no spacing")
+        return report
 
     def forward(self, scores, predicted, conditions):
         if not bool(self.enabled):
@@ -171,6 +215,16 @@ class ScoreCalibration(nn.Module):
         self._validate(scores, predicted, conditions)
         rows = self.groups[predicted.long() + 1]
         knots, levels = self.knots[rows], self.levels[rows]
+        if hasattr(self, "range_anchors"):
+            if not bool(torch.isfinite(conditions[:, 0]).all()):
+                raise ValueError("normal calibration log range must be finite")
+            distance = conditions[:, 0].to(knots)
+            anchors = self.range_anchors.to(knots)
+            right = torch.searchsorted(anchors, distance.contiguous(), right=True).clamp(1, len(anchors) - 1)
+            fraction = ((distance - anchors[right - 1]) / (anchors[right] - anchors[right - 1])).clamp(0, 1)
+            local = torch.lerp(self.range_knots[rows, right - 1], self.range_knots[rows, right], fraction[:, None])
+            # Sparse classes already select the global row, which can use range.
+            knots = torch.where(self.range_groups_enabled[rows, None], local, knots)
         upper = torch.searchsorted(knots, scores.contiguous()[:, None], right=True).flatten()
         upper = torch.minimum(upper.clamp_min(1), self.lengths[rows] - 1)
         index = torch.arange(len(scores), device=scores.device)

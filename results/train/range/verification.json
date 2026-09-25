@@ -1,0 +1,8 @@
+{
+  "non_calibration_tensors": 260,
+  "all_equal_previous": true,
+  "real_normal_points": 512,
+  "finite": true,
+  "calibration_bandwidth": 0.5,
+  "evaluation": "normal-only; no val19 run because normal source coverage defect was identified"
+}

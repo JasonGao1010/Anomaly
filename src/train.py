@@ -1775,20 +1775,21 @@ class SupportScans:
         row = self.records[index]
         raw = read_normal_record(row)
         allowed = raw["allowed"]
-        valid = np.flatnonzero(allowed.sum(1) == 1)
+        valid = np.flatnonzero(allowed.any(1))
+        singleton = np.flatnonzero(allowed.sum(1) == 1)
         budget = 2048 if self.development or row["source"] == "nuscenes" else 4096
         rng = np.random.default_rng(np.random.SeedSequence([206, index, int(self.development)]))
         if self.development:
             chosen = rng.choice(valid, min(len(valid), budget), replace=False)
         else:
-            # Preserve rare normal classes and distant observations without using
-            # any anomaly examples. Conditional density is fitted within classes.
+            # Reserve fine-label coverage; coarse normal sets remain eligible for
+            # the remaining budget without inventing a fine semantic category.
             distance = np.linalg.norm(raw["xyzi"][:, :3], axis=1)
             bands = np.searchsorted([10., 20., 35.], distance, side="right")
             chosen = []
             for category in range(19):
                 for band in range(4):
-                    candidates = valid[allowed[valid, category] & (bands[valid] == band)]
+                    candidates = singleton[allowed[singleton, category] & (bands[singleton] == band)]
                     if len(candidates):
                         chosen.extend(rng.choice(candidates, min(len(candidates), budget // 76), replace=False))
             chosen = np.unique(np.asarray(chosen, dtype=np.int64))
@@ -1798,7 +1799,9 @@ class SupportScans:
         sample = voxelize(raw["xyzi"], official=True)
         sample.update(queries=torch.from_numpy(chosen),
             conditions=torch.from_numpy(support_conditions(raw["xyzi"], chosen)),
-            semantic=torch.from_numpy(allowed[chosen].argmax(1).astype(np.int16)),
+            allowed=torch.from_numpy(allowed[chosen]),
+            semantic=torch.from_numpy(np.where(allowed[chosen].sum(1) == 1,
+                allowed[chosen].argmax(1), -1).astype(np.int16)),
             slots=torch.from_numpy(raw["slots"][chosen].astype(np.int64)),
             index=index, source=int(row["source"] != "nuscenes"))
         return sample
@@ -1837,10 +1840,10 @@ def support_cache(model, records, output, device, workers, *, development=False,
     capacities = [2048 if development or row["source"] == "nuscenes" else 4096 for row in records]
     capacity = sum(capacities)
     paths = {key: output / (prefix + "_" + key + ".npy") for key in
-             ("features", "conditions", "semantic", "source", "frame", "slot")}
-    shapes = dict(features=(capacity, 252), conditions=(capacity, 2), semantic=(capacity,),
+             ("features", "conditions", "allowed", "semantic", "source", "frame", "slot")}
+    shapes = dict(features=(capacity, 252), conditions=(capacity, 2), allowed=(capacity, 19), semantic=(capacity,),
                   source=(capacity,), frame=(capacity,), slot=(capacity,))
-    types = dict(features=np.float32, conditions=np.float32, semantic=np.int16,
+    types = dict(features=np.float32, conditions=np.float32, allowed=np.bool_, semantic=np.int16,
                  source=np.uint8, frame=np.int32, slot=np.uint32)
     if any(path.exists() for path in paths.values()):
         raise ValueError("feature extraction will not overwrite an existing cache")
@@ -1862,7 +1865,7 @@ def support_cache(model, records, output, device, workers, *, development=False,
             raise ValueError("nonfinite frozen features")
         stop = cursor + count
         arrays["features"][cursor:stop] = encoded["features"].cpu().numpy()
-        for key in ("conditions", "semantic"):
+        for key in ("conditions", "allowed", "semantic"):
             arrays[key][cursor:stop] = sample[key].numpy()
         arrays["source"][cursor:stop] = sample["source"]
         arrays["frame"][cursor:stop] = sample["index"]
@@ -1880,7 +1883,7 @@ def support_cache(model, records, output, device, workers, *, development=False,
     for value in arrays.values():
         value.flush()
     info = dict(count=cursor, capacity=capacity, paths={key:str(path) for key,path in paths.items()},
-                frames=frames, seconds=time.perf_counter()-started)
+                frames=frames, seconds=time.perf_counter()-started, labels="normal_candidate_sets_v1")
     write_json(output / (prefix + "_features.json" if development else "training.json"), info)
     del arrays, batch, sample, encoded, loader
     gc.collect()
@@ -1888,7 +1891,7 @@ def support_cache(model, records, output, device, workers, *, development=False,
     return info
 
 
-def support_indices(cache, *, training):
+def support_indices(cache, *, training, include_coarse=False):
     """Bound fitting memory and preserve target-domain support in each class."""
     labels = np.load(cache["paths"]["semantic"], mmap_mode="r")[:cache["count"]]
     source = np.load(cache["paths"]["source"], mmap_mode="r")[:cache["count"]]
@@ -1908,6 +1911,17 @@ def support_indices(cache, *, training):
         selected.append(np.sort(chosen))
         counts.append(dict(category=category, target_available=len(groups[1]), source_available=len(groups[0]),
                            target_selected=target_count, source_selected=source_count))
+    if include_coarse:
+        allowed = np.load(cache["paths"]["allowed"], mmap_mode="r")[:cache["count"]]
+        coarse = np.flatnonzero(labels < 0)
+        codes = allowed[coarse].astype(np.int64) @ (1 << np.arange(19, dtype=np.int64))
+        for code in np.unique(codes):
+            eligible = coarse[codes == code]
+            rng = np.random.default_rng(np.random.SeedSequence([206, int(code), int(training)]))
+            chosen = np.sort(rng.choice(eligible, min(len(eligible), 12000), replace=False))
+            selected.append(chosen)
+            counts.append(dict(allowed_classes=np.flatnonzero(allowed[eligible[0]]).tolist(),
+                               available=len(eligible), selected=len(chosen)))
     return selected, counts
 
 
@@ -1927,7 +1941,7 @@ def support_standardization(cache, indices):
             ranges += r.sum()
             range_square += np.square(r).sum()
     if not count:
-        raise ValueError("no trustworthy singleton normal supervision")
+        raise ValueError("no trustworthy normal supervision")
     mean = total/count
     return dict(location=mean, scale=np.sqrt(np.maximum(square/count-mean*mean, 1e-6)),
                 range_location=ranges/count,
@@ -2040,7 +2054,7 @@ def support_development(scorer, cache, indices, device):
 
 
 def cross_initialize(scorer, cache, indices):
-    """Fit the linear normal prediction and residual coordinate system once."""
+    """Fit normal coordinates and anchored class support from training labels only."""
     from scipy.linalg import solve_triangular
     standard = support_standardization(cache, indices)
     scorer.feat_location.copy_(torch.tensor(standard["location"][:252]))
@@ -2052,6 +2066,19 @@ def cross_initialize(scorer, cache, indices):
     xx, xy, yy = np.zeros((73,73)), np.zeros((73,182)), np.zeros((182,182))
     count = 0
     class_count, class_sum = np.zeros(19), np.zeros((19,72))
+    allowed = (np.load(cache["paths"]["allowed"], mmap_mode="r")
+               if "allowed" in cache["paths"] else None)
+    if allowed is not None:
+        from scipy.special import logsumexp
+        semantic = np.load(cache["paths"]["semantic"], mmap_mode="r")
+        if allowed.dtype != np.bool_ or allowed.shape[1:] != (19,):
+            raise ValueError("normal initialization requires boolean 19-class candidate sets")
+        selected_count = sum(map(len, indices))
+        deep = np.empty((selected_count,72), dtype=np.float64)
+        candidate_sets = np.empty((selected_count,19), dtype=bool)
+        singleton_square = np.zeros((72,72))
+    elif len(indices) != 19:
+        raise ValueError("singleton caches require the original 19 class index groups")
     for category,group in enumerate(indices):
         for start in range(0, len(group), 8192):
             at = group[start:start+8192]
@@ -2061,9 +2088,25 @@ def cross_initialize(scorer, cache, indices):
             xx += x.T@x
             xy += x.T@y
             yy += y.T@y
+            if allowed is None:
+                class_count[category] += len(at)
+                class_sum[category] += f[:,180:].sum(0)
+            else:
+                candidates = allowed[at]
+                cardinality = candidates.sum(1)
+                singleton = cardinality == 1
+                truth = np.where(singleton, candidates.argmax(1), -1)
+                if np.any(cardinality == 0) or not np.array_equal(semantic[at], truth):
+                    raise ValueError("normal candidate sets and singleton identities disagree")
+                deep[count:count+len(at)] = f[:,180:]
+                candidate_sets[count:count+len(at)] = candidates
+                precise = f[singleton,180:]
+                singleton_square += precise.T@precise
+                for label in np.unique(truth[singleton]):
+                    points = truth == label
+                    class_count[label] += points.sum()
+                    class_sum[label] += f[points,180:].sum(0)
             count += len(at)
-            class_count[category] += len(at)
-            class_sum[category] += f[:,180:].sum(0)
     penalty = np.diag(np.r_[0.,np.full(72,.01*count)])
     linear = np.linalg.solve(xx+penalty,xy)
     covariance = (yy-xy.T@linear-linear.T@xy+linear.T@xx@linear)/count
@@ -2072,23 +2115,75 @@ def cross_initialize(scorer, cache, indices):
     scorer.linear.copy_(torch.tensor(linear))
     scorer.whitener.copy_(torch.tensor(solve_triangular(chol,np.eye(182),lower=True).T))
     centers=class_sum/np.maximum(class_count[:,None],1)
-    within=(xx[1:,1:]-centers.T@(class_count[:,None]*centers))/count
-    deep_chol=np.linalg.cholesky((within+within.T)/2+.01*np.eye(72))
+    details = {}
+    if allowed is None:
+        # Preserve the original arithmetic for reproducing singleton-cache results.
+        within=(xx[1:,1:]-centers.T@(class_count[:,None]*centers))/count
+        deep_chol=np.linalg.cholesky((within+within.T)/2+.01*np.eye(72))
+    else:
+        present = class_count > 0
+        singleton_count = int(class_count.sum())
+        admitted = candidate_sets[:,present]
+        if not singleton_count or np.any(~admitted.any(1)):
+            raise ValueError("every normal candidate set needs a class with a singleton anchor")
+        within = (singleton_square-centers.T@(class_count[:,None]*centers))/singleton_count
+        deep_covariance = (within+within.T)/2+.01*np.eye(72)
+
+        def expectation(means, covariance):
+            factor = np.linalg.cholesky(covariance)
+            precision = solve_triangular(factor,np.eye(72),lower=True).T
+            white, locations = deep@precision, means[present]@precision
+            square = (np.square(white).sum(1,keepdims=True)
+                      +np.square(locations).sum(1)[None]-2*white@locations.T).clip(min=0)
+            components = (-.5*square-np.log(np.diag(factor)).sum()
+                          -36*math.log(2*math.pi)-math.log(int(present.sum())))
+            components[~admitted] = -np.inf
+            marginal = logsumexp(components,axis=1)
+            responsibility = np.exp(components-marginal[:,None])
+            log_likelihood = float(marginal.sum())
+            # This precision penalty gives the exact M-step covariance S/N+.01I.
+            objective = log_likelihood-.5*count*.01*np.square(precision).sum()
+            if not np.isfinite(objective):
+                raise ValueError("nonfinite partial-label normal support objective")
+            return responsibility, float(objective), log_likelihood, factor
+
+        responsibility, objective, log_likelihood, deep_chol = expectation(centers,deep_covariance)
+        objectives, iterations = [objective], 0
+        for iteration in range(20 if singleton_count < count else 0):
+            mass = responsibility.sum(0)
+            centers[present] = (responsibility.T@deep)/mass[:,None]
+            within = (xx[1:,1:]-centers[present].T@(mass[:,None]*centers[present]))/count
+            deep_covariance = (within+within.T)/2+.01*np.eye(72)
+            responsibility, updated, log_likelihood, deep_chol = expectation(centers,deep_covariance)
+            improvement = updated-objective
+            if improvement < -1e-8*max(abs(objective),1.):
+                raise ValueError("regularized partial-label EM decreased its training objective")
+            objectives.append(updated)
+            iterations = iteration+1
+            objective = updated
+            if improvement <= 1e-5*max(abs(objectives[-2]),1.):
+                break
+        details = dict(singleton_points=singleton_count,coarse_points=count-singleton_count,
+            deep_present_classes=np.flatnonzero(present).tolist(),deep_em_iterations=iterations,
+            deep_partial_log_likelihood=log_likelihood,deep_penalized_objective=objective,
+            deep_penalized_objectives=objectives,deep_covariance_regularization=.01,
+            deep_objective="sum log equal-prior density over allowed anchored classes - N*.01/2*trace(covariance inverse)")
     scorer.deep_centers.copy_(torch.tensor(centers))
     scorer.deep_whitener.copy_(torch.tensor(solve_triangular(deep_chol,np.eye(72),lower=True).T))
     scorer.deep_log_volume.fill_(float(np.log(np.diag(deep_chol)).sum()))
     scorer.deep_present.copy_(torch.tensor(class_count>0))
     return dict(points=count, ridge=.01, residual_covariance_regularization=.01,
                 residual_log_volume=float(np.log(np.diag(chol)).sum()),
-                meaning="Fixed training coordinates shared by every candidate; no development refitting")
+                meaning="Fixed training coordinates shared by every candidate; no development refitting",**details)
 
 
 def cross_cache(cache, device):
     """Load each immutable feature array once; no new on-disk feature copies."""
     values = {}
-    for key in ("features","conditions","semantic","source","frame"):
+    for key in ("features","conditions","semantic","source","frame","allowed"):
         data = np.load(cache["paths"][key], mmap_mode="r")[:cache["count"]]
-        dtype = torch.float32 if key in ("features","conditions") else torch.long
+        dtype = (torch.float32 if key in ("features","conditions") else
+                 torch.bool if key == "allowed" else torch.long)
         values[key] = torch.tensor(data, device=device, dtype=dtype)
     return values
 
@@ -2138,11 +2233,11 @@ def normal_main():
     """Train cross-level normal evidence after an unchanged perception network."""
     from threadpoolctl import threadpool_limits
     from .model import FrozenSupport
-    from .normal import CrossEvidence, CROSS_VERSION
+    from .normal import CrossEvidence, ScoreCalibration, CROSS_VERSION
     parser = argparse.ArgumentParser(description=normal_main.__doc__)
     parser.add_argument("--normal",action="store_true")
     parser.add_argument("--output",type=Path,required=True)
-    parser.add_argument("--features",type=Path,default=Path("results/train/support"))
+    parser.add_argument("--features",type=Path,default=Path("results/train/normal/features"))
     parser.add_argument("--threads",type=int,default=4)
     parser.add_argument("--workers",type=int,default=16)
     parser.add_argument("--epochs",type=int,default=40)
@@ -2161,27 +2256,47 @@ def normal_main():
     seed_all(206)
     resources=runtime_snapshot()
     disk_check(300_000_000)
+    if not (args.features/"config.json").exists():
+        records,dev_records=support_records()
+        capacity=sum(2048 if row["source"]=="nuscenes" else 4096 for row in records)+2048*len(dev_records)
+        # Include feature arrays, label sets, checkpoints and bounded temporary data.
+        disk_check(capacity*(252*4+2*4+2+1+4+4+19)+500_000_000)
+        args.features.mkdir(parents=True,exist_ok=True)
+        frozen=FrozenSupport(scorer=CrossEvidence()).to("cuda").eval()
+        support_cache(frozen,records,args.features,torch.device("cuda"),args.workers,
+                      deadline=args.deadline-3600)
+        support_cache(frozen,dev_records,args.features,torch.device("cuda"),args.workers,
+                      development=True,deadline=args.deadline-3600)
+        write_json(args.features/"config.json",dict(initial_sha256=WEIGHTS_SHA256,
+            trained_backbone_parameters=0,labels="normal_candidate_sets_v1",seed=206,
+            training_records=identity(records),development_records=identity(dev_records)))
+        del frozen
+        gc.collect()
+        torch.cuda.empty_cache()
     cache_config=json.loads((args.features/"config.json").read_text())
     if cache_config["initial_sha256"]!=WEIGHTS_SHA256 or cache_config["trained_backbone_parameters"]!=0:
         raise ValueError("only exactly identified official frozen features may be reused")
     cache=json.loads((args.features/"training.json").read_text())
     dev_cache=json.loads((args.features/"development_features.json").read_text())
+    if any(row.get("labels")!="normal_candidate_sets_v1" for row in (cache,dev_cache)):
+        raise ValueError("extract a new normal feature cache that retains coarse normal label sets")
     args.output.mkdir(parents=True,exist_ok=True)
     config=dict(version=CROSS_VERSION,architecture="frozen_litept_cross_level_evidence",
         score_version="joint_deep_support_cross_level_normal_nll",initial_sha256=WEIGHTS_SHA256,seed=206,
         features=str(args.features),training_points=cache["count"],development_points=dev_cache["count"],
         epochs=args.epochs,batch_size=16384,learning_rate=.001,weight_decay=.0001,
-        training="all cached singleton normal points; each point once per epoch",
-        weighting="80% target / 20% source; within each domain inverse-square-root class frequency",
+        training="all cached trusted normal points with their allowed class sets; each point once per epoch",
+        weighting="80% target / 20% source; within each domain inverse-square-root annotation-set frequency",
         selection="mean class normal NLL, classes with >=128 points; odd 64-frame STU201 blocks plus missing-class source normal development",
-        calibration="even 64-frame STU201 blocks; original16 predicted class; no actual-spacing conditioning",
+        calibration="even 64-frame STU201 blocks; original16 predicted class with optional continuous log-range; no actual-spacing conditioning",
+        calibration_bandwidths=[0., .25, .5, 1.],
         candidates=[dict(modes=k,semantic_weight=w) for k in (1,4) for w in (0.,.1)],
         backbone_frozen=True,no_synthetic_anomalies=True,val19_used_for_selection=False,
         evaluation="repeated val19 evaluation after normal-only selection",deadline=args.deadline)
     write_json(args.output/"config.json",config)
     write_json(args.output/"resources.json",resources)
     started=time.perf_counter()
-    chosen,counts=support_indices(cache,training=True)
+    chosen,counts=support_indices(cache,training=True,include_coarse=True)
     template=CrossEvidence()
     initialization=cross_initialize(template,cache,chosen)
     write_json(args.output/"initialization.json",dict(**initialization,sampling=counts))
@@ -2189,14 +2304,18 @@ def normal_main():
     data,dev=cross_cache(cache,device),cross_cache(dev_cache,device)
     count=len(data["semantic"])
     weights=torch.zeros(count,device=device)
+    codes=(data["allowed"].long()*(1<<torch.arange(19,device=device))).sum(1)
     for source,mass in ((0,.2),(1,.8)):
         mask=data["source"]==source
-        frequency=torch.bincount(data["semantic"][mask],minlength=19).float().clamp_min(1)
-        value=frequency[data["semantic"][mask]].rsqrt()
+        _,groups,frequency=torch.unique(codes[mask],return_inverse=True,return_counts=True)
+        value=frequency[groups].float().rsqrt()
         weights[mask]=value/value.sum()*(count*mass)
+    del codes
     select=(dev["source"]==1)&((dev["frame"]//64)%2==1)
+    if bool((dev["semantic"][select]<0).any()):
+        raise ValueError("target normal development requires its actual fine semantic labels")
     represented=torch.bincount(dev["semantic"][select],minlength=19)>0
-    select|=(dev["source"]==0)&(~represented[dev["semantic"]])
+    select|=(dev["source"]==0)&(dev["semantic"]>=0)&(~represented[dev["semantic"].clamp_min(0)])
     selected=select.nonzero().flatten()
     calibration=((dev["source"]==1)&((dev["frame"]//64)%2==0)).nonzero().flatten()
     if not len(selected) or not len(calibration):
@@ -2229,10 +2348,14 @@ def normal_main():
                     group["lr"]=lr
                 for start in range(0,count,config["batch_size"]):
                     at=order[start:start+config["batch_size"]]
-                    f,g,y=data["features"][at],data["conditions"][at],data["semantic"][at]
+                    f,g=data["features"][at],data["conditions"][at]
                     predicted=scorer.predict(f,semantics=True)
                     nll=scorer.negative_log_likelihood(predicted,scorer.observations(f,g))/scorer.dimensions
-                    ce=F.cross_entropy(predicted["logits"],y,reduction="none")
+                    # A coarse normal label asserts membership in its set, never
+                    # an invented fine class or a simultaneous multi-class target.
+                    logits=predicted["logits"]
+                    ce=(torch.logsumexp(logits,-1)
+                        -torch.logsumexp(logits.masked_fill(~data["allowed"][at],-torch.inf),-1))
                     loss=((nll+spec["semantic_weight"]*ce)*weights[at]).mean()
                     optimizer.zero_grad(set_to_none=True)
                     loss.backward()
@@ -2270,29 +2393,58 @@ def normal_main():
     model=FrozenSupport(scorer=scorer).to(device).eval()
     with torch.no_grad():
         predicted=model.perception.seg_head(dev["features"][:,180:]).argmax(-1)
-    calibration_fit=scorer.calibration.fit(ref_scores,predicted[calibration].cpu(),dev["conditions"][calibration].cpu())
-    scorer.calibration.enabled.fill_(True)
-    with torch.no_grad():
-        calibrated=scorer.calibration(hold_scores.to(device),predicted[selected],dev["conditions"][selected])
-    # Compare class tail errors on unseen normal blocks, never on val19 anomalies.
-    normal_tail=[]
+    # Select calibration using the same normal class-tail criterion throughout.
+    # Range strata below describe the outcome; they never alter this decision.
+    calibration_candidates=[]
     raw_threshold=float(torch.quantile(ref_scores,.99))
-    for category in range(16):
-        mask=(predicted[selected]==category)&(dev["source"][selected]==1)
-        n=int(mask.sum())
-        if n:
-            normal_tail.append(dict(category=category,points=n,
-                raw_fpr01=float((hold_scores[mask.cpu()]>raw_threshold).float().mean()),
-                calibrated_fpr01=float((calibrated[mask]>math.log(100)).float().mean())))
-    eligible=[r for r in normal_tail if r["points"]>=2048]
-    raw_error=float(np.mean([abs(r["raw_fpr01"]-.01) for r in eligible]))
-    calibrated_error=float(np.mean([abs(r["calibrated_fpr01"]-.01) for r in eligible]))
+    selected_calibration=None
+    calibrated_error=math.inf
+    ref_classes=predicted[calibration].cpu()
+    ref_conditions=dev["conditions"][calibration].cpu()
+    hold_conditions=dev["conditions"][selected]
+    target_normal=dev["source"][selected]==1
+    for bandwidth in config["calibration_bandwidths"]:
+        candidate_calibration=ScoreCalibration(range_bandwidth=bandwidth).to(device)
+        calibration_fit=candidate_calibration.fit(ref_scores,ref_classes,ref_conditions)
+        candidate_calibration.enabled.fill_(True)
+        with torch.no_grad():
+            calibrated=candidate_calibration(hold_scores.to(device),predicted[selected],hold_conditions)
+        normal_tail=[]
+        for category in range(16):
+            mask=(predicted[selected]==category)&target_normal
+            n=int(mask.sum())
+            if n:
+                normal_tail.append(dict(category=category,points=n,
+                    raw_fpr01=float((hold_scores[mask.cpu()]>raw_threshold).float().mean()),
+                    calibrated_fpr01=float((calibrated[mask]>math.log(100)).float().mean())))
+        eligible=[r for r in normal_tail if r["points"]>=2048]
+        if not eligible:
+            raise ValueError("normal calibration selection needs a sufficiently observed predicted class")
+        raw_error=float(np.mean([abs(r["raw_fpr01"]-.01) for r in eligible]))
+        candidate_error=float(np.mean([abs(r["calibrated_fpr01"]-.01) for r in eligible]))
+        range_tail=[]
+        for low,high in ((2.5,10.),(10.,20.),(20.,35.),(35.,50.)):
+            mask=target_normal&(hold_conditions[:,0]>=math.log(low))&(hold_conditions[:,0]<math.log(high))
+            if bool(mask.any()):
+                range_tail.append(dict(lower=low,upper=high,points=int(mask.sum()),
+                    calibrated_fpr01=float((calibrated[mask]>math.log(100)).float().mean())))
+        calibration_candidates.append(dict(range_bandwidth=bandwidth,classes=normal_tail,fit=calibration_fit,
+            mean_class_tail_error=candidate_error,range_strata=range_tail))
+        print(f"normal calibration range bandwidth={bandwidth:g}: "
+              f"class tail error={candidate_error:.6f}",flush=True)
+        if candidate_error<calibrated_error:
+            calibrated_error=candidate_error
+            selected_calibration=candidate_calibration
+            selected_bandwidth=bandwidth
+    scorer.calibration=selected_calibration
     use_calibration=calibrated_error<raw_error
     scorer.calibration.enabled.fill_(use_calibration)
-    write_json(args.output/"calibration.json",dict(enabled=use_calibration,classes=normal_tail,fit=calibration_fit,
+    write_json(args.output/"calibration.json",dict(enabled=use_calibration,range_bandwidth=selected_bandwidth,
+        candidates=calibration_candidates,
         raw_mean_class_tail_error=raw_error,calibrated_mean_class_tail_error=calibrated_error,
         reference=reference,holdout=holdout,normal_blocks_only=True))
-    config.update(spec,calibrated=use_calibration)
+    config.update(spec,calibrated=use_calibration,calibration_bandwidth=selected_bandwidth)
+    write_json(args.output/"config.json",config)
     atomic_save(args.output/"frozen.pt",dict(version=CROSS_VERSION,mode="frozen_support",
         model={k:v.cpu() for k,v in model.state_dict().items()},config=config,
         frozen=True,selected=True,complete=True,selection=best,final_val19_evaluated=False))

@@ -1,0 +1,1091 @@
+{
+  "enabled": true,
+  "range_bandwidth": 0.5,
+  "candidates": [
+    {
+      "range_bandwidth": 0.0,
+      "classes": [
+        {
+          "category": 0,
+          "points": 728,
+          "raw_fpr01": 0.024725275114178658,
+          "calibrated_fpr01": 0.024725275114178658
+        },
+        {
+          "category": 3,
+          "points": 6931,
+          "raw_fpr01": 0.039388254284858704,
+          "calibrated_fpr01": 0.03188573196530342
+        },
+        {
+          "category": 4,
+          "points": 83,
+          "raw_fpr01": 0.08433734625577927,
+          "calibrated_fpr01": 0.08433734625577927
+        },
+        {
+          "category": 6,
+          "points": 982,
+          "raw_fpr01": 0.02749490924179554,
+          "calibrated_fpr01": 0.02749490924179554
+        },
+        {
+          "category": 7,
+          "points": 697,
+          "raw_fpr01": 0.007173601072281599,
+          "calibrated_fpr01": 0.007173601072281599
+        },
+        {
+          "category": 8,
+          "points": 37,
+          "raw_fpr01": 0.0810810774564743,
+          "calibrated_fpr01": 0.0810810849070549
+        },
+        {
+          "category": 9,
+          "points": 442,
+          "raw_fpr01": 0.006787330377846956,
+          "calibrated_fpr01": 0.0067873308435082436
+        },
+        {
+          "category": 10,
+          "points": 95528,
+          "raw_fpr01": 0.0006385562592186034,
+          "calibrated_fpr01": 0.010300644673407078
+        },
+        {
+          "category": 11,
+          "points": 23,
+          "raw_fpr01": 0.0,
+          "calibrated_fpr01": 0.0
+        },
+        {
+          "category": 12,
+          "points": 56295,
+          "raw_fpr01": 0.0001598720991751179,
+          "calibrated_fpr01": 0.00976996123790741
+        },
+        {
+          "category": 13,
+          "points": 85748,
+          "raw_fpr01": 0.0017726360820233822,
+          "calibrated_fpr01": 0.010122684761881828
+        },
+        {
+          "category": 14,
+          "points": 222537,
+          "raw_fpr01": 0.023335445672273636,
+          "calibrated_fpr01": 0.014599818736314774
+        },
+        {
+          "category": 15,
+          "points": 174207,
+          "raw_fpr01": 0.04812665283679962,
+          "calibrated_fpr01": 0.02873593010008335
+        }
+      ],
+      "fit": {
+        "points": 668912,
+        "minimum_points": 2048,
+        "class_counts": [
+          382,
+          1,
+          0,
+          4256,
+          121,
+          1,
+          1115,
+          666,
+          24,
+          99,
+          119186,
+          17,
+          87323,
+          101619,
+          191327,
+          162775
+        ],
+        "fallback_classes": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11
+        ],
+        "class_quantile_counts": [
+          0,
+          0,
+          0,
+          11,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11,
+          0,
+          11,
+          11,
+          11,
+          11
+        ],
+        "conditions": "frozen official 16-class prediction only; no range or spacing bins"
+      },
+      "mean_class_tail_error": 0.007645808166513839,
+      "range_strata": [
+        {
+          "lower": 2.5,
+          "upper": 10.0,
+          "points": 246708,
+          "calibrated_fpr01": 0.009172787889838219
+        },
+        {
+          "lower": 10.0,
+          "upper": 20.0,
+          "points": 165701,
+          "calibrated_fpr01": 0.005178001243621111
+        },
+        {
+          "lower": 20.0,
+          "upper": 35.0,
+          "points": 117949,
+          "calibrated_fpr01": 0.011013234034180641
+        },
+        {
+          "lower": 35.0,
+          "upper": 50.0,
+          "points": 113880,
+          "calibrated_fpr01": 0.057262029498815536
+        }
+      ]
+    },
+    {
+      "range_bandwidth": 0.25,
+      "classes": [
+        {
+          "category": 0,
+          "points": 728,
+          "raw_fpr01": 0.024725275114178658,
+          "calibrated_fpr01": 0.21978022158145905
+        },
+        {
+          "category": 3,
+          "points": 6931,
+          "raw_fpr01": 0.039388254284858704,
+          "calibrated_fpr01": 0.03188573196530342
+        },
+        {
+          "category": 4,
+          "points": 83,
+          "raw_fpr01": 0.08433734625577927,
+          "calibrated_fpr01": 0.03614457696676254
+        },
+        {
+          "category": 6,
+          "points": 982,
+          "raw_fpr01": 0.02749490924179554,
+          "calibrated_fpr01": 0.1883910447359085
+        },
+        {
+          "category": 7,
+          "points": 697,
+          "raw_fpr01": 0.007173601072281599,
+          "calibrated_fpr01": 0.060258250683546066
+        },
+        {
+          "category": 8,
+          "points": 37,
+          "raw_fpr01": 0.0810810774564743,
+          "calibrated_fpr01": 0.2432432472705841
+        },
+        {
+          "category": 9,
+          "points": 442,
+          "raw_fpr01": 0.006787330377846956,
+          "calibrated_fpr01": 0.1085972934961319
+        },
+        {
+          "category": 10,
+          "points": 95528,
+          "raw_fpr01": 0.0006385562592186034,
+          "calibrated_fpr01": 0.009264299646019936
+        },
+        {
+          "category": 11,
+          "points": 23,
+          "raw_fpr01": 0.0,
+          "calibrated_fpr01": 0.0
+        },
+        {
+          "category": 12,
+          "points": 56295,
+          "raw_fpr01": 0.0001598720991751179,
+          "calibrated_fpr01": 0.009077182970941067
+        },
+        {
+          "category": 13,
+          "points": 85748,
+          "raw_fpr01": 0.0017726360820233822,
+          "calibrated_fpr01": 0.011522134765982628
+        },
+        {
+          "category": 14,
+          "points": 222537,
+          "raw_fpr01": 0.023335445672273636,
+          "calibrated_fpr01": 0.011355414986610413
+        },
+        {
+          "category": 15,
+          "points": 174207,
+          "raw_fpr01": 0.04812665283679962,
+          "calibrated_fpr01": 0.021405570209026337
+        }
+      ],
+      "fit": {
+        "points": 668912,
+        "minimum_points": 2048,
+        "class_counts": [
+          382,
+          1,
+          0,
+          4256,
+          121,
+          1,
+          1115,
+          666,
+          24,
+          99,
+          119186,
+          17,
+          87323,
+          101619,
+          191327,
+          162775
+        ],
+        "fallback_classes": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11
+        ],
+        "class_quantile_counts": [
+          0,
+          0,
+          0,
+          11,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11,
+          0,
+          11,
+          11,
+          11,
+          11
+        ],
+        "conditions": "frozen official 16-class prediction and continuous log range; no spacing",
+        "range_bandwidth": 0.25,
+        "range_groups_enabled": [
+          true,
+          false,
+          false,
+          false,
+          true,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+          false,
+          true,
+          true,
+          true,
+          true
+        ],
+        "range_fallback_anchors": [
+          0,
+          16,
+          16,
+          16,
+          11,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          1,
+          16,
+          2,
+          1,
+          1,
+          0
+        ]
+      },
+      "mean_class_tail_error": 0.006304561551660298,
+      "range_strata": [
+        {
+          "lower": 2.5,
+          "upper": 10.0,
+          "points": 246708,
+          "calibrated_fpr01": 0.014024677686393261
+        },
+        {
+          "lower": 10.0,
+          "upper": 20.0,
+          "points": 165701,
+          "calibrated_fpr01": 0.009004170075058937
+        },
+        {
+          "lower": 20.0,
+          "upper": 35.0,
+          "points": 117949,
+          "calibrated_fpr01": 0.009478672407567501
+        },
+        {
+          "lower": 35.0,
+          "upper": 50.0,
+          "points": 113880,
+          "calibrated_fpr01": 0.028433438390493393
+        }
+      ]
+    },
+    {
+      "range_bandwidth": 0.5,
+      "classes": [
+        {
+          "category": 0,
+          "points": 728,
+          "raw_fpr01": 0.024725275114178658,
+          "calibrated_fpr01": 0.22390110790729523
+        },
+        {
+          "category": 3,
+          "points": 6931,
+          "raw_fpr01": 0.039388254284858704,
+          "calibrated_fpr01": 0.025537440553307533
+        },
+        {
+          "category": 4,
+          "points": 83,
+          "raw_fpr01": 0.08433734625577927,
+          "calibrated_fpr01": 0.048192769289016724
+        },
+        {
+          "category": 6,
+          "points": 982,
+          "raw_fpr01": 0.02749490924179554,
+          "calibrated_fpr01": 0.22097760438919067
+        },
+        {
+          "category": 7,
+          "points": 697,
+          "raw_fpr01": 0.007173601072281599,
+          "calibrated_fpr01": 0.08321377635002136
+        },
+        {
+          "category": 8,
+          "points": 37,
+          "raw_fpr01": 0.0810810774564743,
+          "calibrated_fpr01": 0.2432432472705841
+        },
+        {
+          "category": 9,
+          "points": 442,
+          "raw_fpr01": 0.006787330377846956,
+          "calibrated_fpr01": 0.09502262622117996
+        },
+        {
+          "category": 10,
+          "points": 95528,
+          "raw_fpr01": 0.0006385562592186034,
+          "calibrated_fpr01": 0.009285235777497292
+        },
+        {
+          "category": 11,
+          "points": 23,
+          "raw_fpr01": 0.0,
+          "calibrated_fpr01": 0.0
+        },
+        {
+          "category": 12,
+          "points": 56295,
+          "raw_fpr01": 0.0001598720991751179,
+          "calibrated_fpr01": 0.0087219113484025
+        },
+        {
+          "category": 13,
+          "points": 85748,
+          "raw_fpr01": 0.0017726360820233822,
+          "calibrated_fpr01": 0.011113962158560753
+        },
+        {
+          "category": 14,
+          "points": 222537,
+          "raw_fpr01": 0.023335445672273636,
+          "calibrated_fpr01": 0.011656488291919231
+        },
+        {
+          "category": 15,
+          "points": 174207,
+          "raw_fpr01": 0.04812665283679962,
+          "calibrated_fpr01": 0.02386815845966339
+        }
+      ],
+      "fit": {
+        "points": 668912,
+        "minimum_points": 2048,
+        "class_counts": [
+          382,
+          1,
+          0,
+          4256,
+          121,
+          1,
+          1115,
+          666,
+          24,
+          99,
+          119186,
+          17,
+          87323,
+          101619,
+          191327,
+          162775
+        ],
+        "fallback_classes": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11
+        ],
+        "class_quantile_counts": [
+          0,
+          0,
+          0,
+          11,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11,
+          0,
+          11,
+          11,
+          11,
+          11
+        ],
+        "conditions": "frozen official 16-class prediction and continuous log range; no spacing",
+        "range_bandwidth": 0.5,
+        "range_groups_enabled": [
+          true,
+          false,
+          false,
+          false,
+          true,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+          false,
+          true,
+          true,
+          true,
+          true
+        ],
+        "range_fallback_anchors": [
+          0,
+          16,
+          16,
+          16,
+          6,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          0,
+          16,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "mean_class_tail_error": 0.005694817056258519,
+      "range_strata": [
+        {
+          "lower": 2.5,
+          "upper": 10.0,
+          "points": 246708,
+          "calibrated_fpr01": 0.014588097110390663
+        },
+        {
+          "lower": 10.0,
+          "upper": 20.0,
+          "points": 165701,
+          "calibrated_fpr01": 0.006529834121465683
+        },
+        {
+          "lower": 20.0,
+          "upper": 35.0,
+          "points": 117949,
+          "calibrated_fpr01": 0.009249760769307613
+        },
+        {
+          "lower": 35.0,
+          "upper": 50.0,
+          "points": 113880,
+          "calibrated_fpr01": 0.034957852214574814
+        }
+      ]
+    },
+    {
+      "range_bandwidth": 1.0,
+      "classes": [
+        {
+          "category": 0,
+          "points": 728,
+          "raw_fpr01": 0.024725275114178658,
+          "calibrated_fpr01": 0.12774725258350372
+        },
+        {
+          "category": 3,
+          "points": 6931,
+          "raw_fpr01": 0.039388254284858704,
+          "calibrated_fpr01": 0.029432982206344604
+        },
+        {
+          "category": 4,
+          "points": 83,
+          "raw_fpr01": 0.08433734625577927,
+          "calibrated_fpr01": 0.060240961611270905
+        },
+        {
+          "category": 6,
+          "points": 982,
+          "raw_fpr01": 0.02749490924179554,
+          "calibrated_fpr01": 0.16496945917606354
+        },
+        {
+          "category": 7,
+          "points": 697,
+          "raw_fpr01": 0.007173601072281599,
+          "calibrated_fpr01": 0.05451937019824982
+        },
+        {
+          "category": 8,
+          "points": 37,
+          "raw_fpr01": 0.0810810774564743,
+          "calibrated_fpr01": 0.1621621698141098
+        },
+        {
+          "category": 9,
+          "points": 442,
+          "raw_fpr01": 0.006787330377846956,
+          "calibrated_fpr01": 0.03393665328621864
+        },
+        {
+          "category": 10,
+          "points": 95528,
+          "raw_fpr01": 0.0006385562592186034,
+          "calibrated_fpr01": 0.009923791512846947
+        },
+        {
+          "category": 11,
+          "points": 23,
+          "raw_fpr01": 0.0,
+          "calibrated_fpr01": 0.0
+        },
+        {
+          "category": 12,
+          "points": 56295,
+          "raw_fpr01": 0.0001598720991751179,
+          "calibrated_fpr01": 0.009094946086406708
+        },
+        {
+          "category": 13,
+          "points": 85748,
+          "raw_fpr01": 0.0017726360820233822,
+          "calibrated_fpr01": 0.010927368886768818
+        },
+        {
+          "category": 14,
+          "points": 222537,
+          "raw_fpr01": 0.023335445672273636,
+          "calibrated_fpr01": 0.010573522187769413
+        },
+        {
+          "category": 15,
+          "points": 174207,
+          "raw_fpr01": 0.04812665283679962,
+          "calibrated_fpr01": 0.026250381022691727
+        }
+      ],
+      "fit": {
+        "points": 668912,
+        "minimum_points": 2048,
+        "class_counts": [
+          382,
+          1,
+          0,
+          4256,
+          121,
+          1,
+          1115,
+          666,
+          24,
+          99,
+          119186,
+          17,
+          87323,
+          101619,
+          191327,
+          162775
+        ],
+        "fallback_classes": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11
+        ],
+        "class_quantile_counts": [
+          0,
+          0,
+          0,
+          11,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11,
+          0,
+          11,
+          11,
+          11,
+          11
+        ],
+        "conditions": "frozen official 16-class prediction and continuous log range; no spacing",
+        "range_bandwidth": 1.0,
+        "range_groups_enabled": [
+          true,
+          false,
+          false,
+          false,
+          true,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+          false,
+          true,
+          true,
+          true,
+          true
+        ],
+        "range_fallback_anchors": [
+          0,
+          16,
+          16,
+          16,
+          0,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          0,
+          16,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "mean_class_tail_error": 0.006360919450720151,
+      "range_strata": [
+        {
+          "lower": 2.5,
+          "upper": 10.0,
+          "points": 246708,
+          "calibrated_fpr01": 0.010871151462197304
+        },
+        {
+          "lower": 10.0,
+          "upper": 20.0,
+          "points": 165701,
+          "calibrated_fpr01": 0.005353015381842852
+        },
+        {
+          "lower": 20.0,
+          "upper": 35.0,
+          "points": 117949,
+          "calibrated_fpr01": 0.009978889487683773
+        },
+        {
+          "lower": 35.0,
+          "upper": 50.0,
+          "points": 113880,
+          "calibrated_fpr01": 0.04478398337960243
+        }
+      ]
+    }
+  ],
+  "raw_mean_class_tail_error": 0.018046548058919143,
+  "calibrated_mean_class_tail_error": 0.005694817056258519,
+  "reference": {
+    "points": 668912,
+    "classes": [
+      {
+        "category": 0,
+        "points": 4539,
+        "nll": 376.64190786613403,
+        "ce": 2.6842270018009655,
+        "recall": 0.023793787177792465,
+        "log_range_mae": 0.264115000800641,
+        "log_spacing_mae": 0.253385464278979
+      },
+      {
+        "category": 1,
+        "points": 26,
+        "nll": 209.95628532996545,
+        "ce": 4.328376843379094,
+        "recall": 0.0,
+        "log_range_mae": 0.127555984717149,
+        "log_spacing_mae": 0.37011614728432435
+      },
+      {
+        "category": 3,
+        "points": 3564,
+        "nll": 307.2232307344173,
+        "ce": 2.8220832396035243,
+        "recall": 0.015712682379349047,
+        "log_range_mae": 0.21263044243040843,
+        "log_spacing_mae": 0.263628924666882
+      },
+      {
+        "category": 5,
+        "points": 2518,
+        "nll": 346.97231512698414,
+        "ce": 2.9554301598793558,
+        "recall": 0.018665607625099286,
+        "log_range_mae": 0.3647855497997275,
+        "log_spacing_mae": 0.4496684081865751
+      },
+      {
+        "category": 8,
+        "points": 126002,
+        "nll": 238.33434992857872,
+        "ce": 5.483171586216379,
+        "recall": 1.5872763924382153e-05,
+        "log_range_mae": 0.09882917018888927,
+        "log_spacing_mae": 0.1484645914734482
+      },
+      {
+        "category": 9,
+        "points": 5176,
+        "nll": 251.50643703042078,
+        "ce": 1.5155761970158155,
+        "recall": 0.9393353941267388,
+        "log_range_mae": 0.09762620868325418,
+        "log_spacing_mae": 0.13773620859295177
+      },
+      {
+        "category": 10,
+        "points": 157601,
+        "nll": 257.9221256831403,
+        "ce": 3.4340400007583294,
+        "recall": 0.00022207980913826689,
+        "log_range_mae": 0.10613184597025353,
+        "log_spacing_mae": 0.16847884437016905
+      },
+      {
+        "category": 12,
+        "points": 102917,
+        "nll": 310.250289800235,
+        "ce": 3.759748427891542,
+        "recall": 0.0,
+        "log_range_mae": 0.17708785024227605,
+        "log_spacing_mae": 0.25472844633329406
+      },
+      {
+        "category": 13,
+        "points": 18026,
+        "nll": 294.9384900604886,
+        "ce": 3.486508520332251,
+        "recall": 0.00011095084877399312,
+        "log_range_mae": 0.1499533527476481,
+        "log_spacing_mae": 0.19788927511929677
+      },
+      {
+        "category": 14,
+        "points": 208016,
+        "nll": 293.60372065427754,
+        "ce": 4.141362421949839,
+        "recall": 0.0,
+        "log_range_mae": 0.19445385455823883,
+        "log_spacing_mae": 0.25369183820318664
+      },
+      {
+        "category": 15,
+        "points": 7042,
+        "nll": 278.4962199817019,
+        "ce": 3.0945353469399017,
+        "recall": 0.04231752343084351,
+        "log_range_mae": 0.2002480820612757,
+        "log_spacing_mae": 0.26002241326144215
+      },
+      {
+        "category": 16,
+        "points": 26526,
+        "nll": 303.7628388073005,
+        "ce": 2.7054529910011005,
+        "recall": 0.00011309658448314861,
+        "log_range_mae": 0.1389840636679034,
+        "log_spacing_mae": 0.23389621007389697
+      },
+      {
+        "category": 17,
+        "points": 4112,
+        "nll": 304.6057058493915,
+        "ce": 3.0972945365460465,
+        "recall": 0.0,
+        "log_range_mae": 0.3061012601632089,
+        "log_spacing_mae": 0.5250936431623633
+      },
+      {
+        "category": 18,
+        "points": 2847,
+        "nll": 323.0659113791184,
+        "ce": 2.0837754986769363,
+        "recall": 0.4857744994731296,
+        "log_range_mae": 0.4362438727061624,
+        "log_spacing_mae": 0.4473407449306083
+      }
+    ],
+    "class_nll": 299.02488791555294,
+    "point_nll": 278.3277859911214,
+    "class_recall": 0.11738934570917481,
+    "log_range_mae": 0.15179632919489144,
+    "log_spacing_mae": 0.21411926302410822,
+    "selection_classes": [
+      0,
+      3,
+      5,
+      8,
+      9,
+      10,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+    ]
+  },
+  "holdout": {
+    "points": 659515,
+    "classes": [
+      {
+        "category": 0,
+        "points": 5841,
+        "nll": 387.97686682937695,
+        "ce": 2.698743249696119,
+        "recall": 0.01712035610340695,
+        "log_range_mae": 0.24819100207201608,
+        "log_spacing_mae": 0.2655084714608545
+      },
+      {
+        "category": 3,
+        "points": 6712,
+        "nll": 353.7655094769629,
+        "ce": 2.56471279567203,
+        "recall": 0.1550953516090584,
+        "log_range_mae": 0.22673788338153666,
+        "log_spacing_mae": 0.2666475922923815
+      },
+      {
+        "category": 4,
+        "points": 15136,
+        "nll": 468.45010245211785,
+        "ce": 3.9221189471619327,
+        "recall": 0.0,
+        "log_range_mae": 0.2839446769747686,
+        "log_spacing_mae": 0.37876493762261787
+      },
+      {
+        "category": 5,
+        "points": 1970,
+        "nll": 348.8199872263797,
+        "ce": 2.9607473803050626,
+        "recall": 0.012690355329949238,
+        "log_range_mae": 0.3436968248507698,
+        "log_spacing_mae": 0.40442754344702675
+      },
+      {
+        "category": 6,
+        "points": 141,
+        "nll": 375.725129039575,
+        "ce": 1.7951441910249968,
+        "recall": 0.6099290780141844,
+        "log_range_mae": 0.4064199704650446,
+        "log_spacing_mae": 0.45694699920449694
+      },
+      {
+        "category": 8,
+        "points": 116902,
+        "nll": 241.72765872323117,
+        "ce": 5.4493809511099816,
+        "recall": 0.0,
+        "log_range_mae": 0.09649999626047774,
+        "log_spacing_mae": 0.14331849071830755
+      },
+      {
+        "category": 9,
+        "points": 5911,
+        "nll": 272.0537183423108,
+        "ce": 1.6232545023096776,
+        "recall": 0.8788699035696159,
+        "log_range_mae": 0.11252535299043974,
+        "log_spacing_mae": 0.15699975571157596
+      },
+      {
+        "category": 10,
+        "points": 98067,
+        "nll": 260.03306916701223,
+        "ce": 3.409227670790745,
+        "recall": 0.00030591330416959836,
+        "log_range_mae": 0.10468600409730633,
+        "log_spacing_mae": 0.16479566799219494
+      },
+      {
+        "category": 12,
+        "points": 135685,
+        "nll": 319.9421659173771,
+        "ce": 3.768049412270603,
+        "recall": 0.0,
+        "log_range_mae": 0.1736287368135937,
+        "log_spacing_mae": 0.24244723217339453
+      },
+      {
+        "category": 13,
+        "points": 19584,
+        "nll": 305.58564424709556,
+        "ce": 3.7254901673717824,
+        "recall": 5.1062091503267975e-05,
+        "log_range_mae": 0.15625437405690842,
+        "log_spacing_mae": 0.22617152197446463
+      },
+      {
+        "category": 14,
+        "points": 219253,
+        "nll": 308.7014073588426,
+        "ce": 4.1531240018500535,
+        "recall": 0.0,
+        "log_range_mae": 0.19008363170513906,
+        "log_spacing_mae": 0.2592019797696333
+      },
+      {
+        "category": 15,
+        "points": 8189,
+        "nll": 291.7208938822232,
+        "ce": 3.0553355759965264,
+        "recall": 0.030772988154841863,
+        "log_range_mae": 0.18760439456928518,
+        "log_spacing_mae": 0.24405254640316573
+      },
+      {
+        "category": 16,
+        "points": 21514,
+        "nll": 297.37407075675037,
+        "ce": 2.6435768742249715,
+        "recall": 0.0005577763316909919,
+        "log_range_mae": 0.17101722837680222,
+        "log_spacing_mae": 0.2647081954149782
+      },
+      {
+        "category": 17,
+        "points": 2868,
+        "nll": 312.49866980123056,
+        "ce": 3.0601709701193593,
+        "recall": 0.0,
+        "log_range_mae": 0.2539035806346638,
+        "log_spacing_mae": 0.4971475957521345
+      },
+      {
+        "category": 18,
+        "points": 1742,
+        "nll": 309.5008732678559,
+        "ce": 2.2447809373059586,
+        "recall": 0.3978185993111366,
+        "log_range_mae": 0.3101586191032839,
+        "log_spacing_mae": 0.3502778512961418
+      }
+    ],
+    "class_nll": 323.5917177658895,
+    "point_nll": 295.88430316559754,
+    "class_recall": 0.14021409225463716,
+    "log_range_mae": 0.15920108160771923,
+    "log_spacing_mae": 0.2238979571806733,
+    "selection_classes": [
+      0,
+      3,
+      4,
+      5,
+      6,
+      8,
+      9,
+      10,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18
+    ]
+  },
+  "normal_blocks_only": true
+}
