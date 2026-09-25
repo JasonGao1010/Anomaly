@@ -467,8 +467,9 @@ def main():
         metadata = (dict(version=saved["version"], complete=saved.get("frozen", False),
                          seed=saved["config"]["seed"], mode=saved["mode"], method=saved["mode"],
                          checkpoint_update=saved.get("stages", {}).get("target", {}).get("selected_update"))
-                    if normal_run else dict(version=VERSION, complete=saved["complete"], seed=saved["seed"],
-                                            mode=saved["mode"], method=saved["method"], checkpoint_epoch=saved["epoch"]))
+                    if normal_run else dict(version=saved["version"], complete=saved["complete"], seed=saved["seed"],
+                                            mode=saved["mode"], method=saved["method"], checkpoint_epoch=saved["epoch"],
+                                            checkpoint_update=saved.get("successful_updates")))
         write_json(args.output, dict(**metadata, checkpoint=str(args.checkpoint.resolve()), **result))
     elif args.action == "infer":
         from .train import disk_check

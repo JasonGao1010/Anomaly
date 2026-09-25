@@ -1,0 +1,21 @@
+{
+  "version": "AJAE-V4-NS",
+  "complete": true,
+  "seed": 0,
+  "mode": "field",
+  "method": "field",
+  "checkpoint_epoch": 2,
+  "checkpoint_update": 2500,
+  "checkpoint": "/home/jasongao/Study/AJAE-v4/results/train/hypothesis/0/field/last.pt",
+  "metrics": {
+    "AP": 14.994178326314032,
+    "FPR95": 55.074816890460184,
+    "AUROC": 92.0293343376515,
+    "threshold": -10.014510154724121
+  },
+  "scans": 1960,
+  "points": 193879969,
+  "seconds": 1227.2173099649954,
+  "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "official_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
+}
