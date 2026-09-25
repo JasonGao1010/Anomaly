@@ -1,0 +1,451 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=24mm]{geometry}
+\usepackage{fontspec,xeCJK}
+\setmainfont{Times New Roman}
+\setsansfont{Times New Roman}
+\setmonofont{Times New Roman}
+\setCJKmainfont{SimSun}[AutoFakeBold=2]
+\setCJKsansfont{SimSun}[AutoFakeBold=2]
+\setCJKmonofont{SimSun}
+\usepackage{amsmath,amssymb,booktabs,longtable,array,enumitem}
+\usepackage[unicode,colorlinks=true,urlcolor=blue,linkcolor=blue]{hyperref}
+\usepackage{fancyhdr}
+\pagestyle{fancy}\fancyhf{}\fancyhead[L]{正常语义感知与未知观测识别}\fancyhead[R]{文献研究}\fancyfoot[C]{\thepage}
+\setlength{\headheight}{15pt}
+\setlength{\parindent}{2em}\setlength{\parskip}{4pt}
+\setlist{nosep,leftmargin=2em}
+\renewcommand{\arraystretch}{1.2}
+\newcommand{\paper}[1]{\allowbreak\hyperlink{#1}{[#1]}\allowbreak}
+\newcommand{\ReadCount}{105}
+\renewcommand{\abstractname}{摘要}
+\title{让点云感知学会检验自己的类别判断\\文献综合与模型方法研究定位}
+\author{研究问题与方法审查}
+\date{2026年9月25日}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告研究如何仅使用正常类别监督，使单帧点云模型同时完成高质量正常语义分割与未知点识别。研究中心是正常感知在陌生对象面前的失效：模型可能给出明确类别，却缺少支持该解释的可靠观测依据。本轮完成\ReadCount{}篇不同论文的全文阅读，逐篇核对方法、监督来源、实验和补充内容，并据此整合正常分类、工业缺陷检测、未知语义分割、条件预测与跨域鲁棒性。建议主攻“由观测检验驱动的语义感知”：每个正常类别既参与点级分类，也对真实回波提出可检验的预测；正常标签同时训练正确解释的建立与错误解释的排除。该方向把正常感知与未知识别连接到同一个学习过程，核心研究假设是观测检验能够补充类别特征中的缺失信息。正常语义质量、未知识别收益与单帧效率共同构成方法贡献的证据。
+\end{abstract}
+
+\section{先明确要改善什么能力}
+
+一辆车需要感知模型认出汽车、行人、路面和其他熟悉类别，也需要模型在遇到训练类别之外的物体时，避免给出未经检验的正常类别解释。陌生物体可能只有几个回波，外观又与车体边缘、道路设施或植被接近。正常分割网络必须在有限类别中选一个答案，所以“被分成某个正常类别”本身不足以说明这个答案可信。STU所展示的高置信陌生物体误认，为这一问题提供了真实道路证据\paper{R005}。
+
+研究的输出应当清楚：输入一帧真实点云，输出每个点的正常类别判断和一个连续的未知程度。正常类别判断服务于已有的语义感知；未知程度提示哪些观测缺少可靠的正常类别解释。这两种输出共同构成研究对象。模型是否能生成逼真的正常场、是否使用注意力、是否具有多分支，都只是实现选择。
+
+“正常”在这里指已知的语义类别，而非安全、常见或没有障碍。停在道路中央的汽车仍可属于已知正常类别；未见过的道路物体即使外形规整，仍可能属于未知类别。远距离导致的稀疏行人通常还是正常行人。把几何不规则、道路中央、危险、模型预测困难都当作异常，会改变研究对象。模型也不能仅凭未知分数决定驾驶动作；本研究检验的是感知层的识别和拒绝能力。
+
+因此，本报告建议保持一个稳定的主问题：\textbf{在保持正常类别分割质量的条件下，仅从正常数据学习的点云模型，能否识别那些被语义分类器自信误认为正常的未知观测？}“可信正常解释”需要具体落实为能被观测检验的预测，不能只把类别得分重新命名为解释。这里的解释属于统计上的类别支持与观测相容性，不等同于因果解释。
+
+\section{阅读范围与证据等级}
+
+本轮从工作区已有的145篇候选文献出发，围绕直接道路竞争方法、正常学习的异常检测、点云表征与域泛化、条件预测与拒绝理论扩展检索。采用原始论文、作者预印本、会议出版页面与官方项目页面交叉核对，并追查最可能覆盖当前想法的相邻方法。已有的“核心章节阅读”记录不自动计为本轮正文通读。
+
+本轮完整阅读105篇不同论文：道路与开放点云感知30篇，正常学习及异常机制34篇，点云表征与泛化30篇，条件预测与可信拒绝11篇。全文范围为取得版本的全部学术内容，包含随文附录；SeDiR、Dinomaly和PixOOD的独立补充也已完整阅读。另通读1篇可学习性理论论文的正文，单独列为理论参考，其长篇证明附录不计入全文数量。逐篇阅读范围与版本见文献表。检索采用围绕研究问题追踪相邻工作的方式，覆盖的151篇候选与实际阅读集合分别记录。
+
+逐篇记录位于\texttt{literature.csv}，包含论文入口、正文阅读范围、监督来源、方法机制、评分、实验、局限，以及与本研究的关系。本报告末尾列出本轮实际通读的文献。旧候选中未在本轮完成正文通读的条目保留历史阅读范围，不用于充足数量的声明。
+
+证据需要分层使用。论文中的对照结果支持对应数据和设置下的经验判断；理论结果依赖各自假设；工业缺陷与图像研究主要提供机制参考；对当前点云模型的利弊分析属于基于机制的推断。只有在当前任务中完成有效对照，才能把这些推断变成方法有效性的结论。
+
+\section{文献如何形成这条研究主线}
+
+\subsection{正常分类模型已经具有拒绝能力，但这种能力不充分}
+
+最大类别概率基线很早就展示了正常分类与未知检测的联系\paper{R146}。能量方法进一步利用类别输出的绝对量级，并提供不需要异常训练的后处理版本\paper{R149}。这些方法要求研究者先回答一个简单问题：新增机制是否比同一正常模型上几乎免费的未知评分更有效？如果没有进行这种对照，就无法确认收益来自新的观测判断机制，还是更强的骨干、额外训练或评分变换。
+
+分类置信度校准解决的是预测概率与已知类别正确率的关系\paper{R154}。选择性预测则允许模型放弃一部分输入，降低保留输入上的错误率\paper{R156}。二者都具有实际价值，但均不自动解决未知语义分割。一个模型可以通过拒绝遮挡行人和细杆降低错误率，却在未知物体出现时继续误认；也可以得到更准确的正常分类概率，却无法识别训练类别之外的对象。
+
+道路研究把问题推进到逐像素和逐点层面。RbA直接将未知区域定义为所有已知类别都拒绝的区域\paper{R013}；PixOOD通过每类多个正常参考点和正常分布检验识别未知\paper{R018}。LiDAR高斯模型也已实现“没有一个正常类别的接受域包含该点便拒识”\paper{R011}。因此，“缺少任何正常解释”是合理的问题表达，但不是尚未有人提出的创新点。
+
+\subsection{直接点云方法说明：异常收益必须与正常代价一起看}
+
+LIDO是当前最相邻的正常学习方法之一：它以正常语义训练学习类别原型，并结合原型距离、类别熵和特征范数形成异常分数\paper{R003}。它已经覆盖正常类别学习与未知识别的总体目标，不能通过给原型更换名称来与之区分。它在STU上的结果也表明，无合成异常可以产生实际检测能力。
+
+与此同时，LIDO原文表7中，nuScenes-OoD单一插入区域设置的正常语义平均交并比从普通基线的72.75降至60.61。这里比较的是该论文的同一评测设置，不能移作当前仓库的nuScenes结果。这个对照说明：异常训练目标即使只使用正常样本，也可能改变正常特征组织，损害正常分割。因而，用户提出的“保证优秀正常感知”应当进入方法评价的核心，而不是在附录中补一个数字。
+
+层次高斯方法尝试将类别边界上的正常不确定性与分布外不确定性区分开\paper{R010}。它仍会在细杆、骑行者和正常边界处产生误报，且其三项异常结果不来自STU。Prior2Former则在正常训练下联合学习类别与证据，但开放拒绝阈值仍会明显影响已知区域的分割\paper{R032}。这些结果共同支持一个具体缺口：\textbf{模型需要同时保留困难正常样本，并拒绝缺少正常解释的未知样本。单纯让模型更容易怀疑自己并不够。}
+
+有异常监督的方法可用于理解机制与报告方式，但需要独立比较。NDP、REL、REAL、LiON等使用合成或辅助未知监督\paper{R001}\paper{R002}\paper{R006}\paper{R008}。部分方法仍保留正常分割性能，部分出现下降；二者都应如实记录。论文中的“无外部异常数据”“零样本”“无真实异常”和“仅正常开发”并不等价。APF的未知特征生成、UNO的生成负样本，以及利用真实异常验证来选查询或阈值的Maskomaly，都需要按照实际训练与开发过程分类\paper{R007}\paper{R031}\paper{R019}。
+
+\subsection{正常重建有用，但不能作为语义异常的定义}
+
+工业检测常通过正常记忆、教师与学生差异、掩码恢复或重建误差检测局部损伤。PatchCore、PaDiM、逆向蒸馏、UniAD和Dinomaly说明正常数据可以支持细粒度异常定位\paper{R046}\paper{R047}\paper{R048}\paper{R041}\paper{R042}。然而，零件划痕和陌生道路物体对应不同的异常定义。CutPaste在工业缺陷与语义未知任务上相对其他自监督方法的优势发生反转，是不能直接搬用工业成功的具体证据\paper{R043}。
+
+盲点预测通过禁止网络读取被预测位置，减少复制输入的捷径。Noise2Self在特定噪声假设下给出了自监督风险与干净风险的关系\paper{R136}；Noise2Void同时展示，正常的孤立亮点也可能被预测器抹去\paper{R137}。把这类机制迁到点云时，远距少点行人、细杆和遮挡边缘正是需要保护的正常细节。预测困难的点既可能未知，也可能仅仅缺少可用信息。
+
+上下文预测的正常先验，再用实际观测更新候选的结构，已经出现在概率去噪中\paper{R138}\paper{R139}。条件神经过程及其注意力版本也已覆盖由上下文查询条件分布的通用机制\paper{R140}\paper{R141}。这些工作支持模型构造的可行性，同时削弱宽泛的新颖性表述。需要检验的差异是：预测是否提供了类别分类之外的新信息，以及这种信息是否能可靠识别语义分类器的自信误认。
+
+SeDiR进一步把正常物体类别语义与几何引导重建联系起来，处理多类正常重建中的类别混淆\paper{R059}。其补充表S8用冻结表示上的额外分类头验证整物体类别信息，报告97.3\%的准确率。它为类别解释与重建结合提供了直接先例。当前研究要进一步把这种联系用于道路场景中的逐点正常类别竞争，并保留联合推理时的正常分割能力。
+
+\subsection{强正常表征是基础，重建损失与感知质量不能互相替代}
+
+Point-MAE、Point-M2AE、Point-BERT、MaskPoint及一系列LiDAR预训练方法说明，正常数据上的预测任务能够改善下游表征\paper{R092}\paper{R093}\paper{R094}\paper{R095}\paper{R097}\paper{R098}。MAELi强调占据、自由和未知空间的区别\paper{R099}；UniPAD与Ponder系列把场景表征与渲染预测联系起来\paper{R103}\paper{R104}\paper{R105}。这些结果支撑正常观测预测作为学习工具，但它们主要验证正常检测、分类或分割，没有因此完成未知语义拒绝。
+
+Point-MAE的消融中，重建误差更小的配置并不一定有更好的分类表现。NoMAE为减少位置泄漏和提高效率引入多尺度局部重建，但会跳过缺乏可见邻域的孤立遮挡点\paper{R100}。这种选择可以服务于预训练，却不能直接转为忽略少点未知物体的异常分割原则。模型的学习任务必须服从最终正常与未知感知目标。
+
+Point Transformer系列、LitePT、Sonata和多数据集点提示学习提供了更强或更高效的正常表征途径\paper{R124}\paper{R125}\paper{R126}\paper{R127}。它们对于本研究的首要意义是建立有竞争力的正常感知起点。需要按照实际预训练数据与计算预算公平比较，不能把更好的骨干产生的全部收益记为异常机制的贡献。研究这些论文并不意味着向当前训练引入用户未授权的额外数据。
+
+\subsection{域变化会使正常解释变弱，但正常对象仍需被识别}
+
+nuScenes与STU之间存在采样密度、视角、强度和类别监督范围的差异。SemanticSTF、Robo3D以及点云域泛化研究表明，正常对象在恶劣观测和传感器变化下也会显著失准\paper{R109}\paper{R110}\paper{R112}\paper{R113}\paper{R114}\paper{R118}。Generalize or Detect?明确区分需要适应的正常域变化与需要拒绝的未知语义变化\paper{R021}。PixOOD在某些道路障碍数据上很强，在包含复杂正常域变化的语义异常评测中却产生较多误报，也反映这一矛盾\paper{R018}。
+
+这意味着，模型需要容忍“同类对象看起来不同”，同时识别“不同对象看起来相似”。过强的类别紧致约束可能压缩正常多样性；过强的不变性又可能抹掉识别未知所需的小差异。当前任务的困难恰在这里。正常多样性、点级细节与类别支持不能分别优化后假定它们会自然协作。
+
+\subsection{概率模型与校准如何度量正常支持}
+
+生成模型的高似然不一定对应已知语义；完美密度估计也不普遍保证异常检测\paper{R062}\paper{R063}\paper{R064}\paper{R065}\paper{R066}\paper{R067}\paper{R068}。一个陌生物体可能更简单、更平滑，因此在正常模型下反而具有更高密度。正常点也可能因观察噪声或背景复杂而低密度。
+
+关于分布外检测可学习性的理论进一步说明，仅正常训练能否学会拒绝，取决于允许的分布族与假设空间\paper{R153}。这些结论不能粗略解释为所有正常学习都不可能；它们要求论文明确所利用的可观测差异，避免承诺任意未知都能被识别。
+
+正常分位数可以把不同证据转到可比较的尺度，但它不是异常概率。EfficientAD已经使用正常验证分位数统一局部与全局异常图\paper{R049}。保形预测在给定可交换性或已知协变量偏移条件下可以控制边际覆盖率\paper{R155}；时间相邻、强相关的201点云及不完整类别覆盖，并不自动满足这些条件。更不能由正常误报控制推出95\%未知召回下的误报率。
+
+\section{最相邻工作与可成立的研究差异}
+
+\small
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.19\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}>{\raggedright\arraybackslash}p{0.40\textwidth}}
+\toprule
+相邻工作 & 已经解决或明确提出 & 当前研究仍需回答 \\
+\midrule\endhead
+LIDO、高斯LiDAR模型\paper{R003}\paper{R010}\paper{R011} & 正常语义训练、类别支持、逐点未知分数；部分方法分析正常不确定性。 & 补充观测预测是否能纠正语义误认，并保护正常细类；收益是否超出原型或高斯拟合。 \\
+RbA、PixOOD\paper{R013}\paper{R018} & 全部正常类拒绝、多种正常解释、正常参考校准。 & 同一类别的语义支持与观测相容性是否提供实质新证据，能否抵抗正常域移。 \\
+Prior2Former\paper{R032} & 正常训练下统一已知类别与未知证据。 & 如何减少拒绝机制对正常覆盖和分割质量的损害。 \\
+UniAD、Dinomaly、EfficientAD\paper{R041}\paper{R042}\paper{R049} & 多类正常重建、抑制复制、局部与全局证据、正常分位数融合。 & 这些误差如何对应未知语义，同时保留逐点正常类别输出。 \\
+SeDiR\paper{R059} & 正常类别语义解耦与类别条件几何重建。 & 多类道路场景中的逐点竞争、困难正常保护与单帧计算效率。 \\
+概率盲点预测\paper{R136}\paper{R138}\paper{R139} & 受限上下文、正常先验、实际观测后验更新。 & 观测被用于更新后是否仍能检验候选；是否会让未知对象解释自己。 \\
+MAE与神经渲染预训练\paper{R092}\paper{R099}\paper{R103} & 正常数据学习几何表征并改善下游任务。 & 推理时观测验证是否比仅保留预训练收益更有用，是否值得增加成本。 \\
+\bottomrule
+\end{longtable}
+\normalsize
+
+这些相邻工作为端到端正常学习、类别支持、条件预测和未知拒绝提供了方法基础。本课题应将贡献集中到它们之间的一项具体联系：\textbf{模型对每个正常类别候选，仅从目标区域之外的上下文预测该区域回波，再用真实回波检验该候选，并让检验参与类别学习；完整语义分支仍可读取目标点。}实验据此检验新增观测信息的作用，以及信息约束如何影响未知对象的自我解释。
+
+预测分支的信息来源需要明确界定。排除目标点、排除目标角度单元和排除整个未知对象是不同的条件。附近点可能属于同一个未知对象；语义特征也可能已混入被检验点。对应的实现与对照应追踪这些信息路径，检验哪些范围的上下文能提供有效补充。
+
+\section{以实际感知能力组织研究目标}
+
+\subsection{明确使用者会得到什么}
+
+模型首先应保持熟悉类别的正常感知质量。对于它能够解释的点，系统继续提供正常类别；对于缺少可靠解释的点，系统额外标出未知程度。这样，下游系统可以区分“模型认出一个类别”与“模型只是在已知类别中勉强选了一个答案”。本研究不直接证明车辆更安全，也不把所有未知对象当作危险；它减少的是感知输出中无法察觉的语义误认。
+
+这一价值对应三项可以核验的要求：正常对象仍能被分好；未知对象的识别能力有所增加；新增能力的时间与存储代价适合目标系统。若异常分数提高主要来自把更多正常点拒绝，或者需要远超普通感知网络的成本，就没有完整回答用户提出的问题。
+
+\subsection{把核心假设限定到可验证的范围}
+
+设单帧输入为$X$，每点正常类别为$y_i\in\{1,\ldots,K\}$。正常语义模型输出类别$\hat y_i$，额外输出连续未知分数$s_i$。为说明已实现模型的起点，当前机制可以抽象为对每个候选类别$c$同时评估语义不相容程度$d_{i,c}$与观测不相容程度$g_{i,c}$：
+\[
+s_i=\min_c\max\{T_s(d_{i,c}),T_{g,c}(g_{i,c})\}.
+\]
+这里$T_s$与$T_{g,c}$由正常数据给出参考尺度。这个已实现的接受规则要求存在同一类别同时支持两类证据。下一节给出更进一步的候选：把观测证据直接放入正常类别训练与最终类别选择。
+
+真正需要检验的是：在语义证据相近的点中，观测证据能否区分未知物体与困难正常物体？如果可以，模型获得了正常分类分数之外的有效信息；如果不可以，新增分支可能只是在重复已有判断或增加噪声。语义与几何分数相加后有更好的结果，只是初步经验；还需要确定收益发生在什么对象、什么距离和什么正常代价下。
+
+“保证优秀正常语义感知”应转化为与同骨干、同数据、同预训练来源及相近预算的正常分割基线比较。它不是在没有实验时能够口头保证的性质。可以评价完整类别平均交并比、逐类表现和正常覆盖率，并特别观察少点类别与边界。单独提高整体点准确率可能掩盖稀有正常类别的退化。
+
+\subsection{三项异常指标各自回答什么}
+
+平均精确率AP衡量在异常点稀少时，模型能否把异常排在分数前端；它对异常比例与被纳入的正常点范围敏感。AUROC衡量整体排序区分，不充分反映高召回工作点的代价。FPR95衡量达到95\%异常点召回时误报多少正常点；它尤其容易暴露少点异常漏检和困难正常高分尾部的混合。三者应按STU官方评价点集与聚合方式计算。
+
+这些指标具有实际含义，并不天然等于刷榜。问题在于是否只针对固定验证集的排序细节调整方法，而没有提高所声称的感知能力。实际贡献需要异常指标、正常语义和计算成本共同支持。不同文献的正类定义也必须核对：部分图像分类论文的FPR95以正常为阳性，不能与STU以异常为阳性的数值直接比较\paper{R149}。
+
+\section{建议主攻的模型方法：让观测检验直接参与语义学习}
+
+文献综合后，最值得深化的方向是\textbf{由观测检验驱动的正常语义感知}。模型对一个点提出“汽车”“路面”等类别解释时，该类别还要结合周围上下文，对被检验区域的回波分布作出预测。真实回波随后检验这一预测；检验结果直接参与类别学习与类别选择。这让模型在学习认出正常对象时，同时学习如何辨别不成立的正常解释。
+
+这条主线只需要一个核心联系：\textbf{类别解释产生可检验的观测预测，观测检验反过来训练类别解释。}端到端指这两个方向通过同一正常监督共同学习。用两个分支分别计算分类损失与重建损失，再在推理时融合分数，只建立了较弱的联系。把观测相容性放进正常类别竞争，才能让模型学习哪些几何证据真正有助于区分类别。
+
+具体输入仍是一帧真实点云。高效骨干提取完整场景语义，点级细节路径保留体素聚合容易损失的少点结构。对每个待检验区域，轻量上下文分支读取区域之外的观测，分别预测各正常类别能够产生的回波分布。类别表示应容纳多个正常形态，以保留同一类别在距离、姿态和遮挡变化下的有效差异。这里需要的是与当前观测有关的局部预测，避免把完整场景生成作为每帧推理负担。
+
+每个正常训练点都提供现成的学习信号。假设它的真实类别是汽车，模型应当让汽车解释既符合局部特征，也符合实际回波；其他正常类别如果不能解释这组证据，其相对支持应降低。这些比较发生在真实正常样本与已知类别之间，不需要构造未知物体。对nuScenes中的粗标签，仍使用允许类别集合，保持监督语义准确。
+
+可用下式表达这一候选学习原则，而不预设最终网络参数化：
+\[
+\mathcal L_{\mathrm{class}}
+=-\log\!\sum_{c\in Y_i}
+\frac{\exp(-E_{i,c})}{\sum_k\exp(-E_{i,k})},
+\qquad
+\mathcal L_{\mathrm{predict}}
+=-\log p_\theta(o_i\mid C_i,Y_i).
+\]
+其中$Y_i$为可信正常类别或允许类别集合，$o_i$是被检验的真实回波，$C_i$不包含该区域回波。粗标签对应规范化的条件混合：
+\[
+p_\theta(o_i\mid C_i,Y_i)=\sum_{c\in Y_i}\pi_\theta(c\mid C_i,Y_i)p_\theta(o_i\mid C_i,c),
+\quad \pi_\theta\geq0,\quad\sum_{c\in Y_i}\pi_\theta=1.
+\]
+混合权重只读取上下文和允许类别，在为目标回波评分前确定。精细标签时该式退化为对应单类的预测分布。
+
+一个明确的候选评分形式是
+\[
+E_{i,c}=D_{i,c}+\lambda G_{i,c},\qquad
+G_{i,c}=-\log p_\theta(o_i\mid C_i,c),\qquad
+\hat y_i=\arg\min_c E_{i,c},\qquad
+s_i=T_N(\min_c E_{i,c}).
+\]
+$D_{i,c}$是点特征到该类多个正常参考表示的平滑最小距离，采用共同的距离单位；$G_{i,c}$使用固定观测坐标定义下的预测密度；$\lambda>0$决定两类证据的尺度；$T_N$是依据正常样本得到的全局单调参考变换。类别竞争和未知评分因而读取同一个$E$。这一形式给出可检验的候选实现，替代上一节旧模型仅在推理时采用的最小—最大融合。它是联合相容性评分，不假定两类证据统计独立。
+
+第一项损失让联合证据服务于正确类别选择，第二项约束规范化的观测预测分布。其绝对拟合意义属于观测分布；联合能量的参考尺度仍由明确的距离定义和正常数据建立。联合训练后的预测校准质量属于需要测量的模型性质。
+
+这两项各有作用。只有类别交叉熵时，所有类别的分数共同平移不会改变分类结果，因此模型主要学到相对竞争。真实观测的概率损失为条件分布增加了绝对拟合要求：被称为正常的解释需要预测真实回波。仅有概率拟合时，模型可能偏向容易恢复的平滑结构；联合语义监督使预测所保留的信息服务于正常类别区分。UniAD的联合重建退化、LIDO的原型压缩代价以及点云预训练中的重建—识别差异，分别为这种训练耦合提供了具体依据\paper{R041}\paper{R003}\paper{R092}。
+
+推理时，模型从联合证据中给出正常类别，并判断是否存在可信的正常解释。语义相近但观测不合的陌生物体，有机会被观测检验补回；几何相似但类别特征缺乏正常支持的物体，则仍由语义证据识别。正常类别在稀疏、遮挡等条件下的可接受变化，由真实正常数据中的条件分布学习。其核心假设是两类证据具有互补信息，这正是后续实验要回答的模型问题。
+
+与LIDO和高斯特征模型相比，候选方向把类别支持落实到留出的真实测量；与RbA相比，它为类别拒绝增加可检验的观测依据；与SeDiR相比，它把类别条件重建推进到道路逐点类别竞争和联合推理；与盲点预训练相比，它让预测证据继续参与最终感知决策。最有潜力的贡献落在这些联系的具体实现及其证据上。
+
+\section{对当前工作区主线的判断}
+
+当前权威方法见\texttt{model.md}，实现为\texttt{NormalHypothesis}和\texttt{SemanticHypotheses}。它从nuScenes官方骨干权重开始，通过正常语义中心与上下文表面候选组织逐点正常解释，再用实际回波核验。当前主线没有使用旧的合成异常二分类模型；旧论文草稿与旧合成实验不能作为该机制的有效证据。
+
+该设计已经具备与研究问题一致的几个部分：正常类别输出明确；语义与几何使用共享类别表示；初始上下文预测排除目标角度单元；同一表面候选共同解释多个正常点；推理只需要单帧。这些部分可以继续用于实现上述研究主线。
+
+本轮核对\texttt{src/model.py}中的\texttt{NormalHypothesis.loss}及\texttt{src/normal.py}中的\texttt{hypothesis\_loss}发现，当前语义分类损失来自原型距离，几何采用独立的允许类别联合似然损失，最终观测核验没有直接进入语义类别输出。二者通过共享原型相互影响。下一版最有意义的结构深化，是让完整观测证据直接参与正常类别竞争，使训练与最终判断之间的联系更强。这是具体的方法研究建议，本轮保持代码与实验不变。
+
+当前也有需要正面检验的环节。每类一个语义中心可能不足以覆盖正常多样性；类别紧致约束可能损伤正常细类。目标单元的其他点会参与表面候选更新，它们可能来自同一个未知物体，因此排除自身似然未必防止整个未知对象为自己提供证据。可学习的多项式表面既可能表达正常变化，也可能吸收未知几何。正常分位数只提供参考尺度，不保证跨域误报率。上述均是机制风险，尚不能不经对照就宣布为已证实失败原因。
+
+当前\texttt{results/train/normal/normal201.json}记录的201全量正常开发结果为点准确率84.45495\%、按当前评价点集和并集非空类别计算的平均交并比40.01745\%。下一步以同预算普通语义模型为参照，确定共享类别表示与观测预测对正常分割的具体影响。201负责正常开发；真实未知数据负责回答新增证据是否改善未知识别。这两个部分共同检验核心假设。
+
+训练边界也应保持准确：nuScenes中含义不明确的点仍可进入模型上下文，只是不参与可信正常监督。因此更准确的表述是“仅使用可信正常类别监督，未构造异常训练目标”，而不是声称训练输入中的每个点都已被证明属于STU正常类别。206用于目标域正常学习；201用于正常开发。若以后用val19决定结构或分数，它就属于开发集；这不影响开展研究，但需要把最终泛化结论留给未参与选择的数据。
+
+\section{下一项真正能改变判断的工作}
+
+下一项工作围绕一个明确判断组织：观测检验如何在保持正常感知的条件下，提供语义分类之外的实际收益。优先用已有结果确定证据来源，再据此实现候选中的类别竞争与观测预测耦合。本轮交付文献综合与模型研究设计。
+
+\begin{enumerate}
+\item 建立同骨干、同正常数据和相近训练预算的普通语义基线。保留最大概率、最大类别输出、能量和正常原型距离这些低成本未知分数。它消除“收益只是骨干或训练更强”的混杂，并给“优秀正常感知”提供可比较的参照。
+\item 在同一已训练模型上区分语义评分、观测评分与联合评分，先确认联合证据到底增加了什么。重点检查语义自信的未知点、稀疏正常物体和正常边界；比较应在相同正常误报率下进行，不能只展示几张成功图。它决定是否值得继续投入观测检验机制。
+\item 用最少的针对性对照核验信息来源：初始上下文候选与观测更新后候选分别能否识别未知；目标对象相邻点是否使其获得更强正常解释。它决定改进应集中于防止自我解释，还是正常候选覆盖不足。
+\item 将正常逐类分割、三项异常指标和单帧推理成本放在同一结论中。若正常质量退化，先判断是共享表征受损、类别覆盖不足还是拒绝规则误伤，再决定是否改变训练耦合；不把更多训练自动当作答案。
+\end{enumerate}
+
+这些对照并不要求引入额外数据。nuScenes提供广泛正常知识，206提供目标域正常观测，201检验当前可见正常类别与观测条件下的能力；真实异常验证用于检验未知识别假设，其用途需事先明确。模型选择一旦使用异常验证结果，就不再声称开发全过程完全不接触异常，但仍可严格保持训练不使用异常监督。这两种研究设置都可有意义，关键是如实说明。
+
+如果新增观测证据在相同正常代价下不能改善语义自信误认，就应当否定该分支当前承担的科学主张。仍可保留正常骨干、数据适配和语义表征。若它能稳定补充语义证据，并保留正常细类和效率，论文即可围绕明确能力组织：正常分类为何误认、补充预测如何检验这些误认、哪些观测下有效、付出了多少代价。排行榜成绩用于检验竞争力，研究贡献由这条证据链成立。
+
+\section{建议采用的论文叙事}
+
+面向ICLR模型方法论文，建议将研究主题定为“通过可检验的类别解释学习开放世界点云感知”。论文从正常语义感知的能力边界切入：类别分类回答观测最像哪个已知类别；观测检验进一步判断该类别能否预测实际测量。真实未知对象的自信误认，因而成为连接正常学习与未知发现的具体问题。已有置信度、原型和重建方法提供部分证据，正常多样性、域变化和信息复制则构成方法需要处理的学习难点。
+
+拟建立的方法贡献有一个中心：使正常类别的观测预测成为语义分类的组成部分。围绕这个中心，模型设计说明类别与预测如何共享和交换信息，学习目标说明真实正常标签如何同时训练解释与检验，实验说明这些联系怎样改变正常细类感知和未知误认。贡献的组织以模型机制为主，数据和指标为该机制提供证据。
+
+方法部分随后给出一个具体、可追踪的观测检验机制，解释哪些信息用于提出正常类别假设，哪些信息被保留用于检验，以及类别判断和观测预测如何共同学习。实验先说明正常能力得到保留，再说明语义分类原本自信误认的未知点得到改善，最后报告完整STU结果、逐条件行为与推理代价。若实验只支持其中一部分，就据此收窄结论。
+
+这条叙事的目标是让一个本来擅长识别熟悉世界的模型，在陌生世界面前更诚实。它的科学内容必须由正常识别与未知拒绝之间可测量的关系支撑。文献已经确认这个需求真实存在，也已否定若干宽泛的“首次”表述；当前模型是否提供了更好的解决办法，仍需要上述最小而直接的证据。
+
+\clearpage
+\section*{本轮正文通读文献与逐篇判断索引}
+\addcontentsline{toc}{section}{本轮正文通读文献与逐篇判断索引}
+以下每条对应一篇不同论文。正文范围与附录边界以\texttt{literature.csv}为准；短评为本轮阅读后的机制判断，不替代原文。
+\begingroup\small\setlength{\parindent}{0pt}
+\hypertarget{R001}{}\textbf{[R001] Neural Distribution Prior for LiDAR Out-of-Distribution Detection}. 2026，CVPR。\href{https://arxiv.org/html/2604.09232v2}{原文}\\
+机制：输出分布先验矩阵以交叉注意力调整逐点熵、能量或正负分组能量；分割解码支路保留正常预测。 与本课题的关系：类别先验、长尾校正、语义保持都已有；本路线需要观测证据而非又一个分数重权。\par\medskip
+\hypertarget{R002}{}\textbf{[R002] Relative Energy Learning for LiDAR Out-of-Distribution Detection}. 2026，ISPRS Journal of Photogrammetry and Remote Sensing 239:334–346。\href{https://arxiv.org/html/2511.06720v1}{原文}\\
+机制：共享点编码器加2K输出的小异常支路，正负类别组相对能量消除整体logit平移；标准Mask4Former解码器保持正常分割。 与本课题的关系：联合语义与未知支路早有；可借鉴训练分数与推理分数一致、同时报告正常代价。\par\medskip
+\hypertarget{R003}{}\textbf{[R003] Learning to Identify Out-of-Distribution Objects for 3D LiDAR Anomaly Segmentation}. 2026，CVPR。\href{https://arxiv.org/html/2604.23604}{原文}\\
+机制：MinkowskiNet双线性头，正确正常点置信加权原型；原型余弦约束、跨类对比和正常特征范数约束联合学习。 与本课题的关系：最直接竞争：已经解决正常学习、类别解释、未知识别的总体问题；我们的额外价值应是独立几何观测检验弥补语义盲区。\par\medskip
+\hypertarget{R005}{}\textbf{[R005] Spotting the Unexpected (STU): A 3D LiDAR Dataset for Anomaly Segmentation in Autonomous Driving}. 2025，CVPR。\href{https://arxiv.org/html/2505.02148}{原文}\\
+机制：定义与正常训练不重叠的道路物体异常，提供LiDAR逐点和实例标注；把图像异常评分迁至Mask4Former。 与本课题的关系：是研究问题的现实依据：正常类别性能与异常识别会分离；须精确遵循正常/忽略边界。\par\medskip
+\hypertarget{R006}{}\textbf{[R006] Open-world Semantic Segmentation for LIDAR Point Clouds}. 2022，ECCV。\href{https://arxiv.org/html/2207.01452}{原文}\\
+机制：扩展冗余分类头表示未知，未知合成和去掉真类后的未知次高校准；随后用伪旧类标签增量学习。 与本课题的关系：开放世界分割与知识增量边界清晰；本项目只研究未知识别，不应扩成增量学习。\par\medskip
+\hypertarget{R007}{}\textbf{[R007] Open-Set Semantic Segmentation for Point Clouds via Adversarial Prototype Framework}. 2023，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2023/papers/Li_Open-Set_Semantic_Segmentation_for_Point_Clouds_via_Adversarial_Prototype_Framework_CVPR_2023_paper.pdf}{原文}\\
+机制：类别原型距离分类与拉近约束，GAN合成特征，筛选不像已知的特征后用对抗映射器塑造边界。 与本课题的关系：可学习原型、距离拒识、保持语义早已明确实现。\par\medskip
+\hypertarget{R008}{}\textbf{[R008] LiON: Learning Point-Wise Abstaining Penalty for LiDAR Outlier DetectioN Using Diverse Synthetic Data}. 2025，AAAI。\href{https://arxiv.org/html/2309.10230v3}{原文}\\
+机制：从选择性分类解释拒识，用点级能量控制拒绝代价、分合成来源的可学习间隔；物体插入遵循角采样和遮挡。 与本课题的关系：应借鉴按保留正常预测比例衡量剩余错误，而不仅三分数；不继承其合成监督。\par\medskip
+\hypertarget{R009}{}\textbf{[R009] DOODLE: Diffusion-based Out-of-Distribution Learning for Open-set LiDAR Semantic Segmentation}. 2026，WACV。\href{https://openaccess.thecvf.com/content/WACV2026/papers/Oh_DOODLE_Diffusion-based_Out-of-Distribution_Learning_for_Open-set_LiDAR_Semantic_Segmentation_WACV_2026_paper.pdf}{原文}\\
+机制：正常语义特征投影到距离图，经VQ-VAE压缩后做距离和强度条件扩散；比较原始与去噪后的类别分布，放大基础异常分数。 与本课题的关系：LiDAR正常重建与语义差异检查已有；当前方法需强调对留出的物理观测进行条件检验及正常单独训练。\par\medskip
+\hypertarget{R010}{}\textbf{[R010] Out-of-Distribution Detection in LiDAR Semantic Segmentation Using Epistemic Uncertainty from Hierarchical GMMs}. 2025，arXiv。\href{https://arxiv.org/html/2510.08631}{原文}\\
+机制：每类别两分量GMM联合判别训练；对均值/方差建层次贝叶斯后验，用20次GMM参数采样的类别投票熵估计认知不确定性。 与本课题的关系：直接竞争正常分布＋语义＋可信度，且明确区分困难正常与真正未知。\par\medskip
+\hypertarget{R011}{}\textbf{[R011] Uncertainty Estimation and Out-of-Distribution Detection for LiDAR Scene Semantic Segmentation}. 2024，ECCV。\href{https://arxiv.org/html/2410.08687}{原文}\\
+机制：固定正常语义特征，逐类别单高斯；马氏距离卡方接受域判断未知；高斯/逆Wishart采样分类器区分不确定性。 与本课题的关系：“所有正常解释均不接受”早已在点云实现；本路线必须增加条件观测证据与可检验的改进。\par\medskip
+\hypertarget{R013}{}\textbf{[R013] RbA: Segmenting Unknown Regions Rejected by All}. 2023，ICCV。\href{https://arxiv.org/html/2211.14293}{原文}\\
+机制：掩码分类近似一对其余类别判断，对逐类正常支持取tanh后求和并取负；异常定义为所有已知类别均拒绝。 与本课题的关系：与研究问题中缺乏所有正常解释直接重合；不能靠改写语言主张创新。 支持保留丰富正常识别特征，再引入物理观测证据验证类别，避免靠削弱正常特征制造未知分离。\par\medskip
+\hypertarget{R015}{}\textbf{[R015] Pixel-wise Energy-biased Abstention Learning for Anomaly Segmentation on Complex Urban Driving Scenes}. 2022，ECCV。\href{https://arxiv.org/html/2111.12264}{原文}\\
+机制：PEBAL正常能量估计每点弃权代价，联合额外拒绝类训练、能量间隔及平滑稀疏约束。 与本课题的关系：所有类支持不够则拒绝已有；局部适应损失可改善未知但正常无损需实际检验。\par\medskip
+\hypertarget{R016}{}\textbf{[R016] DenseHybrid: Hybrid Anomaly Detection for Dense Open-set Recognition}. 2022，ECCV。\href{https://arxiv.org/html/2207.02606}{原文}\\
+机制：DenseHybrid共享语义特征同时估计正常logsumexp支持与二值域判别，两个互补分数构成异常对数比。 与本课题的关系：本文提出开放mIoU，直接检验未知拒绝损伤正常分类这一真实缺口。\par\medskip
+\hypertarget{R018}{}\textbf{[R018] PixOOD: Pixel-Level Out-of-Distribution Detection}. 2024，ECCV。\href{https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/07720.pdf}{原文}\\
+机制：冻结DINOv2正常特征；每类多参考点凝聚分布，语义分数与最近距离组成二维表示，再作正常分布与假定宽高斯异常分布的似然比检验。 与本课题的关系：直接覆盖多种正常解释及正常数据校准；单原型范围过窄是本路线应核查的机制问题。\par\medskip
+\hypertarget{R019}{}\textbf{[R019] Maskomaly: Zero-Shot Mask Anomaly Segmentation}. 2023，BMVC。\href{https://arxiv.org/html/2305.16972}{原文}\\
+机制：固定Mask2Former中正常掩码的拒绝分数与自发异常查询的接受分数相结合，并抑制正常掩码重叠边缘。 与本课题的关系：说明普通正常分割网络能自然形成异常掩码，也提醒明确训练与模型选择的监督边界。\par\medskip
+\hypertarget{R021}{}\textbf{[R021] Generalize or Detect? Towards Robust Semantic Segmentation Under Multiple Distribution Shifts}. 2024，NeurIPS。\href{https://arxiv.org/html/2411.03829}{原文}\\
+机制：显式分开正常域移与未知语义，生成配对图并用相对间隔监督异常高、正常域移低。 与本课题的关系：nuScenes→STU必须让正常类别跨域保持支持，不能以密度低直接判异常。\par\medskip
+\hypertarget{R022}{}\textbf{[R022] The Fishyscapes Benchmark: Measuring Blind Spots in Semantic Segmentation}. 2021，International Journal of Computer Vision。\href{https://arxiv.org/html/1904.03215}{原文}\\
+机制：Fishyscapes构建动态异常基准，并将正常特征通过RealNVP拟合密度，多层NLL按正常均值校正。 与本课题的关系：早已明确同时报告正常mIoU和总推理时间，新增正常插入控制合成伪影。\par\medskip
+\hypertarget{R023}{}\textbf{[R023] SegmentMeIfYouCan: A Benchmark for Anomaly Segmentation}. 2021，NeurIPS Datasets and Benchmarks。\href{https://arxiv.org/html/2104.14812}{原文}\\
+机制：SMIYC严格区分未知语义与道路障碍两个任务，引入区域级指标避免大物体主导逐像素结果。 与本课题的关系：STU同类研究须明确未知语义目标，三项逐点指标无法完整代表所有小物体或部署安全。\par\medskip
+\hypertarget{R024}{}\textbf{[R024] A Likelihood Ratio-Based Approach to Segmenting Unknown Objects}. 2025，International Journal of Computer Vision。\href{https://arxiv.org/html/2409.06424}{原文}\\
+机制：冻结正常语义网络；轻量未知估计模块学习总体正常与异常分布，将异常/正常对数比减去最强正常类别得分。 与本课题的关系：正常语义支持和另一路异常证据组合已有；其冻结语义网络很好地保护正常任务。\par\medskip
+\hypertarget{R025}{}\textbf{[R025] Pixel-wise Anomaly Detection in Complex Driving Scenes}. 2021，CVPR。\href{https://arxiv.org/pdf/2103.05445}{原文}\\
+机制：SynBoost组合语义不确定性、感知重合成差异及三流差异网络，覆盖异常被分成一类、多类或背景三种失败。 与本课题的关系：高置信错误和不确定错误应分开处理；正常语义保持是2021明确目标。\par\medskip
+\hypertarget{R027}{}\textbf{[R027] FlowCLAS: Enhancing Normalizing Flow-Based Anomaly Segmentation Via Contrastive Learning}. 2026，WACV。\href{https://arxiv.org/pdf/2411.19888}{原文}\\
+机制：FlowCLAS冻结特征，16层归一化流用正常似然和正常/异常对比训练；附正常语义头，SAM2掩码众数区间平滑。 与本课题的关系：正常流密度模型的多模态困难有直接消融；不能只添加语义头就假定正常支持可信。\par\medskip
+\hypertarget{R028}{}\textbf{[R028] ClimaOoD: Improving Anomaly Segmentation via Physically Realistic Synthetic Data}. 2026，CVPR。\href{https://arxiv.org/html/2512.02686}{原文}\\
+机制：语义条件天气生成与透视约束物体放置，研究异常合成的环境多样性。 与本课题的关系：可以支持正常天气域差覆盖的重要性，不能用来支持无合成主线。\par\medskip
+\hypertarget{R029}{}\textbf{[R029] Open-Set LiDAR Panoptic Segmentation Guided by Uncertainty-Aware Learning}. 2025，IROS。\href{https://arxiv.org/html/2506.13265}{原文}\\
+机制：ULOPS共享BEV骨干，Dirichlet语义证据、实例嵌入原型和中心三头；按不确定性分已知未知再聚类。 与本课题的关系：点云联合正常/未知感知已有，正常单独版本可参考，不能把最佳结果直接列为正常单独基线。\par\medskip
+\hypertarget{R030}{}\textbf{[R030] Label-Free Model Failure Detection for Lidar-based Point Cloud Segmentation}. 2025，IEEE Intelligent Vehicles Symposium。\href{https://arxiv.org/html/2407.14306}{原文}\\
+机制：监督语义运动分割与自监督场景流推导运动标签比较，以不同信息来源的矛盾发现模型错误。 与本课题的关系：物理预测与语义判断不同来源可互补，但必须排除共同盲点和域移。\par\medskip
+\hypertarget{R031}{}\textbf{[R031] Outlier detection by ensembling uncertainty with negative objectness}. 2024，BMVC。\href{https://arxiv.org/pdf/2402.15374}{原文}\\
+机制：把已知类别的不确定性与额外负类概率相加；掩码模型需区分负类和无对象类。 与本课题的关系：两路须有互补失败模式；简单加分已可很强，需证实新增物理证据独立增益。\par\medskip
+\hypertarget{R032}{}\textbf{[R032] Prior2Former - Evidential Modeling of Mask Transformers for Assumption-Free Open-World Panoptic Segmentation}. 2025，ICCV。\href{https://arxiv.org/html/2504.04841}{原文}\\
+机制：Prior2Former为掩码内外归属预测Beta证据，以对称Dice和低证据像素采样训练；类别支持与最佳掩码概率相乘。 与本课题的关系：非常贴合用户新中心：同模型正常高性能并识别未知；新增之处必须优于单纯证据化。\par\medskip
+\hypertarget{R033}{}\textbf{[R033] Road Anomaly Detection by Partial Image Reconstruction With Segmentation Coupling}. 2021，ICCV。\href{https://openaccess.thecvf.com/content/ICCV2021/papers/Vojir_Road_Anomaly_Detection_by_Partial_Image_Reconstruction_With_Segmentation_Coupling_ICCV_2021_paper.pdf}{原文}\\
+机制：JSR-Net小瓶颈重建路面且主动破坏非路面重建，SSIM误差与冻结语义logits用卷积耦合。 与本课题的关系：语义解释＋正常重建耦合已有；必须防把所有非背景当未知。\par\medskip
+\hypertarget{R034}{}\textbf{[R034] Detecting Road Obstacles by Erasing Them}. 2024，IEEE Transactions on Pattern Analysis and Machine Intelligence 46(4):2450–2460。\href{https://arxiv.org/html/2012.13633v3}{原文}\\
+机制：滑窗遮住道路局部，从周围重建道路，再由原图/重建图双流网络检出被抹去物体。 与本课题的关系：提前决定哪里看会把漏检固化；遮住目标避免复制很重要，但修复正确不等于异常识别成功。\par\medskip
+\hypertarget{R035}{}\textbf{[R035] Detecting the Unexpected via Image Resynthesis}. 2019，ICCV。\href{https://arxiv.org/html/1904.07595}{原文}\\
+机制：正常语义分割后从类别图重合成图像，原图/重合成图/类别图的三流差异网络定位无法被类别解释的区域。 与本课题的关系：观测应与正常语义解释匹配的核心思想早在2019已提出。\par\medskip
+\hypertarget{R036}{}\textbf{[R036] DRAEM - A Discriminatively Trained Reconstruction Embedding for Surface Anomaly Detection}. 2021，ICCV。\href{https://arxiv.org/pdf/2108.07610}{原文}\\
+机制：恢复网络把损坏图像恢复为正常，判别网络读取输入与恢复结果，联合学习逐像素异常。 与本课题的关系：端到端利用正常恢复辅助异常判别已有明确先例。\par\medskip
+\hypertarget{R037}{}\textbf{[R037] DeSTSeg: Segmentation Guided Denoising Student-Teacher for Anomaly Detection}. 2023，CVPR。\href{https://arxiv.org/pdf/2211.11317}{原文}\\
+机制：固定教师读取干净图像，学生读取损坏图像并学习去噪特征；第二阶段把师生差异送入分割头。 与本课题的关系：已展示师生差异需要针对最终分割目标学习读出。\par\medskip
+\hypertarget{R039}{}\textbf{[R039] Inpainting Transformer for Anomaly Detection}. 2022，ICIAP。\href{https://arxiv.org/pdf/2104.13897}{原文}\\
+机制：遮住目标图块，仅利用周围图块的 Transformer 表示恢复它。 与本课题的关系：“不看目标、从上下文预测正常外观”是直接先例。\par\medskip
+\hypertarget{R040}{}\textbf{[R040] Self-Supervised Predictive Convolutional Attentive Block for Anomaly Detection}. 2022，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2022/papers/Ristea_Self-Supervised_Predictive_Convolutional_Attentive_Block_for_Anomaly_Detection_CVPR_2022_paper.pdf}{原文}\\
+机制：只用四角膨胀卷积预测中心特征，再做通道注意力，作为可插入的自监督预测模块。 与本课题的关系：目标排除必须明确排除发生在原始输入还是已经混合上下文的特征上。\par\medskip
+\hypertarget{R041}{}\textbf{[R041] A Unified Model for Multi-class Anomaly Detection}. 2022，NeurIPS。\href{https://arxiv.org/pdf/2206.03687}{原文}\\
+机制：冻结特征编码器；邻域遮挡注意力、分层可学习查询、特征扰动共同抑制恒等复制。 与本课题的关系：对当前“正常知识、目标排除、查询预测”构成近邻；多类正常联合并非新增概念。\par\medskip
+\hypertarget{R042}{}\textbf{[R042] Dinomaly: The Less Is More Philosophy in Multi-Class Unsupervised Anomaly Detection}. 2025，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2025/papers/Guo_Dinomaly_The_Less_Is_More_Philosophy_in_Multi-Class_Unsupervised_Anomaly_CVPR_2025_paper.pdf}{原文}\\
+机制：采用强冻结特征、较弱的线性注意力解码器、较松的分组恢复和特征丢弃，限制异常复制。 与本课题的关系：要求将正常恢复质量和未知识别质量分开论证。\par\medskip
+\hypertarget{R043}{}\textbf{[R043] CutPaste: Self-Supervised Learning for Anomaly Detection and Localization}. 2021，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2021/papers/Li_CutPaste_Self-Supervised_Learning_for_Anomaly_Detection_and_Localization_CVPR_2021_paper.pdf}{原文}\\
+机制：把正常图像和两个合成损坏类型作为分类任务学习表示。 与本课题的关系：直接证实“异常”构念不同会反转方法排序。\par\medskip
+\hypertarget{R044}{}\textbf{[R044] DSR -- A dual subspace re-projection network for surface anomaly detection}. 2022，ECCV。\href{https://www.ecva.net/papers/eccv_2022/papers_ECCV/papers/136910526.pdf}{原文}\\
+机制：把输入分别投影至通用表征空间与目标物体正常空间，再比较两个恢复结果进行分割。 与本课题的关系：通用解释与正常解释的比较已经存在，创新不能仅称“两种解释”。\par\medskip
+\hypertarget{R045}{}\textbf{[R045] SimpleNet: A Simple Network for Image Anomaly Detection and Localization}. 2023，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2023/papers/Liu_SimpleNet_A_Simple_Network_for_Image_Anomaly_Detection_and_Localization_CVPR_2023_paper.pdf}{原文}\\
+机制：固定骨干，轻量线性适配器和两层判别器学习正常特征与扰动特征的边界。 与本课题的关系：轻量头可以强，但性能依赖异常监督代理与选择规则，不能直接移入当前正常训练原则。\par\medskip
+\hypertarget{R046}{}\textbf{[R046] Towards Total Recall in Industrial Anomaly Detection}. 2022，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2022/papers/Roth_Towards_Total_Recall_in_Industrial_Anomaly_Detection_CVPR_2022_paper.pdf}{原文}\\
+机制：收集正常局部特征，以覆盖优先的子集选择压缩记忆库。 与本课题的关系：当前每类单原型应与多模态正常覆盖比较；数据多并不代表覆盖好。\par\medskip
+\hypertarget{R047}{}\textbf{[R047] PaDiM: a Patch Distribution Modeling Framework for Anomaly Detection and Localization}. 2020，ICPR 2020 Industrial Machine Learning Workshop。\href{https://arxiv.org/pdf/2011.08785}{原文}\\
+机制：在每个图像位置拟合多层局部特征的联合高斯，保留跨层相关性。 与本课题的关系：类别原型的各向同性距离忽略正常类内方向差异；协方差解释已有成熟先例。\par\medskip
+\hypertarget{R048}{}\textbf{[R048] Anomaly Detection via Reverse Distillation From One-Class Embedding}. 2022，CVPR。\href{https://arxiv.org/pdf/2201.10703}{原文}\\
+机制：将教师多层特征经正常嵌入瓶颈压缩，再以反向解码器恢复各层特征。 与本课题的关系：正常解释模型的防复制结构已经广泛研究，需要说明当前几何预测额外提供什么。\par\medskip
+\hypertarget{R049}{}\textbf{[R049] EfficientAD: Accurate Visual Anomaly Detection at Millisecond-Level Latencies}. 2024，WACV。\href{https://arxiv.org/pdf/2303.14535}{原文}\\
+机制：局部师生检测结构缺陷，全局自编码器检测逻辑异常；学生另预测自编码器误差，减少正常系统偏差。 与本课题的关系：正常验证校准、局部与全局两个正常证据以及高效联合模型均已存在。\par\medskip
+\hypertarget{R050}{}\textbf{[R050] Multimodal Industrial Anomaly Detection via Hybrid Fusion}. 2023，CVPR。\href{https://arxiv.org/pdf/2303.00601}{原文}\\
+机制：对齐图像图块与三维局部特征，用无监督对比学习融合，并保留 RGB、三维、融合三个记忆库。 与本课题的关系：几何与外观互补已有实证，贡献需说明与同一正常类别解释的关系。\par\medskip
+\hypertarget{R051}{}\textbf{[R051] Asymmetric Student-Teacher Networks for Industrial Anomaly Detection}. 2023，WACV。\href{https://openaccess.thecvf.com/content/WACV2023/papers/Rudolph_Asymmetric_Student-Teacher_Networks_for_Industrial_Anomaly_Detection_WACV_2023_paper.pdf}{原文}\\
+机制：可逆流教师把正常特征转为高斯，非可逆卷积学生拟合其输出，以结构不对称制造异常差异。 与本课题的关系：正常密度与异构学生差异已有先例；必须避免将结构性质夸大为未知检出保证。\par\medskip
+\hypertarget{R052}{}\textbf{[R052] Back to the Feature: Classical 3D Features Are (Almost) All You Need for 3D Anomaly Detection}. 2023，CVPR Workshops。\href{https://arxiv.org/pdf/2203.05550}{原文}\\
+机制：利用局部法向关系的经典几何描述，与深度 RGB 特征结合建立正常记忆。 与本课题的关系：几何细节并非一定需要更强深度骨干，目标分辨率与正常覆盖可能更重要。\par\medskip
+\hypertarget{R053}{}\textbf{[R053] Real3D-AD: A Dataset of Point Cloud Anomaly Detection}. 2023，NeurIPS Datasets and Benchmarks。\href{https://arxiv.org/pdf/2309.13226}{原文}\\
+机制：Real3D-AD 提供完整正常模板和局部扫描测试；Reg3D 用配准后的几何与局部特征正常距离。 与本课题的关系：“正常物体模板”与“19 类开放道路场景正常知识”不能等同。\par\medskip
+\hypertarget{R054}{}\textbf{[R054] PointAD: Comprehending 3D Anomalies from Points and Pixels for Zero-shot 3D Anomaly Detection}. 2024，NeurIPS。\href{https://papers.nips.cc/paper_files/paper/2024/file/9a263e235f6d1521d13a8531c7974951-Paper-Conference.pdf}{原文}\\
+机制：三维点渲染成多视图，学习正常/损坏提示，联合图像级、像素级与点级多实例学习。 与本课题的关系：比较前必须分开“未见目标类别”和“从未训练异常”。\par\medskip
+\hypertarget{R055}{}\textbf{[R055] PointAD+: Learning Hierarchical Representations for Zero-shot 3D Anomaly Detection}. 2025，arXiv。\href{https://arxiv.org/pdf/2509.03277}{原文}\\
+机制：在 PointAD 基础上融合显式三维邻域几何与多视图隐式特征，加入层级提示对比。 与本课题的关系：几何增强未必同步改进跨域性能，需区分定位与整体分类指标。\par\medskip
+\hypertarget{R056}{}\textbf{[R056] Towards Scalable 3D Anomaly Detection and Localization: A Benchmark via 3D Anomaly Synthesis and A Self-Supervised Learning Network}. 2024，CVPR。\href{https://arxiv.org/pdf/2311.14897}{原文}\\
+机制：按曲率和法向变化保留局部几何，再进行遮挡恢复；测试迭代恢复并比较几何与特征。 与本课题的关系：正常三维上下文预测和优先几何细节已有直接先例。\par\medskip
+\hypertarget{R057}{}\textbf{[R057] Geometry-Aligned and Anomaly-Aware Reconstruction for 3D Anomaly Detection}. 2026，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2026/papers/Wu_Geometry-Aligned_and_Anomaly-Aware_Reconstruction_for_3D_Anomaly_Detection_CVPR_2026_paper.pdf}{原文}\\
+机制：几何一致的扩散噪声生成损坏输入，检索配准正常模板，再用几何和注意力差异选择可信输入或正常模板。 与本课题的关系：“哪里值得看、哪里应使用正常参考”已有对应机制，但训练监督不同。\par\medskip
+\hypertarget{R058}{}\textbf{[R058] Anomaly-to-Normal Translation: A Training Paradigm for Feature-Based 3D Point Cloud Anomaly Detection}. 2026，CVPR Workshops。\href{https://openaccess.thecvf.com/content/CVPR2026W/VISION26/papers/Fichtel_Anomaly-to-Normal_Translation_A_Training_Paradigm_for_Feature-Based_3D_Point_Cloud_CVPRW_2026_paper.pdf}{原文}\\
+机制：训练编码解码器把合成异常恢复正常，再以输入与恢复后的特征差异进行检测。 与本课题的关系：训练目标、表征和评分必须联合审查，不能把单组件优势外推。\par\medskip
+\hypertarget{R059}{}\textbf{[R059] A Semantically Disentangled Unified Model for Multi-category 3D Anomaly Detection}. 2026，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2026/papers/Kim_A_Semantically_Disentangled_Unified_Model_for_Multi-category_3D_Anomaly_Detection_CVPR_2026_paper.pdf}{原文}\\
+机制：多尺度编码器以物体类别分类和监督对比学习解耦语义；全局类别令牌查询局部特征，并加入几何曲率偏置重建。 与本课题的关系：是本组最强新颖性威胁：正常类别理解先于几何恢复已经是核心命题；当前潜在区别必须落实到逐点同类别语义与独立几何解释的共同成立。 相对 SeDiR 的可研究增量：各正常类别对目标真实回波的条件相容性直接进入逐点正常语义类别竞争；SeDiR 的物体级分类辅助恢复不包含该密集逐点联合判断机制。组合损失/分数本身不构成首次。\par\medskip
+\hypertarget{R060}{}\textbf{[R060] Back to Point: Exploring Point-Language Models for Zero-Shot 3D Anomaly Detection}. 2026，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2026/papers/Li_Back_to_Point_Exploring_Point-Language_Models_for_Zero-Shot_3D_Anomaly_CVPR_2026_paper.pdf}{原文}\\
+机制：直接利用点语言模型，结合可学习正常/损坏提示、分层局部特征和 FPFH 几何辅助学习。 与本课题的关系：最终任务指标必须分别考察，不能以一个指标改进代替整体进步。\par\medskip
+\hypertarget{R061}{}\textbf{[R061] GPFlow: Gaussian Prototype Probability Flow for Unsupervised Multi-Modal Anomaly Detection}. 2026，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2026/papers/Li_GPFlow_Gaussian_Prototype_Probability_Flow_for_Unsupervised_Multi-Modal_Anomaly_Detection_CVPR_2026_paper.pdf}{原文}\\
+机制：多模态正常特征拟合高斯混合原型，以混合密度的后验均值流收缩至正常区域，联合模态内和跨模态恢复。 与本课题的关系：正常原型、多模态解释、概率收缩均已有先进近邻；可借鉴类内各向异性而非直接追加模块。\par\medskip
+\hypertarget{R062}{}\textbf{[R062] Do Deep Generative Models Know What They Don't Know?}. 2019，ICLR。\href{https://arxiv.org/pdf/1810.09136}{原文}\\
+机制：检验生成模型似然能否识别未知分布，发现低层统计主导密度。 与本课题的关系：几何正常负对数似然不能直接命名为异常概率。\par\medskip
+\hypertarget{R063}{}\textbf{[R063] Likelihood Ratios for Out-of-Distribution Detection}. 2019，NeurIPS。\href{https://arxiv.org/pdf/1906.02845}{原文}\\
+机制：目标密度减去破坏语义后保留背景的密度，以抵消背景统计。 与本课题的关系：当前上下文似然若无背景对照，并不会自动成为语义似然比。\par\medskip
+\hypertarget{R064}{}\textbf{[R064] Input complexity and out-of-distribution detection with likelihood-based generative models}. 2020，ICLR。\href{https://arxiv.org/pdf/1909.11480}{原文}\\
+机制：用通用压缩长度估计输入复杂度，对似然进行描述长度修正。 与本课题的关系：点数、距离和表面复杂度可能影响几何似然，必须避免把观测复杂度当类别异常。\par\medskip
+\hypertarget{R065}{}\textbf{[R065] Detecting Out-of-Distribution Inputs to Deep Generative Models Using Typicality}. 2019，arXiv。\href{https://arxiv.org/pdf/1906.02994}{原文}\\
+机制：检查一批输入的平均负对数似然是否接近正常熵，而非只判断密度是否足够高。 与本课题的关系：正常分位数只能刻画正常尾部，不能凭此得到未知检出率。\par\medskip
+\hypertarget{R066}{}\textbf{[R066] Why Normalizing Flows Fail to Detect Out-of-Distribution Data}. 2020，NeurIPS。\href{https://arxiv.org/pdf/2006.08545}{原文}\\
+机制：流模型依赖局部像素相关性，耦合层协作可以恢复被遮挡信息；改遮挡结构、瓶颈和输入特征改变 OOD 行为。 与本课题的关系：当前从原始回波独立排除目标单元更有意义，但相邻单元仍可能属于同一异常物体。\par\medskip
+\hypertarget{R067}{}\textbf{[R067] Density of States Estimation for Out of Distribution Detection}. 2021，AISTATS。\href{https://proceedings.mlr.press/v130/morningstar21a/morningstar21a.pdf}{原文}\\
+机制：将密度、潜变量概率、雅可比等内部统计分别保留，拟合这些统计在正常数据上的分布。 与本课题的关系：多证据联合的价值可能来自防止分量抵消，需区分此点与语义可解释性。\par\medskip
+\hypertarget{R068}{}\textbf{[R068] Perfect Density Models Cannot Guarantee Anomaly Detection}. 2021，Entropy。\href{https://arxiv.org/pdf/2012.03808}{原文}\\
+机制：密度依赖坐标表示；可逆变换能改变密度排序而不改变语义身份，某些变换甚至保持正常分布而改变异常位置。 与本课题的关系：当前方法必须明确自己的语义和几何归纳假设，不能声称正常概率准确就保证未知检出。\par\medskip
+\hypertarget{R069}{}\textbf{[R069] Excision And Recovery: Visual Defect Obfuscation Based Self-Supervised Anomaly Detection Strategy}. 2023，arXiv。\href{https://arxiv.org/pdf/2310.04010}{原文}\\
+机制：用 DINO 类令牌注意力选择疑似物体区域，抹除细节但保留马赛克提示，再恢复正常。 与本课题的关系：学习关注哪里以及恢复正常的两步设计已有先例；必须追踪参数选择监督来源。\par\medskip
+\hypertarget{R070}{}\textbf{[R070] Feature Attenuation of Defective Representation Can Resolve Incomplete Masking on Anomaly Detection}. 2024，arXiv。\href{https://arxiv.org/pdf/2407.04597}{原文}\\
+机制：预测各图块的正常恢复难度，对疑似难恢复特征进行软衰减，减少跳跃连接泄漏缺陷。 与本课题的关系：适应注意力、特征抑制和防恢复捷径已有机制，单纯增加模块不形成清晰贡献。\par\medskip
+\hypertarget{R092}{}\textbf{[R092] Masked Autoencoders for Point Cloud Self-supervised Learning}. 2022，ECCV。\href{https://arxiv.org/pdf/2203.06604}{原文}\\
+机制：将点云划为FPS/KNN相对坐标块；仅可见块进入标准Transformer编码器，掩码词元及其位置延迟到轻量解码器，使用Chamfer距离恢复坐标。 与本课题的关系：目标观测不能提前进入预测上下文已有明确先例；当前可区分之处应是类别共享的正常解释在推理中是否提供独立证据。\par\medskip
+\hypertarget{R093}{}\textbf{[R093] Point-M2AE: Multi-scale Masked Autoencoders for Hierarchical Point Cloud Pre-training}. 2022，NeurIPS。\href{https://arxiv.org/pdf/2205.14401}{原文}\\
+机制：在最粗点集产生遮挡，再回投可见邻域确保跨尺度一致；分层编码、逐级传播和跳接解码恢复较细尺度坐标。微调阶段另外加入局部球邻域注意力约束。 与本课题的关系：多尺度、局部全局结构和一致信息留出已经成熟；正常几何误差能否排除未知物体仍需要独立问题定义。\par\medskip
+\hypertarget{R094}{}\textbf{[R094] Point-BERT: Pre-training 3D Point Cloud Transformers with Masked Point Modeling}. 2022，CVPR。\href{https://arxiv.org/pdf/2111.14819}{原文}\\
+机制：先训练离散变分自编码器，把局部几何变成词元，再用Transformer预测遮挡词元；点块混合与MoCo辅助目标加强全局语义。词元位置保留。 与本课题的关系：局部几何词元与语义表示联合学习并非新概念；当前须回答为何正常类别解释的绝对支持度和观测核验能补足封闭集分类。\par\medskip
+\hypertarget{R095}{}\textbf{[R095] Masked Discrimination for Self-Supervised Learning on Point Clouds}. 2022，ECCV。\href{https://arxiv.org/pdf/2203.11183}{原文}\\
+机制：将90\%点块遮挡，只编码可见部分；交叉注意力区分被遮挡的真实点与空间随机假点，去除离实测表面过近的歧义假点，以二元focal损失训练。 与本课题的关系：从留出上下文判断观测兼容性已很邻近；当前需区分占据真假与正常类别是否提供可信解释。\par\medskip
+\hypertarget{R096}{}\textbf{[R096] Occupancy-MAE: Self-supervised Pre-training Large-scale LiDAR Point Clouds with Masked Occupancy Autoencoders}. 2022，arXiv。\href{https://arxiv.org/pdf/2206.09900}{原文}\\
+机制：稀疏卷积编码剩余非空体素，轻量稠密反卷积预测全空间占据；0–30、30–50和50米以外分别采用90\%、70\%、50\%遮挡。 与本课题的关系：距离感知几何学习和正常数据预训练已有，但仅凭这些目标不能得出未知类别识别；域适应实验使用目标数据，须与纯源域条件区分。\par\medskip
+\hypertarget{R097}{}\textbf{[R097] Masked Autoencoder for Self-Supervised Pre-training on Lidar Point Clouds}. 2023，WACV Workshops。\href{https://arxiv.org/pdf/2207.00531}{原文}\\
+机制：Voxel-MAE在稀疏非空体素上遮挡，SST编码可见体素；解码器联合预测点坐标、点数、体素空/非空，随机空体素作为附加查询。 与本课题的关系：这是反对“多做正常重建就必然提高异常识别”的直接相邻证据；当前必须证明几何核验带来的是异常判断依据，而非只改善语义表示。\par\medskip
+\hypertarget{R098}{}\textbf{[R098] GeoMAE: Masked Geometric Target Prediction for Self-supervised Point Cloud Pre-Training}. 2023，CVPR。\href{https://arxiv.org/pdf/2305.08808}{原文}\\
+机制：SST编码可见体素；两个独立解码器分别预测多尺度质心/占据和法向/曲率；法向与伪曲率从相邻体素点的协方差分解构造。 与本课题的关系：“几何辅助学习改善语义”已直接被覆盖；当前故事需要说明推理几何证据对语义模型已经接受的异常是否还能提供区分。\par\medskip
+\hypertarget{R099}{}\textbf{[R099] MAELi: Masked Autoencoder for Large-Scale LiDAR Point Clouds}. 2024，WACV。\href{https://arxiv.org/pdf/2212.07207v2}{原文}\\
+机制：用射线区分占据、自由和未知体素，未知不施加损失；稀疏解码逐级生成并学习剪枝，按射线到体素中心距离加权自由空间损失；球面降采样模拟角分辨率变化。 与本课题的关系：观测、未观测和自由空间边界是当前回波条件建模的重要已有依据；当前不预测缺失表面，不能借它的完整物体重建图证明自己的正常解释。\par\medskip
+\hypertarget{R100}{}\textbf{[R100] Multi-Scale Neighborhood Occupancy Masked Autoencoder for Self-Supervised Learning in LiDAR Point Clouds}. 2025，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2025/papers/Abdelsamad_Multi-Scale_Neighborhood_Occupancy_Masked_Autoencoder_for_Self-Supervised_Learning_in_LiDAR_CVPR_2025_paper.pdf}{原文}\\
+机制：PTv3编码可见体素，仅重建可见体素邻域占据；多个尺度分别解码，并在粗到细层次中继续遮挡，控制各尺度信息泄漏与可学习邻域。 与本课题的关系：最直接威胁之一：高效的无泄漏局部观测预测已经有系统方法；当前应把重点放在正常解释的可识别性，不能把局部留出与效率本身作为主要发现。\par\medskip
+\hypertarget{R103}{}\textbf{[R103] UniPAD: A Universal Pre-training Paradigm for Autonomous Driving}. 2024，CVPR。\href{https://arxiv.org/pdf/2310.08370v2}{原文}\\
+机制：遮挡LiDAR/图像后将特征变为三维体表示，SDF与颜色场通过可微体渲染预测深度和RGB；以有LiDAR深度支持的射线子集减少计算。 与本课题的关系：覆盖遮挡→几何场→射线观测→语义表征的宽泛组合；当前需要在测试时可信正常解释这一环节形成更具体、可证伪的贡献。\par\medskip
+\hypertarget{R104}{}\textbf{[R104] Ponder: Point Cloud Pre-training via Neural Rendering}. 2023，ICCV。\href{https://openaccess.thecvf.com/content/ICCV2023/papers/Huang_Ponder_Point_Cloud_Pre-training_via_Neural_Rendering_ICCV_2023_paper.pdf}{原文}\\
+机制：多帧RGB-D反投影为点云，点编码特征池化至体素，经三维卷积和条件SDF/颜色场以NeuS渲染RGB和深度；另以深度约束表面距离与自由空间。 与本课题的关系：说明几何/观测重建可帮助正常任务表征，也明确重建并非异常检测机制；不能把当前轻量语义与几何分支本身视为新贡献。\par\medskip
+\hypertarget{R105}{}\textbf{[R105] PonderV2: Improved 3D Representation with A Universal Pre-training Paradigm}. 2025，IEEE TPAMI。\href{https://arxiv.org/pdf/2310.08586}{原文}\\
+机制：将点云或图像编码到三维体特征，经条件SDF、颜色和可选语义场渲染观测；域特定归一化支持多个室内数据集统一预训练，室外部分沿用UniPAD范式。 与本课题的关系：支持几何重建和语义目标共同提升正常感知，但是否拒绝未知类别没有证据。语义监督需按来源区分，额外目标域数据必须公平比较。\par\medskip
+\hypertarget{R106}{}\textbf{[R106] nuScenes: A multimodal dataset for autonomous driving}. 2020，CVPR。\href{https://arxiv.org/pdf/1903.11027}{原文}\\
+机制：多模态驾驶数据集，20秒片段、2Hz框标注、多次LiDAR扫描及语义地图，检测以地面中心距离匹配而非框交并比。 与本课题的关系：支撑数据来源和观测变化背景；正确正常类别与忽略类别还需当前官方lidarseg定义，本文不能单独核定。\par\medskip
+\hypertarget{R107}{}\textbf{[R107] SemanticKITTI: A Dataset for Semantic Scene Understanding of LiDAR Sequences}. 2019，ICCV。\href{https://arxiv.org/pdf/1904.01416}{原文}\\
+机制：逐帧360度点级标注，利用配准聚合点云人工核验；单帧19类，多帧区分运动与静止25类，另以未来帧构建语义补全。 与本课题的关系：直接支撑正常语义监督语义边界、原点细节保留及观测依赖；补全不可见区域与识别异常不是同一任务。\par\medskip
+\hypertarget{R109}{}\textbf{[R109] 3D Semantic Segmentation in the Wild: Learning Generalized Models for Adverse-Condition Point Clouds}. 2023，CVPR。\href{https://arxiv.org/pdf/2304.00690}{原文}\\
+机制：SemanticSTF恶劣天气点级数据；PointDR弱/强几何增强、类别动量原型与强视图对比学习，学习同类扰动稳定表征。 与本课题的关系：正常解释需覆盖测量条件变化，异常不能简单定义为所有低置信观测；类别原型/对比稳健训练是直接先例。\par\medskip
+\hypertarget{R110}{}\textbf{[R110] Robo3D: Towards Robust and Reliable 3D Perception against Corruptions}. 2023，ICCV。\href{https://openaccess.thecvf.com/content/ICCV2023/papers/Kong_Robo3D_Towards_Robust_and_Reliable_3D_Perception_against_Corruptions_ICCV_2023_paper.pdf}{原文}\\
+机制：Robo3D以物理或经验模型合成8种观测损坏；可变体素尺度及完整/稀疏双分支预测一致性提高稳健性。 与本课题的关系：证明正常感知与稳健性需分别检验；不能为了异常敏感性破坏正常类稀疏/损坏容忍，也不能把所有不变性免费视为收益。\par\medskip
+\hypertarget{R111}{}\textbf{[R111] Instant Domain Augmentation for LiDAR Semantic Segmentation}. 2023，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2023/papers/Ryu_Instant_Domain_Augmentation_for_LiDAR_Semantic_Segmentation_CVPR_2023_paper.pdf}{原文}\\
+机制：LiDomAug多帧建世界点云、静动态运动补偿、10cm体素标签投票传播；随机LiDAR参数与位姿投影z-buffer重采样、运动畸变、场景/传感器混合。 与本课题的关系：当前nuScenes训练与目标观测密度差异有成熟方案；不能只用丢点从稀疏源域造出完整密集观测。效率须计完整系统。\par\medskip
+\hypertarget{R112}{}\textbf{[R112] Single Domain Generalization for LiDAR Semantic Segmentation}. 2023，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2023/papers/Kim_Single_Domain_Generalization_for_LiDAR_Semantic_Segmentation_CVPR_2023_paper.pdf}{原文}\\
+机制：DGLSS随机按束删点生成稀疏视图，对应体素特征一致、无对应点由相似性筛选邻居聚合；约束每场景类别原型相关矩阵一致。 与本课题的关系：最直接支持不能机械增加稀疏一致性；当前需保留正常细节和细类语义，而非只学习域不变压缩。\par\medskip
+\hypertarget{R113}{}\textbf{[R113] Rethinking LiDAR Domain Generalization: Single Source as Multiple Density Domains}. 2024，ECCV。\href{https://arxiv.org/pdf/2312.12098}{原文}\\
+机制：DDFE根据雷达束配置和距离估计多尺度期望密度，训练源域10/90百分位软截断，再调制点/体素特征；额外旋转平移混合与按束删点扩充密度。 与本课题的关系：观测密度条件化、原点偏移加体素双路已有先例；支持区分物理距离和采样密度，不能把密度异常等同语义异常。\par\medskip
+\hypertarget{R114}{}\textbf{[R114] Towards Explicit Geometry-Reflectance Collaboration for Generalized LiDAR Segmentation in Adverse Weather}. 2025，CVPR。\href{https://arxiv.org/pdf/2506.02396}{原文}\\
+机制：GRC分离三维几何与二维反射强度编码，以高斯隐变量约束、逆不确定度局部融合和中间查询全局注意力融合。 与本课题的关系：正常跨域与正常源域细节确有取舍；独立信息通路有依据，但任意融合、更多融合层不必更好。\par\medskip
+\hypertarget{R115}{}\textbf{[R115] Domain-aware Category-level Geometry Learning Segmentation for 3D Point Clouds}. 2025，ICCV。\href{https://openaccess.thecvf.com/content/ICCV2025/papers/He_Domain-aware_Category-level_Geometry_Learning_Segmentation_for_3D_Point_Clouds_ICCV_2025_paper.pdf}{原文}\\
+机制：以Sinkhorn匹配构造每类特征几何嵌入矩阵并动量累计可靠正确点，通过可学几何属性到类别关系监督；原始及模拟天气特征共享映射。 与本课题的关系：类别条件几何与语义共同学习已有直接先例；当前贡献须落在同一正常类别解释真实观测及拒绝行为，不能只说耦合几何和语义。\par\medskip
+\hypertarget{R116}{}\textbf{[R116] Rethinking Data Augmentation for Robust LiDAR Semantic Segmentation in Adverse Weather}. 2024，arXiv；本轮未核实会议。\href{https://arxiv.org/pdf/2407.02286}{原文}\\
+机制：先对4类观测损坏做受控模拟，提出局部距离/角度扰动和DQN选择损失/熵较高的删点模式。 与本课题的关系：数据增强应来自具体观测失效证据，兼顾正常感知代价；不能无限增强/遮挡而忽视正常类精度。\par\medskip
+\hypertarget{R117}{}\textbf{[R117] UniMix: Towards Domain Adaptive and Generalizable LiDAR Semantic Segmentation in Adverse Weather}. 2024，CVPR。\href{https://arxiv.org/pdf/2404.05145}{原文}\\
+机制：UniMix物理天气模拟建立中间域，按空间/强度/语义混合，教师动量更新给伪标签；先源域到模拟域，再可选模拟到目标域。 与本课题的关系：证明正常场景增强可增进端到端正常感知；使用目标域、额外教师和阶段计算的条件需透明；不能移用其总体mIoU宣称异常可靠。\par\medskip
+\hypertarget{R118}{}\textbf{[R118] Complete \& Label: A Domain Adaptation Approach to Semantic Segmentation of LiDAR Point Clouds}. 2021，CVPR。\href{https://arxiv.org/pdf/2007.08488}{原文}\\
+机制：Complete\&Label先多帧聚合、Poisson重建生成密集面，用虚拟雷达采样构成稀疏/完整对；稀疏体素生成后精修，再在补全面上分割并投回原点。 与本课题的关系：几何规范化帮助正常语义是完整既有路线；当前保留原观测、用解释评分而不替换为补全，差异应精确。\par\medskip
+\hypertarget{R124}{}\textbf{[R124] Point Transformer V3: Simpler Faster Stronger}. 2024，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2024/papers/Wu_Point_Transformer_V3_Simpler_Faster_Stronger_CVPR_2024_paper.pdf}{原文}\\
+机制：用Z序、Hilbert序及坐标变换后的四种空间序列替代精确KNN，把邻近点组织为固定块；采用普通点积注意力、FlashAttention和注意力前稀疏卷积位置编码，建立可扩展分层骨干。 与本课题的关系：直接支持保留高效骨干，把预算用于更多正常观测；本课题的新增贡献应在同一类别的可信解释如何形成异常判断，而非重复骨干提速叙事。\par\medskip
+\hypertarget{R125}{}\textbf{[R125] LitePT: Lighter Yet Stronger Point Transformer}. 2026，CVPR；作者官方仓库确认。\href{https://openaccess.thecvf.com/content/CVPR2026/papers/Yue_LitePT_Lighter_Yet_Stronger_Point_Transformer_CVPR_2026_paper.pdf}{原文}\\
+机制：早期高分辨率阶段采用卷积、后期低分辨率阶段采用注意力，以参数为零的三维旋转位置编码替代位置卷积；语义解码器采用线性映射、层归一化和跳接，保留分层逐点结构。 与本课题的关系：当前官方预训练骨干已有高效细节编码基础，优先让语义与正常解释共享它，避免通过另一套密集骨干增加无根据开销。\par\medskip
+\hypertarget{R126}{}\textbf{[R126] Sonata: Self-Supervised Learning of Reliable Point Representations}. 2025，CVPR。\href{https://openaccess.thecvf.com/content/CVPR2025/papers/Wu_Sonata_Self-Supervised_Learning_of_Reliable_Point_Representations_CVPR_2025_paper.pdf}{原文}\\
+机制：用局部遮挡学生与全局教师的自蒸馏学习点云语义；教师为参数滑动平均，预测经Sinkhorn平衡并加入特征分散正则。去掉逐点解码器、学习较粗多级特征，再回传到细点，避免以坐标几何捷径完成自监督。 与本课题的关系：正常语义表征应真正分开类别，并保留原始观测给独立几何支持判断；只优化重建或冻结通用特征不能代替高质量正常分割。\par\medskip
+\hypertarget{R127}{}\textbf{[R127] Towards Large-scale 3D Representation Learning with Multi-dataset Point Prompt Training}. 2024，CVPR。\href{https://arxiv.org/pdf/2308.09718}{原文}\\
+机制：用数据集条件提示控制归一化统计与仿射参数，以语言类别嵌入对齐多数据集的语义空间；对比分类损失的负类只取当前数据集标签集合，避免强行把不同数据集类名当作独立互斥类别。 与本课题的关系：当前nuScenes粗标签和STU细标签应保持允许类别集合语义，正常域统计差异应显式处理；端到端正常感知首先需要可靠而相互区分的类别支持。\par\medskip
+\hypertarget{R130}{}\textbf{[R130] SCPNet: Semantic Scene Completion on Point Cloud}. 2023，arXiv；本轮未独立核实会议。\href{https://arxiv.org/pdf/2303.06884}{原文}\\
+机制：先以不下采样、保持稀疏性的多卷积路径完成体素几何，再由Cylinder3D分类；用四帧教师与单帧学生的成对特征关系蒸馏，并依据全景实例边界删除多帧叠加形成的动态物体拖影标签。 与本课题的关系：支持保留逐点细节、用可信时序监督而非粗糙多帧堆叠；共享语义表征可从正常几何受益，但几何预测必须尊重观测支持。\par\medskip
+\hypertarget{R135}{}\textbf{[R135] Domain Generalization of 3D Semantic Segmentation in Autonomous Driving}. 2023，ICCV。\href{https://openaccess.thecvf.com/content/ICCV2023/papers/Sanchez_Domain_Generalization_of_3D_Semantic_Segmentation_in_Autonomous_Driving_ICCV_2023_paper.pdf}{原文}\\
+机制：把过去20帧刚性位姿对齐为稠密几何，以邻域距离和置信度传播静态类别；未获可信标签的当前点进行聚类，并由累积点补密小簇，再用KPConv分割。当前点同时有两种预测时实际用KPConv结果。 与本课题的关系：可信正常支持可跨帧积累以提高稀疏观测语义，但动态点和新出现对象要保持当前观测决定权；语义支持与观测置信应共同学习。\par\medskip
+\hypertarget{R136}{}\textbf{[R136] Noise2Self: Blind Denoising by Self-Supervision}. 2019，ICML。\href{https://proceedings.mlr.press/v97/batson19a/batson19a.pdf}{原文}\\
+机制：用不读取待预测分组的函数预测该组。条件独立且无偏噪声下，自监督均方误差等于干净目标误差加常数。 与本课题的关系：目标不参与自己的预测已有严格先例；它保证特定去噪风险等价，不能保证识别未知语义。\par\medskip
+\hypertarget{R137}{}\textbf{[R137] Noise2Void—Learning Denoising from Single Noisy Images}. 2019，CVPR。\href{https://arxiv.org/pdf/1811.10980v2}{原文}\\
+机制：随机遮住中心像素，利用邻域预测其值，防止网络复制噪声。 与本课题的关系：无法预测的正常细节也会被当作噪声；道路远距稀疏正常物体同样必须保护。\par\medskip
+\hypertarget{R138}{}\textbf{[R138] High-Quality Self-Supervised Deep Image Denoising}. 2019，NeurIPS。\href{https://papers.neurips.cc/paper/8920-high-quality-self-supervised-deep-image-denoising.pdf}{原文}\\
+机制：四个方向分支构成严格盲点网络，预测正常像素的条件高斯先验，再与实际中心观测及噪声模型结合求后验。 与本课题的关系：上下文先验加实际观测核验的总体结构已存在；需区分恢复观测与检验观测。\par\medskip
+\hypertarget{R139}{}\textbf{[R139] Probabilistic Noise2Void: Unsupervised Content-Aware Denoising}. 2020，Frontiers in Computer Science。\href{https://arxiv.org/pdf/1906.00651}{原文}\\
+机制：盲点网络输出800个先验样本，通过任意离散噪声似然计算边缘似然和后验平均。 与本课题的关系：多种正常候选与观测似然的结合已有；本任务要说明候选为何对应具体正常类别。\par\medskip
+\hypertarget{R140}{}\textbf{[R140] Conditional Neural Processes}. 2018，ICML。\href{https://proceedings.mlr.press/v80/garnelo18a/garnelo18a.pdf}{原文}\\
+机制：编码任意上下文集合，以均值汇聚，再对查询位置输出条件均值、方差或类别概率。 与本课题的关系：共享上下文预测多个类别查询属于成熟框架；同一表面的联合约束需要另外说明。\par\medskip
+\hypertarget{R141}{}\textbf{[R141] Attentive Neural Processes}. 2019，ICLR。\href{https://arxiv.org/pdf/1901.05761v2}{原文}\\
+机制：用上下文自注意力和查询交叉注意力替代均值瓶颈，以全局潜变量表示相关不确定性。 与本课题的关系：类别查询读取邻域已有先例；创新需落在证据独立性和正常感知的实际收益。\par\medskip
+\hypertarget{R144}{}\textbf{[R144] LARAD: Layout-Aware Road Anomaly Detection via Spatial-Logic Reasoning}. 2026，arXiv。\href{https://arxiv.org/html/2607.12858}{原文}\\
+机制：冻结EoMT语义骨干，复制末层为异常查询分支；MSP热图限制注意区域，图注意建模邻域，训练上下文摆放异常。 与本课题的关系：说明上下文解释/空间合理性已成为新近叙事，但其合成监督、图像模态与当前不同。\par\medskip
+\hypertarget{R146}{}\textbf{[R146] A Baseline for Detecting Misclassified and Out-of-Distribution Examples in Neural Networks}. 2017，ICLR。\href{https://arxiv.org/pdf/1610.02136}{原文}\\
+机制：以最大类别概率识别分类错误及分布外输入；另探索分类与重建后接异常判别模块。 与本课题的关系：从正常感知中提取拒绝能力的直接起点；语义加重建证据的宽泛组合也很早存在。\par\medskip
+\hypertarget{R149}{}\textbf{[R149] Energy-based Out-of-distribution Detection}. 2020，NeurIPS。\href{https://arxiv.org/pdf/2010.03759}{原文}\\
+机制：用类别未归一化输出的负logsumexp作为能量；另提供带辅助异常数据的能量间隔微调。 与本课题的关系：必须保留强同骨干无额外训练基线；分数方向、正类和评价点域须逐项一致。\par\medskip
+\hypertarget{R154}{}\textbf{[R154] On Calibration of Modern Neural Networks}. 2017，ICML。\href{https://proceedings.mlr.press/v70/guo17a/guo17a.pdf}{原文}\\
+机制：用验证集拟合单一温度，调整分类概率而保持类别最大值不变。 与本课题的关系：必须分别说明类别是否正确、置信度是否可靠、未知是否被拒绝，三者不能互代。\par\medskip
+\hypertarget{R155}{}\textbf{[R155] Conformal Prediction Under Covariate Shift}. 2019，NeurIPS。\href{https://arxiv.org/pdf/1904.06019}{原文}\\
+机制：按测试/训练输入密度比构造加权可交换性及加权分位数，校正协变量偏移下的预测覆盖率。 与本课题的关系：单序列相关点和跨域缺失类别不满足朴素独立同分布解释；201分位数不能保证val19的FPR95。\par\medskip
+\hypertarget{R156}{}\textbf{[R156] SelectiveNet: A Deep Neural Network with an Integrated Reject Option}. 2019，ICML。\href{https://proceedings.mlr.press/v97/geifman19a/geifman19a.pdf}{原文}\\
+机制：共享特征上的分类、选择、辅助分类三头，联合优化保留样本风险和覆盖率约束，辅助头保护全数据表征。 与本课题的关系：正常感知与可信拒绝联合优化早有；本任务必须在相同正常覆盖和语义质量下比较异常能力。\par\medskip
+\endgroup
+\subsection*{补充理论参考：完整正文阅读}
+\hypertarget{R153}{}\textbf{[R153] Is Out-of-Distribution Detection Learnable?}. 2022。\href{https://arxiv.org/pdf/2210.14707}{原文}。在假设空间和分布族上刻画仅正常学习的可学习条件，分析混合比例、支持重叠与兼容性。 需限定可从观测识别的未知差异；仅正常数据无法凭空决定任意未知语义边界。
+\end{document}
