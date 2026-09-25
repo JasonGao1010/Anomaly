@@ -1,4 +1,4 @@
-"""Gaussian ray mathematics, target exclusion and full-batch gradient semantics."""
+"""Normal evidence, ray mathematics, target exclusion and gradient semantics."""
 
 from copy import deepcopy
 import math
@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from scipy.integrate import quad
 from scipy.special import erfcx, log_ndtr
+from scipy.stats import t as student_t
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -19,8 +20,9 @@ from src.model import Segmentor, balanced_loss, ranking_loss, to_device
 from src.train import cached_backward, seed_all, rng_state, restore_rng
 
 
-def test_semantic_hypotheses_exclude_target_values_before_mixing():
+def test_semantic_hypotheses_exclude_entire_target_cell_values_counts_and_gradients():
     from src.normal import hypothesis_observation, SemanticHypotheses
+    torch.manual_seed(71)
     xyzi, _ = angular_scan()
     observation = hypothesis_observation(xyzi)
     model = SemanticHypotheses().eval()
@@ -28,16 +30,30 @@ def test_semantic_hypotheses_exclude_target_values_before_mixing():
     first = model.propose(observation, model.encode(observation), group)
     second_observation = deepcopy(observation)
     target = observation["group"] == group.item()
-    second_observation["features"][target, :4] *= 3
+    second_observation["features"][target] *= 3
     second_observation["log_distance"][target] += 1
     second = model.propose(second_observation, model.encode(second_observation), group)
     for name in first:
         torch.testing.assert_close(first[name], second[name], atol=0, rtol=0)
+
+    # Multiple returns in the withheld cell must not reveal its occupancy or depth.
+    extra = np.repeat(xyzi[target.numpy()], 7, axis=0)
+    extra[:, :3] *= np.linspace(.7, 1.4, len(extra))[:, None]
+    extra[:, 3] = 1
+    more = hypothesis_observation(np.concatenate((xyzi, extra)))
+    assert torch.equal(more["cells"], observation["cells"])
+    third = model.propose(more, model.encode(more), group)
+    for name in first:
+        torch.testing.assert_close(first[name], third[name], atol=0, rtol=0)
+
     observation["features"].requires_grad_()
+    observation["log_distance"].requires_grad_()
     proposed = model.propose(observation, model.encode(observation), group)
-    proposed["mean"].sum().backward()
-    assert torch.equal(observation["features"].grad[target], torch.zeros_like(observation["features"].grad[target]))
-    assert bool(observation["features"].grad[~target].abs().sum() > 0)
+    sum(value.square().sum() for key, value in proposed.items() if key != "supported").backward()
+    for key in ("features", "log_distance"):
+        gradient = observation[key].grad
+        assert torch.equal(gradient[target], torch.zeros_like(gradient[target]))
+        assert bool(gradient[~target].abs().sum() > 0)
 
 
 def test_normal_label_sets_do_not_invent_fine_source_labels():
@@ -49,61 +65,263 @@ def test_normal_label_sets_do_not_invent_fine_source_labels():
     assert not ({0, 1, 2, 52, 99} & STU_NORMAL_SEMANTICS.keys())
 
 
-def test_joint_hypothesis_requires_one_surface_for_all_rays():
+def test_hypothesis_density_matches_independent_student_t_in_log_distance():
+    from src.normal import hypothesis_observation, SemanticHypotheses, geometry_energy
+    torch.manual_seed(13)
+    xyzi, _ = angular_scan()
+    observation = hypothesis_observation(xyzi)
+    model = SemanticHypotheses().double().eval()
+    observation = {key: value.double() if value.is_floating_point() else value
+                   for key, value in observation.items()}
+    indices = torch.tensor([18, 73, 129])
+    prediction = model(observation, indices)
+    mean = prediction["mean"].detach().numpy()
+    scale = prediction["scale"].detach().numpy()
+    value = observation["log_distance"][indices].numpy()[:, None, None]
+    expected = student_t.logpdf(value, df=3, loc=mean, scale=scale)
+    peak = student_t.logpdf(mean, df=3, loc=mean, scale=scale)
+    np.testing.assert_allclose(prediction["log_prob"].detach(), expected, atol=2e-12, rtol=2e-12)
+    np.testing.assert_allclose(prediction["log_compatibility"].detach(), expected - peak,
+                               atol=2e-12, rtol=2e-12)
+    weights = prediction["weight"].detach().exp().numpy()
+    np.testing.assert_allclose(weights.sum(-1), 1., atol=2e-15)
+    # Integration is over log distance: no metre Jacobian or range truncation.
+    mass, error = quad(lambda x: np.dot(weights[0, 0], student_t.pdf(
+        x, df=3, loc=mean[0, 0], scale=scale[0, 0])), -np.inf, np.inf, epsabs=1e-10)
+    assert abs(mass - 1) < 1e-9 and error < 1e-8
+    expected_energy = -np.log((weights * np.exp(expected - peak)).sum(-1))
+    expected_energy[~prediction["supported"].numpy()] = 0
+    np.testing.assert_allclose(geometry_energy(prediction).detach(), expected_energy,
+                               atol=2e-12, rtol=2e-12)
+
+
+def test_coarse_normal_labels_admit_different_fine_classes_in_one_cell():
     from src.normal import hypothesis_loss
     allowed = torch.zeros(2, 19, dtype=torch.bool)
-    allowed[:, 0] = True
-    prediction = dict(log_prob=torch.full((2, 19, 3), -10.),
+    allowed[:, :2] = True
+    prediction = dict(log_prob=torch.full((2, 19, 3), math.log(.1)),
                       weight=torch.full((2, 19, 3), -math.log(3)),
-                      belief=torch.zeros(2, 19), group=torch.zeros(2, dtype=torch.long))
-    prediction["log_prob"][0, 0, 0] = 0
-    prediction["log_prob"][1, 0, 1] = 0
-    conflicting, _ = hypothesis_loss(prediction, allowed)
-    prediction["log_prob"][1, 0, 0] = 0
-    compatible, _ = hypothesis_loss(prediction, allowed)
-    assert conflicting > compatible + 3
+                      belief=torch.zeros(2, 19), group=torch.zeros(2, dtype=torch.long),
+                      supported=torch.ones(2, dtype=torch.bool))
+    prediction["belief"][:, 0] = math.log(3)
+    prediction["log_prob"][0, 0] = math.log(4)
+    prediction["log_prob"][1, 1] = math.log(4)
+    geometry, context = hypothesis_loss(prediction, allowed)
+    expected = -(math.log(.75 * 4 + .25 * .1) + math.log(.75 * .1 + .25 * 4)) / 2
+    torch.testing.assert_close(geometry, torch.tensor(expected))
+    torch.testing.assert_close(context, torch.tensor(-math.log(4 / 21)))
+    # Unadmitted classes affect context classification, never the conditional density.
+    prediction["belief"][:, 2:] += 10
+    changed_geometry, changed_context = hypothesis_loss(prediction, allowed)
+    torch.testing.assert_close(changed_geometry, geometry)
+    assert changed_context > context + 9
+    extended = {key: torch.cat((value, value)) for key, value in prediction.items()}
+    extended["supported"][2] = False
+    extended["log_prob"][2:] = -1e6
+    labels = torch.cat((allowed, allowed))
+    labels[3].zero_()
+    filtered_geometry, filtered_context = hypothesis_loss(extended, labels)
+    torch.testing.assert_close(filtered_geometry, changed_geometry)
+    torch.testing.assert_close(filtered_context, changed_context)
 
 
-def test_verification_does_not_choose_a_different_surface_for_each_point():
-    from src.normal import verify_hypotheses
-    probability = torch.zeros(2, 19)
-    probability[:, 0] = 1
-    prediction = dict(log_prob=torch.full((2, 19, 3), -10.),
-                      weight=torch.full((2, 19, 3), -math.log(3)), group=torch.zeros(2, dtype=torch.long))
-    prediction["log_prob"][0, 0, 0] = 0
-    prediction["log_prob"][1, 0, 1] = 0
-    incompatible = verify_hypotheses(prediction, probability)[:, 0]
-    prediction["log_prob"][1, 0, 0] = 0
-    compatible = verify_hypotheses(prediction, probability)[:, 0]
-    assert torch.all(incompatible > compatible + 5)
+def test_allowed_set_balancing_and_missing_supervision_have_finite_gradients():
+    from src.normal import allowed_loss, hypothesis_loss, geometry_energy
+    logits = torch.tensor([[2., -.5, 0.], [-.7, .1, 1.]], requires_grad=True)
+    allowed = torch.tensor([[True, False, False], [False, True, True]])
+    original = allowed_loss(logits, allowed)
+    repeated = torch.tensor([0, 0, 0, 0, 1])
+    torch.testing.assert_close(allowed_loss(logits[repeated], allowed[repeated]), original)
+    blank = torch.zeros_like(allowed)
+    prediction = dict(log_prob=torch.randn(2, 3, 3, requires_grad=True),
+                      belief=logits, weight=torch.full((2, 3, 3), -math.log(3)),
+                      log_compatibility=torch.full((2, 3, 3), -5., requires_grad=True),
+                      supported=torch.zeros(2, dtype=torch.bool))
+    empty = allowed_loss(logits, blank)
+    for labels in (allowed, blank):
+        density, context = hypothesis_loss(prediction, labels)
+        assert density.item() == context.item() == 0
+        empty = empty + density + context
+    energy = geometry_energy(prediction)
+    assert torch.equal(energy, torch.zeros_like(energy))
+    (empty + energy.sum()).backward()
+    for value in (logits, prediction["log_prob"], prediction["log_compatibility"]):
+        assert torch.equal(value.grad, torch.zeros_like(value))
 
 
-def test_one_normal_class_must_explain_both_observations():
-    from src.model import NormalHypothesis, CALIBRATION_PROBABILITIES, CALIBRATION_LEVELS
-    model = NormalHypothesis().eval()
-    model.calibrated.fill_(True)
-    model.calibration.copy_(torch.tensor(CALIBRATION_PROBABILITIES).expand(19, 2, -1))
-    distance, geometry = torch.full((1, 19), 2.), torch.full((1, 19), 2.)
-    low, high = CALIBRATION_PROBABILITIES[[4, 32]]
-    distance[0, :2], geometry[0, :2] = torch.tensor([low, high]), torch.tensor([high, low])
-    joint = model.calibrate_components(distance, geometry, torch.tensor([True]))
-    semantic = model.calibrate_components(distance, geometry, torch.tensor([False]))
-    torch.testing.assert_close(joint, torch.tensor([CALIBRATION_LEVELS[32]], dtype=torch.float32))
-    torch.testing.assert_close(semantic, torch.tensor([CALIBRATION_LEVELS[4]], dtype=torch.float32))
-    assert bool((joint >= semantic).all())
+def test_joint_semantic_supervision_reaches_the_held_out_predictor(hypothesis_model, monkeypatch):
+    from src.normal import hypothesis_observation
+    torch.manual_seed(51)
+    xyzi, _ = angular_scan()
+    observation = hypothesis_observation(xyzi)
+    model = hypothesis_model.train()
+    indices = torch.tensor([40, 74, 165])
+    semantic = torch.full((len(xyzi), 19), 5., requires_grad=True)
+    allowed = torch.zeros(len(xyzi), 19, dtype=torch.bool)
+    allowed[indices] = F.one_hot(torch.tensor([0, 5, 8]), 19).bool()
+    sample = dict(xyzi=torch.from_numpy(xyzi), observation=observation,
+                  queries=indices, allowed=allowed)
+    monkeypatch.setattr(model, "semantic", lambda sample: semantic)
+    monkeypatch.setattr("src.model.NORMAL_LOSS_WEIGHTS",
+                        dict(joint=1., semantic=0., normal=0., geometry=0., context=0.))
+    loss, detail = model.loss(sample)
+    torch.testing.assert_close(loss.detach(), detail["joint"])
+    loss.backward()
+    assert semantic.grad.abs().sum() > 0
+    assert torch.equal(semantic.grad[0], torch.zeros(19))
+    for parameter in (model.hypotheses.surface.weight, model.hypotheses.queries,
+                      model.hypotheses.encoder[0].weight):
+        assert parameter.grad is not None and parameter.grad.abs().sum() > 0
+        assert torch.isfinite(parameter.grad).all()
+    with torch.no_grad():
+        development_loss, _ = model.eval().loss(sample)
+        expected = model.components(sample)
+    torch.testing.assert_close(development_loss, loss.detach(), atol=2e-5, rtol=2e-5)
+    assert torch.equal(model.development_prediction, expected["logits"].argmax(-1))
+    assert torch.equal(model.development_semantic_prediction, semantic.argmin(-1))
 
 
-def test_absent_normal_support_cannot_change_another_points_surface():
-    from src.normal import verify_hypotheses
-    prediction = dict(log_prob=torch.zeros(2, 19, 3),
-                      weight=torch.full((2, 19, 3), -math.log(3)), group=torch.zeros(2, dtype=torch.long))
-    prediction["log_prob"][0, :, 1:] = -8
-    support = torch.ones(2, 19)
-    support[1] = math.exp(-100)
-    before = verify_hypotheses(prediction, support)[0]
-    prediction["log_prob"][1, :, 0] = -1000
-    after = verify_hypotheses(prediction, support)[0]
-    torch.testing.assert_close(before, after, atol=1e-6, rtol=0)
+@pytest.fixture
+def hypothesis_model(monkeypatch):
+    from src.model import NormalHypothesis
+    # Sparse-backbone execution is covered separately; these tests isolate the head.
+    monkeypatch.setattr("src.model.LitePT", lambda **kwargs: nn.Identity())
+    return NormalHypothesis().eval()
+
+
+def test_joint_components_use_matching_classes_and_preserve_point_subsets(hypothesis_model, monkeypatch):
+    from src.normal import hypothesis_observation
+    xyzi, _ = angular_scan()
+    sample = dict(xyzi=torch.from_numpy(xyzi), observation=hypothesis_observation(xyzi))
+    semantic = torch.rand(len(xyzi), 19)
+    monkeypatch.setattr(hypothesis_model, "semantic", lambda sample: semantic)
+    with torch.no_grad():
+        full = hypothesis_model.components(sample)
+        indices = torch.tensor([180, 4, 119, 4, 51])
+        subset = hypothesis_model.components(sample, indices)
+        monkeypatch.setattr("src.normal.BLOCK_CHUNK", 2)
+        chunked = hypothesis_model.components(sample, indices)
+    for key in ("energy", "logits", "semantic_energy", "geometry_energy", "raw_score"):
+        assert len(subset[key]) == len(indices)
+        torch.testing.assert_close(subset[key], full[key][indices], atol=2e-5, rtol=2e-5)
+        torch.testing.assert_close(subset[key], chunked[key], atol=2e-5, rtol=2e-5)
+    for key in full["prediction"]:
+        torch.testing.assert_close(subset["prediction"][key], full["prediction"][key][indices],
+                                   atol=2e-5, rtol=2e-5)
+    torch.testing.assert_close(subset["energy"], subset["semantic_energy"] + subset["geometry_energy"])
+    torch.testing.assert_close(subset["logits"], -subset["energy"])
+
+    # A low semantic cost and a low geometric cost must belong to the same class.
+    semantic.fill_(20)
+    semantic[:, :2] = torch.tensor([0., 1.])
+    prediction = dict(weight=torch.full((len(xyzi), 19, 3), -math.log(3)),
+                      log_compatibility=torch.zeros(len(xyzi), 19, 3),
+                      supported=torch.ones(len(xyzi), dtype=torch.bool))
+    prediction["log_compatibility"][:, 0] = -5
+    monkeypatch.setattr(hypothesis_model.hypotheses, "forward", lambda observation, indices:
+                        {key: value[indices] for key, value in prediction.items()})
+    changed = hypothesis_model.components(sample, indices)
+    assert bool((semantic[indices].argmin(-1) == 0).all())
+    assert bool((changed["logits"].argmax(-1) == 1).all())
+    hypothesis_model.calibrated.fill_(True)
+    hypothesis_model.calibration.copy_(torch.linspace(0., 10., 129))
+    output = hypothesis_model.predict(sample)
+    assert bool((output["semantic"] == 1).all())
+    assert bool((output["semantic_only"] == 0).all())
+    torch.testing.assert_close(output["raw_score"][indices], changed["energy"].amin(-1))
+    torch.testing.assert_close(output["score"], hypothesis_model.calibrate_score(output["raw_score"]))
+    torch.testing.assert_close(hypothesis_model(sample), output["score"])
+    prediction["supported"].zero_()
+    unsupported = hypothesis_model.components(sample, indices)
+    torch.testing.assert_close(unsupported["energy"], semantic[indices])
+
+
+def test_global_calibration_preserves_order_with_repeated_quantiles(hypothesis_model):
+    from src.model import CALIBRATION_LEVELS
+    raw = torch.linspace(-2., 6., 801)
+    with pytest.raises(ValueError, match="calibrat"):
+        hypothesis_model.calibrate_score(raw)
+    assert hypothesis_model.calibration.shape == (129,)
+    hypothesis_model.calibrated.fill_(True)
+    hypothesis_model.calibration.copy_(torch.linspace(0., 4., 129))
+    expected = torch.tensor(CALIBRATION_LEVELS, dtype=torch.float32)
+    torch.testing.assert_close(hypothesis_model.calibrate_score(hypothesis_model.calibration), expected)
+    hypothesis_model.calibration[40:61] = hypothesis_model.calibration[40]
+    calibrated = hypothesis_model.calibrate_score(raw)
+    assert torch.isfinite(calibrated).all()
+    assert bool((calibrated[1:] >= calibrated[:-1]).all())
+    selected = torch.tensor([540, 2, 211, 540, 700])
+    torch.testing.assert_close(hypothesis_model.calibrate_score(raw[selected]), calibrated[selected])
+    hypothesis_model.calibration.fill_(2.)
+    constant_reference = hypothesis_model.calibrate_score(raw)
+    assert torch.isfinite(constant_reference).all()
+    assert bool((constant_reference[1:] > constant_reference[:-1]).all())
+
+
+def test_normal_checkpoint_rejects_previous_scientific_definition():
+    from src.model import (NormalHypothesis, NORMAL_VERSION, NORMAL_ARCHITECTURE,
+                           NORMAL_SCORE_VERSION)
+    saved = dict(version=NORMAL_VERSION,
+                 config=dict(architecture=NORMAL_ARCHITECTURE, score_version=NORMAL_SCORE_VERSION),
+                 model=dict(calibration=torch.zeros(129), calibrated=torch.tensor(True)))
+    NormalHypothesis.validate_checkpoint(saved, require_calibrated=True)
+    for location, key in (("", "version"), ("config", "architecture"), ("config", "score_version")):
+        previous = deepcopy(saved)
+        (previous[location] if location else previous)[key] = "previous-method"
+        with pytest.raises(ValueError, match="incompatible"):
+            NormalHypothesis.validate_checkpoint(previous)
+    previous = deepcopy(saved)
+    previous["model"]["calibration"] = torch.zeros(19, 2, 129)
+    with pytest.raises(ValueError, match="shape"):
+        NormalHypothesis.validate_checkpoint(previous)
+    saved["model"]["calibrated"].fill_(False)
+    NormalHypothesis.validate_checkpoint(saved)
+    with pytest.raises(ValueError, match="calibration"):
+        NormalHypothesis.validate_checkpoint(saved, require_calibrated=True)
+
+
+def test_semantic_context_projection_reuse_matches_original_attention_and_gradients():
+    from src.normal import SemanticHypotheses
+    torch.manual_seed(29)
+    model = SemanticHypotheses().double().eval()
+    reference = deepcopy(model)
+    tokens = torch.randn(7, 48, dtype=torch.double, requires_grad=True)
+    original_tokens = tokens.detach().clone().requires_grad_()
+    depth = torch.randn(7, dtype=torch.double, requires_grad=True)
+    original_depth = depth.detach().clone().requires_grad_()
+    neighbors = torch.full((4, 16), 7, dtype=torch.long)
+    neighbors[0, :3], neighbors[1, :2], neighbors[2, :3] = (
+        torch.tensor(row) for row in ([1, 2, 5], [0, 6], [1, 3, 5]))
+    observation = dict(neighbors=neighbors, position=torch.randn(4, 3, dtype=torch.double))
+    present = neighbors < len(tokens)
+    context = F.pad(original_tokens, (0, 0, 0, 1))[neighbors]
+    context = torch.cat((context, reference.empty.expand(4, 1, -1)), 1)
+    mask = torch.cat((~present, present.any(1, keepdim=True)), 1)
+    state = F.normalize(reference.queries, dim=-1)[None] * math.sqrt(48)
+    state = state + reference.position(observation["position"])[:, None]
+    for layer in reference.layers:
+        update = layer["attention"](state, context, context, key_padding_mask=mask, need_weights=False)[0]
+        state = layer["norm"](state + update)
+        state = layer["final_norm"](state + layer["feedforward"](state))
+    raw = reference.surface(state).reshape(4, 19, 3, 8)
+    base = (F.pad(original_depth, (0, 1))[neighbors] * present).sum(1) / present.sum(1).clamp_min(1)
+    base = torch.where(present.any(1), base, torch.full_like(base, math.log(20)))
+    expected = dict(mean=base[:, None, None] + raw[..., 0], slope=raw[..., 1:6],
+                    scale=.001 + F.softplus(raw[..., 6]), weight=raw[..., 7].log_softmax(-1),
+                    belief=reference.belief(state).squeeze(-1), supported=present.any(1))
+    actual = model.propose(observation, (tokens, depth), torch.arange(4), model.project_context(tokens))
+    for key in expected:
+        torch.testing.assert_close(actual[key], expected[key], atol=2e-12, rtol=2e-12)
+    sum(value.square().sum() for key, value in actual.items() if key != "supported").backward()
+    sum(value.square().sum() for key, value in expected.items() if key != "supported").backward()
+    torch.testing.assert_close(tokens.grad, original_tokens.grad, atol=2e-11, rtol=2e-11)
+    torch.testing.assert_close(depth.grad, original_depth.grad, atol=2e-11, rtol=2e-11)
+    for (name, parameter), (reference_name, original) in zip(model.named_parameters(), reference.named_parameters()):
+        assert name == reference_name
+        if parameter.grad is None:
+            assert original.grad is None
+        else:
+            torch.testing.assert_close(parameter.grad, original.grad, atol=2e-11, rtol=2e-11)
 
 
 def test_distant_ground_requires_unbounded_and_curved_angular_prediction():

@@ -1331,37 +1331,27 @@ def read_normal_record(record):
 
 
 class NormalScans:
-    """Real-only semantic targets and optional verified static cross-view matches."""
+    """Real normal labels, full input context and bounded supervised queries."""
 
-    def __init__(self, records, *, paired=False, queries=4096):
-        self.records, self.paired, self.queries = records, paired, queries
-        self.next = {}
-        scenes = {}
-        for i, record in enumerate(records):
-            scenes.setdefault(record["scene"], []).append(i)
-        for indices in scenes.values():
-            indices.sort(key=lambda i: records[i].get("timestamp", records[i]["frame"]))
-            for a, b in zip(indices[:-1], indices[1:]):
-                self.next[a] = b
+    def __init__(self, records, *, augment=False, queries=4096):
+        if queries <= 0:
+            raise ValueError("normal supervision requires a positive query budget")
+        self.records, self.augment, self.queries = records, augment, queries
 
     def __len__(self):
         return len(self.records)
 
     def __getitem__(self, index):
         import torch
-        from scipy.spatial import cKDTree
         from .model import voxelize
         from .normal import hypothesis_observation
         epoch, index = index if isinstance(index, tuple) else (0, index)
         raw = read_normal_record(self.records[index])
-        if self.paired:
+        if self.augment:
             angle = np.random.default_rng(np.random.SeedSequence([index, epoch, 613])).uniform(-np.pi, np.pi)
             rotation = np.array([[np.cos(angle), -np.sin(angle), 0],
                                  [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
             raw["xyzi"][:, :3] = raw["xyzi"][:, :3] @ rotation.T
-            transform = np.eye(4)
-            transform[:3, :3] = rotation.T
-            raw["pose"] = raw["pose"] @ transform
         result = voxelize(raw["xyzi"])
         result.update(allowed=torch.from_numpy(raw["allowed"]), slots=torch.from_numpy(raw["slots"]),
                       slot_count=raw["slot_count"], index=index,
@@ -1378,22 +1368,6 @@ class NormalScans:
         remaining = np.setdiff1d(valid, chosen, assume_unique=True)
         chosen = np.r_[chosen, rng.choice(remaining, min(len(remaining), max(0, self.queries - len(chosen))), replace=False)]
         result["queries"] = torch.from_numpy(np.sort(chosen).astype(np.int64))
-        if self.paired and index in self.next:
-            other = read_normal_record(self.records[self.next[index]])
-            first_xyz = raw["xyzi"][:, :3].astype(np.float64)
-            second_xyz = other["xyzi"][:, :3].astype(np.float64)
-            transform = np.linalg.inv(raw["pose"]) @ other["pose"]
-            transformed = second_xyz @ transform[:3, :3].T + transform[:3, 3]
-            candidates = chosen[raw["allowed"][chosen, 8:].any(1)]
-            if len(candidates):
-                distance, nearest = cKDTree(transformed).query(first_xyz[candidates], workers=1)
-                _, reverse = cKDTree(first_xyz).query(transformed[nearest], workers=1)
-                same_class = (raw["allowed"][candidates] & other["allowed"][nearest]).any(1)
-                accepted = (distance < .10) & (reverse == candidates) & same_class
-                first, second = candidates[accepted][:512], nearest[accepted][:512]
-                if len(first):
-                    result["pair"] = dict(observation=hypothesis_observation(other["xyzi"]),
-                                          first=torch.from_numpy(first), second=torch.from_numpy(second))
         return result
 
 

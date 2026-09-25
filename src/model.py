@@ -24,7 +24,10 @@ GRID_SIZE = .05
 POINT_CHUNK = 65536
 RELATION_CHUNK = 4096
 RELATION_MODES = ("local_attention", "relation", "relation_no_condition", "relation_no_difference")
-SCORE_VERSION = "absolute_support_logtail"
+NORMAL_VERSION = "AJAE-normal-evidence"
+NORMAL_ARCHITECTURE = "multimode48_blind_joint"
+NORMAL_SCORE_VERSION = "joint_energy_logtail"
+NORMAL_LOSS_WEIGHTS = dict(joint=1., semantic=.5, normal=.05, geometry=.2, context=.2)
 CALIBRATION_PROBABILITIES = np.r_[np.linspace(0., .9, 33), 1 - np.geomspace(.1, 1e-4, 97)[1:]]
 CALIBRATION_LEVELS = -np.log1p(-CALIBRATION_PROBABILITIES)
 
@@ -240,7 +243,7 @@ class Relation(nn.Module):
 
 
 class NormalHypothesis(nn.Module):
-    """Shared point semantics and independently constructed normal explanations."""
+    """One class evidence jointly supports normal semantics and unknown detection."""
 
     def __init__(self):
         super().__init__()
@@ -250,8 +253,22 @@ class NormalHypothesis(nn.Module):
         self.detail = mlp(7, 32, 32)
         self.embedding = mlp(104, 96, 48)
         self.hypotheses = SemanticHypotheses()
-        self.register_buffer("calibration", torch.zeros(19, 2, 129))
+        self.appearance_modes = nn.Parameter(torch.randn(19, 4, 48) * .05)
+        self.register_buffer("calibration", torch.zeros(len(CALIBRATION_PROBABILITIES)))
         self.register_buffer("calibrated", torch.tensor(False))
+
+    @staticmethod
+    def validate_checkpoint(saved, *, require_calibrated=False):
+        config = saved.get("config", {})
+        if (saved.get("version") != NORMAL_VERSION
+                or config.get("architecture") != NORMAL_ARCHITECTURE
+                or config.get("score_version") != NORMAL_SCORE_VERSION):
+            raise ValueError("incompatible normal model: initialize this method from the official nuScenes backbone")
+        state = saved.get("model", {})
+        if state.get("calibration", torch.empty(0)).shape != (len(CALIBRATION_PROBABILITIES),):
+            raise ValueError("incompatible normal reference shape")
+        if require_calibrated and not bool(state.get("calibrated", False)):
+            raise ValueError("normal reference calibration is required for anomaly inference")
 
     def load_pretrained(self, path):
         # Only the official backbone initializes this new normal-only experiment.
@@ -264,89 +281,82 @@ class NormalHypothesis(nn.Module):
         xyzi = sample["xyzi"]
         detail = self.detail(torch.cat((xyzi[:, :3] / 50, xyzi[:, 3:4], sample["offset"]), -1))
         features = self.embedding(torch.cat((point.feat[sample["inverse"]], detail), -1))
-        centers = F.normalize(self.hypotheses.queries, dim=-1) * (48 ** .5)
-        # Algebraic distances avoid an N x classes x channels expansion.
+        # Several equally scaled appearance modes preserve normal intra-class diversity.
+        centers = F.normalize(self.hypotheses.queries[:, None] + self.appearance_modes, dim=-1) * (48 ** .5)
+        centers = centers.flatten(0, 1)
         distance = (features.square().sum(-1, keepdim=True) + centers.square().sum(-1)[None]
                     - 2 * features @ centers.T).clamp_min(0) / 48
-        return -distance / .2, distance
+        return -(torch.logsumexp(-distance.reshape(-1, 19, 4) / .2, -1) - np.log(4.))
 
-    def components(self, sample, indices=None, *, verify=True):
-        from .normal import verify_hypotheses
-        logits, distance = self.semantic(sample)
+    def components(self, sample, indices=None, *, semantic_energy=None):
+        from .normal import geometry_energy
+        semantic_energy = self.semantic(sample) if semantic_energy is None else semantic_energy
         if indices is None:
-            indices = torch.arange(len(sample["xyzi"]), device=logits.device)
-        # Verification always uses the complete cell, even when only a subset of
-        # output scores is requested for bounded reference calibration.
-        queried = torch.arange(len(logits), device=logits.device) if verify else indices
-        prediction = self.hypotheses(sample["observation"], queried)
-        if verify:
-            # An observation far from EVERY normal prototype must not acquire a
-            # confident vote merely because a closed-set softmax sums to one.
-            surprise = verify_hypotheses(prediction, logits.exp())[indices]
-            prediction = {key: value[indices] for key, value in prediction.items()}
-        else:
-            surprise = -torch.logsumexp(prediction["weight"] + prediction["log_prob"], -1)
-        return logits, distance[indices], surprise, prediction
+            indices = torch.arange(len(sample["xyzi"]), device=semantic_energy.device)
+        prediction = self.hypotheses(sample["observation"], indices)
+        geometry = geometry_energy(prediction)
+        semantic_energy = semantic_energy[indices]
+        energy = semantic_energy + geometry
+        return dict(logits=-energy, semantic_energy=semantic_energy, geometry_energy=geometry,
+                    energy=energy, raw_score=energy.amin(-1), prediction=prediction)
 
     def loss(self, sample):
-        from .normal import hypothesis_loss
-        indices = sample["queries"]
-        logits, distance, _, prediction = self.components(sample, indices, verify=False)
-        if not self.training:
-            self.development_prediction = logits.argmax(-1)
-        allowed = sample["allowed"]
-        valid = allowed.any(1)
-        logp = logits[valid].log_softmax(-1).masked_fill(~allowed[valid], -torch.inf)
-        # Equal class-set mass prevents road/vegetation from dominating rare objects.
-        bits = (allowed[valid].long() * (2 ** torch.arange(19, device=logits.device))).sum(1)
-        _, group = bits.unique(return_inverse=True)
-        counts = torch.bincount(group).float()
-        sem = ((-logp.logsumexp(-1)) / counts[group]).sum() / len(counts)
-        admitted_distance = distance.masked_fill(~allowed[indices], torch.inf).amin(-1)
-        compact = admitted_distance.mean()
+        from .normal import allowed_loss, hypothesis_loss
+        indices, allowed = sample["queries"], sample["allowed"]
+        semantic_energy = self.semantic(sample)
+        parts = self.components(sample, indices if self.training else None, semantic_energy=semantic_energy)
+        if self.training:
+            logits, prediction = parts["logits"], parts["prediction"]
+        else:
+            # Development measures the exact full-point classifier used at inference.
+            self.development_prediction = parts["logits"].argmax(-1).detach()
+            self.development_semantic_prediction = semantic_energy.argmin(-1).detach()
+            logits = parts["logits"][indices]
+            prediction = {key: value[indices] for key, value in parts["prediction"].items()}
+        joint = allowed_loss(logits, allowed[indices])
+        semantic = allowed_loss(-semantic_energy, allowed)
+        valid = allowed[indices].any(1)
+        if bool(valid.any()):
+            admitted = allowed[indices][valid]
+            support = (-semantic_energy[indices][valid]).masked_fill(~admitted, -torch.inf)
+            normal = (-torch.logsumexp(support, -1) + admitted.sum(-1).float().log()).mean()
+        else:
+            normal = semantic_energy.sum() * 0
         geometry, context = hypothesis_loss(prediction, allowed[indices])
-        pair_loss = logits.sum() * 0
-        matches = 0
-        if "pair" in sample:
-            pair = sample["pair"]
-            other = self.hypotheses(pair["observation"], pair["second"])
-            positions = torch.searchsorted(indices, pair["first"])
-            first = prediction["belief"][positions].log_softmax(-1)
-            second = other["belief"].log_softmax(-1)
-            # Only class beliefs are view invariant; depth and surface slopes are not.
-            pair_loss = .5 * ((first.exp() - second.exp()) * (first - second)).sum(-1).mean()
-            matches = len(positions)
-        loss = sem + .1 * compact + .2 * geometry + .2 * context + .1 * pair_loss
-        return loss, dict(semantic=sem.detach(), compact=compact.detach(), geometry=geometry.detach(),
-                          context=context.detach(), pair=pair_loss.detach(), matches=matches,
-                          supervised=int(valid.sum()), queries=len(indices))
+        terms = dict(joint=joint, semantic=semantic, normal=normal, geometry=geometry, context=context)
+        loss = sum(NORMAL_LOSS_WEIGHTS[key] * value for key, value in terms.items())
+        details = {key: value.detach() for key, value in terms.items()}
+        details.update(supervised=int(allowed.any(1).sum()), queries=len(indices),
+                       supported=int(prediction["supported"].sum()))
+        return loss, details
 
-    def calibrate_components(self, distance, surprise, supported):
+    def calibrate_score(self, raw_score):
         if not bool(self.calibrated):
-            raise ValueError("normal-only reference calibration must be fitted before anomaly inference")
-        scores = []
-        levels = distance.new_tensor(CALIBRATION_LEVELS)
-        for component, value in enumerate((distance, surprise)):
-            transformed = []
-            for c in range(19):
-                knots = self.calibration[c, component].contiguous()
-                indices = torch.searchsorted(knots, value[:, c].contiguous()).clamp(1, 128)
-                left, right = knots[indices - 1], knots[indices]
-                floor = torch.finfo(value.dtype).eps * right.abs().clamp_min(1)
-                fraction = (value[:, c] - left) / torch.maximum(right - left, floor)
-                tail = levels[indices - 1] + fraction * (levels[indices] - levels[indices - 1])
-                # Log-tail interpolation resolves the low-FPR region without
-                # rounding all extreme scores to a probability near one.
-                transformed.append(tail)
-            scores.append(torch.stack(transformed, -1))
-        geometry = torch.where(supported[:, None], scores[1], torch.full_like(scores[1], -torch.inf))
-        # One and the same normal class must explain appearance AND the held-out return.
-        return torch.maximum(scores[0], geometry).amin(-1)
+            raise ValueError("normal reference calibration must be fitted before anomaly inference")
+        knots = self.calibration.to(raw_score)
+        if not bool(torch.isfinite(knots).all()) or bool((knots[1:] < knots[:-1]).any()):
+            raise ValueError("normal reference must be finite and nondecreasing")
+        levels = raw_score.new_tensor(CALIBRATION_LEVELS)
+        # Merge tied quantiles using the right empirical tail level. No epsilon-width
+        # intervals: those can magnify a constant reference into infinite scores.
+        knots, counts = torch.unique_consecutive(knots, return_counts=True)
+        levels = levels[counts.cumsum(0) - 1]
+        if len(knots) == 1:
+            return levels[0] + (raw_score - knots[0]) / knots[0].abs().clamp_min(1)
+        indices = torch.searchsorted(knots, raw_score.contiguous()).clamp(1, len(knots) - 1)
+        fraction = (raw_score - knots[indices - 1]) / (knots[indices] - knots[indices - 1])
+        # A shared monotone transform retains the joint ranking and extrapolates tails.
+        return levels[indices - 1] + fraction * (levels[indices] - levels[indices - 1])
+
+    def predict(self, sample):
+        with torch.autocast(sample["xyzi"].device.type, enabled=False):
+            parts = self.components(sample)
+            return dict(semantic=parts["energy"].argmin(-1),
+                        semantic_only=parts["semantic_energy"].argmin(-1),
+                        raw_score=parts["raw_score"], score=self.calibrate_score(parts["raw_score"]))
 
     def forward(self, sample):
-        with torch.autocast(sample["xyzi"].device.type, enabled=False):
-            _, distance, surprise, prediction = self.components(sample)
-            return self.calibrate_components(distance, surprise, prediction["supported"])
+        return self.predict(sample)["score"]
 
 
 class Segmentor(nn.Module):

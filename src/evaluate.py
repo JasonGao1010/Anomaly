@@ -152,7 +152,7 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
         raise RuntimeError(f"official metrics require about {required / 1e9:.1f} GB free RAM")
     dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
                             normal=getattr(model, "normal", None) is not None, normal_reference=False,
-                            hypotheses=model.mode == "normal_hypothesis")
+                            hypotheses=getattr(model, "mode", None) == "normal_hypothesis")
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),
@@ -235,10 +235,10 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    if saved.get("version") == "AJAE-normal-hypothesis":
-        from .model import NormalHypothesis, SCORE_VERSION
-        if bool(saved["model"]["calibrated"]) and saved["config"].get("score_version") != SCORE_VERSION:
-            raise ValueError("normal references were fitted for another score; refit with --calibration-only")
+    from .model import NormalHypothesis, NORMAL_VERSION
+    if saved.get("version") in (NORMAL_VERSION, "AJAE-normal-hypothesis"):
+        # Shape-compatible historical weights still represent a different model.
+        NormalHypothesis.validate_checkpoint(saved, require_calibrated=True)
         model = NormalHypothesis()
         model.load_state_dict(saved["model"], strict=True)
         return model.to(device).eval(), saved
@@ -252,7 +252,9 @@ def load_model(path, device):
 
 
 @torch.no_grad()
-def infer(model, scan, device):
+def infer(model, scan, device, *, return_semantics=False):
+    if return_semantics and model.mode != "normal_hypothesis":
+        raise ValueError("semantic export requires the joint normal-evidence model")
     if device.type == "cuda":
         torch.cuda.synchronize(device)
         torch.cuda.reset_peak_memory_stats(device)
@@ -260,6 +262,7 @@ def infer(model, scan, device):
     io_timing = {}
     frame = read_scan(scan, io_timing=io_timing)
     read_seconds = io_timing["seconds"]
+    semantic = np.full(len(frame.xyzi), -1, np.int16) if return_semantics else None
     if frame.actual.any():
         xyzi = frame.xyzi[frame.actual].copy()
         sample = prepare_scan(dict(xyzi=xyzi, slots=frame.return_slots,
@@ -273,7 +276,14 @@ def infer(model, scan, device):
             sample["observation"] = hypothesis_observation(xyzi)
         sample = to_device(sample, device)
         with autocast(device):
-            prediction = model(sample)
+            if return_semantics:
+                outputs = model.predict(sample)
+                prediction, classes = outputs["score"], outputs["semantic"]
+                if classes.shape != prediction.shape or classes.is_floating_point() or bool(((classes < 0) | (classes >= 19)).any()):
+                    raise ValueError("semantic outputs must be integer normal classes 0–18 in original return order")
+                semantic[frame.return_slots] = classes.to(torch.int16).cpu().numpy()
+            else:
+                prediction = model(sample)
         prediction = scatter_scores(prediction, sample["slots"], sample["slot_count"])
         if not torch.isfinite(prediction).all():
             raise ValueError("nonfinite inference output")
@@ -282,6 +292,8 @@ def infer(model, scan, device):
         prediction = np.zeros(len(frame.xyzi), np.float32)
     if device.type == "cuda":
         torch.cuda.synchronize(device)
+    if return_semantics:
+        prediction = dict(score=prediction, semantic=semantic)
     return prediction, dict(read_seconds=read_seconds, seconds=time.perf_counter() - start - read_seconds,
                             peak_vram_bytes=torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0,
                             real_points=int(frame.actual.sum()), slots=len(frame.xyzi))
@@ -432,6 +444,9 @@ def main():
             command.add_argument("--workers", type=int, default=4)
         else:
             command.add_argument("--scans", type=Path, nargs="+", required=True)
+            if name == "infer":
+                command.add_argument("--semantic-output", action="store_true",
+                    help="also save *.semantic.npy: int16 class IDs 0–18 in NORMAL_CLASSES order; empty slots are -1")
             if name == "benchmark":
                 command.add_argument("--warmup", type=int, default=5)
                 command.add_argument("--repeats", type=int, default=20)
@@ -446,7 +461,10 @@ def main():
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
     model, saved = load_model(args.checkpoint, device)
-    normal_run = saved.get("version") == "AJAE-normal-hypothesis"
+    from .model import NORMAL_VERSION
+    normal_run = saved.get("version") == NORMAL_VERSION
+    if args.action == "infer" and args.semantic_output and not normal_run:
+        parser.error("--semantic-output requires a joint normal-evidence checkpoint")
     if normal_run and args.action in ("normal", "mine"):
         parser.error("this action belongs to the earlier supervised field; normal-only development is recorded by src.train --normal")
     if args.action == "normal":
@@ -466,6 +484,7 @@ def main():
         result = evaluate(model, manifest, device, args.workers)
         metadata = (dict(version=saved["version"], complete=saved.get("frozen", False),
                          seed=saved["config"]["seed"], mode=saved["mode"], method=saved["mode"],
+                         architecture=saved["config"]["architecture"], score_version=saved["config"]["score_version"],
                          checkpoint_update=saved.get("stages", {}).get("target", {}).get("selected_update"))
                     if normal_run else dict(version=saved["version"], complete=saved["complete"], seed=saved["seed"],
                                             mode=saved["mode"], method=saved["method"], checkpoint_epoch=saved["epoch"],
@@ -473,12 +492,15 @@ def main():
         write_json(args.output, dict(**metadata, checkpoint=str(args.checkpoint.resolve()), **result))
     elif args.action == "infer":
         from .train import disk_check
-        disk_check(sum(p.stat().st_size // 16 * 24 for p in args.scans))
+        disk_check(sum(p.stat().st_size // 16 * (26 if args.semantic_output else 24) for p in args.scans))
         args.output.mkdir(parents=True, exist_ok=True)
         for index, scan in enumerate(args.scans):
-            prediction, timing = infer(model, scan, device)
+            prediction, timing = infer(model, scan, device, return_semantics=args.semantic_output)
             folder = args.output / scan.parent.parent.name
             folder.mkdir(exist_ok=True)
+            if args.semantic_output:
+                np.save(folder / (scan.stem + ".semantic.npy"), prediction["semantic"])
+                prediction = prediction["score"]
             np.savetxt(folder / (scan.stem + ".txt"), prediction, fmt="%.9g")
             print(dict(scan=str(scan), **timing), flush=True)
             if (index + 1) % 100 == 0:

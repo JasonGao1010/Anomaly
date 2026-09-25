@@ -1474,7 +1474,8 @@ def normal_development(model, records, indices, device, workers, *, queries=4096
     data = NormalScans(records, queries=queries)
     loader = DataLoader(data, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=True, prefetch_factor=1 if workers else None)
-    totals, confusion, count = defaultdict(float), np.zeros((19, 19), np.int64), 0
+    totals, count = defaultdict(float), 0
+    confusions = {name: np.zeros((19, 19), np.int64) for name in ("joint", "semantic")}
     start = time.monotonic()
     for sample in loader:
         sample = to_device(sample, device)
@@ -1484,22 +1485,40 @@ def normal_development(model, records, indices, device, workers, *, queries=4096
         totals["objective"] += float(loss)
         for key, value in detail.items():
             totals[key] += float(value)
-        # The second semantic pass is omitted: loss records predictions only in eval.
-        prediction = model.development_prediction
+        # Both decisions come from the same forward used by the joint objective.
+        predictions = dict(joint=model.development_prediction,
+                           semantic=model.development_semantic_prediction)
         allowed = sample["allowed"]
         single = allowed.sum(1) == 1
         truth = allowed[single].long().argmax(-1)
-        confusion += torch.bincount(truth * 19 + prediction[single], minlength=361).reshape(19, 19).cpu().numpy()
         valid = allowed.any(1)
-        totals["set_correct"] += float(allowed[valid].gather(1, prediction[valid, None]).sum())
+        correct = {}
+        for name, prediction in predictions.items():
+            if prediction.shape != (len(allowed),):
+                raise ValueError("normal development predictions must cover every input return")
+            confusions[name] += torch.bincount(truth * 19 + prediction[single], minlength=361).reshape(19, 19).cpu().numpy()
+            correct[name] = allowed[valid].gather(1, prediction[valid, None]).squeeze(1)
+            totals[name + "_set_correct"] += int(correct[name].sum())
+        totals["corrected_points"] += int((correct["joint"] & ~correct["semantic"]).sum())
+        totals["worsened_points"] += int((~correct["joint"] & correct["semantic"]).sum())
         totals["set_points"] += int(valid.sum())
         count += 1
-    union = confusion.sum(0) + confusion.sum(1) - np.diag(confusion)
-    measured = {key: value / count for key, value in totals.items() if key not in ("set_correct", "set_points")}
-    return dict(**measured, set_accuracy=totals["set_correct"] / max(1, totals["set_points"]),
-                iou=[float(confusion[c, c] / union[c]) if union[c] else None for c in range(19)],
-                mean_iou_present=float(np.mean(np.diag(confusion)[union > 0] / union[union > 0])),
-                confusion=confusion.tolist(), scans=count, seconds=time.monotonic() - start)
+    if not count or not totals["set_points"]:
+        raise ValueError("normal development has no reliably labeled normal points")
+    summaries = {}
+    for name, confusion in confusions.items():
+        union = confusion.sum(0) + confusion.sum(1) - np.diag(confusion)
+        summaries[name] = dict(set_accuracy=totals[name + "_set_correct"] / totals["set_points"],
+            iou=[float(confusion[c, c] / union[c]) if union[c] else None for c in range(19)],
+            mean_iou_present=float(np.mean(np.diag(confusion)[union > 0] / union[union > 0])) if (union > 0).any() else None,
+            confusion=confusion.tolist())
+    counts = ("joint_set_correct", "semantic_set_correct", "set_points", "corrected_points", "worsened_points")
+    measured = {key: value / count for key, value in totals.items() if key not in counts}
+    return dict(**measured, **summaries["joint"], semantic_only=summaries["semantic"],
+                joint_comparison={key: int(totals[key]) for key in ("set_points", "corrected_points", "worsened_points")},
+                semantic_definition="argmax of the same joint class evidence used for training and inference; semantic_only excludes geometric evidence",
+                iou_definition="pooled reliable singleton-label points; mean over classes with nonzero union; set accuracy also includes coarse labels",
+                scans=count, seconds=time.monotonic() - start)
 
 
 def normal_optimizer(model, stage):
@@ -1512,69 +1531,55 @@ def normal_optimizer(model, stage):
 
 
 @torch.no_grad()
-def normal_calibration(model, source, target, training_reference, device, workers, output):
+def normal_calibration(model, records, device, workers, output, *, seed=206):
     from .data import NormalScans
-    from .model import CALIBRATION_PROBABILITIES, SCORE_VERSION
-    # Bounded samples per frame/class avoid storing tens of millions of features.
-    reservoirs = {name: [[[] for _ in range(2)] for _ in range(19)] for name in ("source", "target", "training_reference")}
-    counts = {name: np.zeros(19, np.int64) for name in reservoirs}
-    global_reference = []
+    from .model import CALIBRATION_PROBABILITIES, NORMAL_SCORE_VERSION
+    reference, frames = [], []
     model.eval()
     start = time.monotonic()
-    for domain, records in (("source", source), ("target", target), ("training_reference", training_reference)):
-        loader = DataLoader(NormalScans(records, queries=16384), batch_size=None, num_workers=workers,
-                            pin_memory=True, prefetch_factor=1 if workers else None)
-        for frame, sample in enumerate(loader):
+    if not records or any(row.get("source") != "normal_stu" or row.get("scene") != "201" for row in records):
+        raise ValueError("joint normal references must use only the STU 201 normal development sequence")
+    loader = DataLoader(NormalScans(records, queries=1), batch_size=None, num_workers=workers,
+                        pin_memory=device.type == "cuda", prefetch_factor=1 if workers else None)
+    for frame, sample in enumerate(loader):
+        # Reference sampling follows the normal point population, not class quotas.
+        valid = sample["allowed"].any(1).nonzero().flatten().numpy()
+        rng = np.random.default_rng(np.random.SeedSequence([seed, frame]))
+        chosen = np.sort(rng.choice(valid, min(len(valid), 2048), replace=False))
+        if len(chosen):
             sample = to_device(sample, device)
-            chosen = sample["queries"]
-            logits, distance, surprise, prediction = model.components(sample, chosen)
-            allowed = sample["allowed"][chosen]
-            rng = np.random.default_rng(frame + (10000 if domain == "target" else 0))
-            if domain == "target":
-                normal_distance = (-.2 * logits.amax(-1))[sample["allowed"].any(1)]
-                selected = rng.choice(len(normal_distance), min(len(normal_distance), 2048), replace=False)
-                global_reference.append(normal_distance[torch.as_tensor(selected, device=device)].cpu().numpy())
-            for c in range(19):
-                selected = (allowed[:, c] & prediction["supported"]).nonzero().flatten()
-                counts[domain][c] += len(selected)
-                if not len(selected):
-                    continue
-                selected = selected[torch.as_tensor(rng.choice(len(selected), min(len(selected), 512), replace=False), device=device)]
-                for k, values in enumerate((distance, surprise)):
-                    reservoirs[domain][c][k].append(values[selected, c].cpu().numpy())
-            if (frame + 1) % 50 == 0:
-                print(f"calibration {domain} {frame + 1}/{len(records)} elapsed={(time.monotonic()-start)/60:.1f}min", flush=True)
-    details = []
-    semantic_quantiles = np.quantile(np.concatenate(global_reference), CALIBRATION_PROBABILITIES).astype(np.float32)
-    for c in range(19):
-        # Prefer independent, exact target semantics. Missing categories are explicitly
-        # identified rather than presenting training/source references as held-out truth.
-        domain = next((name for name in ("target", "training_reference", "source") if counts[name][c] >= 32), None)
-        if domain is None:
-            raise ValueError(f"normal class {c} has no calibration support; cannot silently invent its rejection boundary")
-        channels = [np.concatenate(values) for values in reservoirs[domain][c]]
-        quantiles = np.stack([np.quantile(values, CALIBRATION_PROBABILITIES) for values in channels]).astype(np.float32)
-        # All prototypes share one distance scale. A remote, weakly trained class
-        # must never become an easy normal explanation by widening its own radius.
-        quantiles[0] = semantic_quantiles
-        model.calibration[c].copy_(torch.from_numpy(quantiles).to(device))
-        details.append(dict(category=c, reference=domain, observed=int(counts[domain][c]),
-                            independent_exact_target=(domain == "target"),
-                            retained=len(channels[0]), quantiles=quantiles.tolist()))
+            values = model.components(sample, torch.as_tensor(chosen, device=device))["raw_score"]
+            if values.shape != (len(chosen),) or not bool(torch.isfinite(values).all()):
+                raise ValueError("nonfinite or misaligned joint normal reference scores")
+            reference.append(values.float().cpu().numpy())
+        frames.append(dict(frame=records[frame]["frame"], eligible=len(valid), retained=len(chosen)))
+        if (frame + 1) % 50 == 0:
+            print(f"calibration 201 {frame + 1}/{len(records)} elapsed={(time.monotonic()-start)/60:.1f}min", flush=True)
+    if not reference:
+        raise ValueError("STU 201 has no reliable normal reference points")
+    quantiles = np.quantile(np.concatenate(reference), CALIBRATION_PROBABILITIES).astype(np.float32)
+    if not np.isfinite(quantiles).all() or np.any(np.diff(quantiles) < 0):
+        raise ValueError("joint normal reference quantiles must be finite and nondecreasing")
+    model.calibration.copy_(torch.from_numpy(quantiles).to(device))
     model.calibrated.fill_(True)
-    result = dict(classes=details, source_scans=len(source), target_scans=len(target),
-                  score_version=SCORE_VERSION, probabilities=CALIBRATION_PROBABILITIES.tolist(),
+    result = dict(reference="STU 201 reliable normal points", data_identity=identity(records),
+                  frames=frames, target_scans=len(records),
+                  score_version=NORMAL_SCORE_VERSION, probabilities=CALIBRATION_PROBABILITIES.tolist(),
+                  quantiles=quantiles.tolist(), seed=seed, samples_per_frame=2048,
+                  eligible_points=sum(row["eligible"] for row in frames), reference_points=sum(map(len, reference)),
                   seconds=time.monotonic() - start, anomaly_labels_used=False,
-                  semantic_reference="201 nearest-prototype distances; shared across all normal hypotheses",
-                  semantic_reference_points=sum(map(len, global_reference)),
-                  meaning="class-conditional normal reference quantiles; no anomaly-performance estimate")
+                  point_scope="actual returns with at least one reliable normal class in the 2.5–50 metre supervision range",
+                  sampling="uniform without replacement within each frame's reliable normal points; no class balancing or support filtering",
+                  score_definition="minimum joint class energy; identical raw_score as formal inference",
+                  meaning="one monotone normal-reference transform preserves the joint score ordering; not an anomaly probability or anomaly-performance estimate")
     write_json(output / "calibration.json", result)
     return result
 
 
 def normal_main():
     from .data import NormalScans, normal_records, NORMAL_CLASSES, STU_NORMAL_SEMANTICS, NUSCENES_NORMAL_SETS
-    from .model import NormalHypothesis, SCORE_VERSION
+    from .model import (NormalHypothesis, NORMAL_VERSION, NORMAL_ARCHITECTURE,
+                        NORMAL_SCORE_VERSION, NORMAL_LOSS_WEIGHTS)
     parser = argparse.ArgumentParser(description="Real-normal semantic hypothesis training; stop before STU val19")
     parser.add_argument("--normal", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
@@ -1591,6 +1596,18 @@ def normal_main():
     args = parser.parse_args()
     if args.resume and args.calibration_only:
         parser.error("resume and calibration-only are separate operations")
+    if min(args.source_epochs, args.target_epochs, args.batch, args.eval_every) < 1 or args.seed < 0:
+        parser.error("epochs, batch and evaluation interval must be positive; seed must be nonnegative")
+    if args.workers < 0 or args.threads < 1:
+        parser.error("workers must be nonnegative and threads must be positive")
+    if not (args.resume or args.calibration_only) and any((args.output / name).exists() for name in
+            ("config.json", "last.pt", "source_best.pt", "target_best.pt", "frozen.pt")):
+        raise ValueError("existing run requires explicit resume or a new output directory; no records overwritten")
+    initial = torch.load(args.output / "last.pt", map_location="cpu", weights_only=False) if args.resume else None
+    selected = torch.load(args.output / "target_best.pt", map_location="cpu", weights_only=False) if args.calibration_only else None
+    for saved in (initial, selected):
+        if saved is not None:
+            NormalHypothesis.validate_checkpoint(saved)
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     seed_all(args.seed)
@@ -1607,45 +1624,60 @@ def normal_main():
         scenes[row["scene"]].append(i)
     source_indices = [indices[len(indices) // 2] for indices in scenes.values()]
     target_indices = np.linspace(0, len(target_val) - 1, 68, dtype=int).tolist()
-    config = dict(version="AJAE-normal-hypothesis", architecture="shared48_quadratic", classes=NORMAL_CLASSES, source_mapping=NUSCENES_NORMAL_SETS,
+    config = dict(version=NORMAL_VERSION, architecture=NORMAL_ARCHITECTURE, classes=NORMAL_CLASSES, source_mapping=NUSCENES_NORMAL_SETS,
         target_mapping=STU_NORMAL_SEMANTICS, source_frames=len(source), target_frames=len(target),
-        development_frames=len(target_val), source_validation_indices=source_indices, target_validation_indices=target_indices,
+        development_frames=len(target_val), source_validation_indices=source_indices[::3], target_validation_indices=target_indices,
+        data_identity={name: identity(records) for name, records in
+                       (("source", source), ("source_validation", source_val), ("target", target), ("target_validation", target_val))},
         source_epochs=args.source_epochs, target_epochs=args.target_epochs, batch=args.batch, seed=args.seed,
+        eval_every=args.eval_every, target_eval_every=min(args.eval_every, 225),
         initial="assets/nuscenes.pth", initial_sha256=WEIGHTS_SHA256,
         synthetic_anomalies=False, final_val19_evaluated=False, queries=4096, source_replay_fraction=.2,
-        loss=dict(semantic=1., compact=.1, geometry=.2, context=.2, correspondence=.1),
-        verification="same-class shared surface posterior; leave the scored return out; full observed cell",
-        normal_state="19 shared 48-dimensional prototypes; both observation and geometry losses update them",
-        normal_surface="three unconstrained quadratic log-distance surfaces per class; Student-t df=3, scale floor=.001",
-        semantic_calibration="one common nearest-prototype normal-distance reference; no per-class radius inflation",
-        score_version=SCORE_VERSION,
+        loss=dict(NORMAL_LOSS_WEIGHTS),
+        verification="the same joint class evidence in supervised classification, normal development and inference",
+        normal_state="19 classes with four equally scaled 48-dimensional appearance modes per class",
+        normal_surface="context-conditioned Student-t surface mixtures; target-cell observations excluded from prediction",
+        loss_population="joint, normal, geometry and context on bounded reliable queries; auxiliary semantic classification on all reliable points",
+        normal_objective="negative log mean absolute appearance support over the allowed normal class set",
+        calibration="one global minimum-joint-energy reference; uniform reliable normal points from STU 201 only",
+        score_version=NORMAL_SCORE_VERSION,
         selection="minimum fixed normal development objective within each stage; no anomaly labels",
         deadline=args.deadline, code=code_record())
+    if initial is not None:
+        # Runtime limits may change on resume; scientific inputs and losses may not.
+        changed = [key for key, value in config.items() if key not in ("deadline", "code")
+                   and identity(value) != identity(initial["config"].get(key))]
+        if changed:
+            raise ValueError(f"normal resume changes the scientific configuration: {changed}")
+    if selected is not None:
+        if selected["config"].get("data_identity") != config["data_identity"]:
+            raise ValueError("normal calibration data differ from the selected model's recorded sources")
+        config = dict(selected["config"], deadline=args.deadline, scoring_code=code_record())
     if not args.calibration_only:
         write_json(args.output / "config.json", config)
         write_json(args.output / "resources.json", resources)
     model = NormalHypothesis().to(device)
     full = None
     if args.calibration_only:
-        selected = torch.load(args.output / "target_best.pt", map_location="cpu", weights_only=False)
-        config = dict(selected["config"], score_version=SCORE_VERSION, scoring_code=code_record())
         model.load_state_dict(selected["model"], strict=True)
         previous_path = args.output / "frozen.pt"
         if previous_path.exists():
             previous = torch.load(previous_path, map_location="cpu", weights_only=False)
-            # Development used the unchanged loss, not the anomaly scoring rule.
-            # Reuse it only when every selected network parameter is identical.
-            same = all(torch.equal(value, previous["model"][name])
-                       for name, value in selected["model"].items() if name not in ("calibration", "calibrated"))
-            if same:
-                full = previous["normal201"]
+            NormalHypothesis.validate_checkpoint(previous, require_calibrated=True)
+            # Reuse only this method's complete development with identical inputs,
+            # objective and network weights; calibration itself is always recomputed.
+            same = all(previous["config"].get(key) == config.get(key)
+                       for key in ("data_identity", "loss", "loss_population", "normal_objective"))
+            same &= previous["model"].keys() == selected["model"].keys()
+            same &= all(torch.equal(value, previous["model"].get(name, torch.empty(0)))
+                        for name, value in selected["model"].items() if name not in ("calibration", "calibrated"))
+            measured = previous.get("normal201", {})
+            if same and measured.get("scans") == len(target_val) and "semantic_only" in measured:
+                full = measured
             del previous
         del selected
-    else:
+    elif initial is None:
         model.load_pretrained("assets/nuscenes.pth")
-    initial = torch.load(args.output / "last.pt", map_location="cpu", weights_only=False) if args.resume else None
-    if not (args.resume or args.calibration_only) and (args.output / "last.pt").exists():
-        raise ValueError("existing run requires explicit resume; no checkpoint overwrite")
     log = (args.output / "log.jsonl").open("a", buffering=1)
     stage_results = (json.loads((args.output / "stages.json").read_text())
                      if (args.resume or args.calibration_only) and (args.output / "stages.json").exists() else {})
@@ -1654,7 +1686,7 @@ def normal_main():
         if initial and initial["stage"] == "target" and stage == "source":
             continue
         records = source if stage == "source" else target + source
-        dataset = NormalScans(records, paired=True, queries=4096)
+        dataset = NormalScans(records, augment=True, queries=4096)
         order = []
         for epoch in range(epochs):
             rng = np.random.default_rng(np.random.SeedSequence([args.seed, int(stage == "target"), epoch]))
@@ -1666,6 +1698,7 @@ def normal_main():
         optimizer = normal_optimizer(model, stage)
         first, best = 0, float("inf")
         if initial and initial["stage"] == stage:
+            NormalHypothesis.validate_checkpoint(initial)
             model.load_state_dict(initial["model"], strict=True)
             optimizer.load_state_dict(initial["optimizer"])
             first, best = initial["visit"], initial["best"]
@@ -1710,7 +1743,7 @@ def normal_main():
                            seconds=time.monotonic() - started, gradient=float(gradient),
                            **{k: v / recent["frames"] for k, v in recent.items() if k != "frames"})
                 log.write(json.dumps(row) + "\n")
-                print(f"{stage} {visits}/{len(order)} loss={row['loss']:.3f} sem={row['semantic']:.3f} "
+                print(f"{stage} {visits}/{len(order)} loss={row['loss']:.3f} joint={row['joint']:.3f} sem={row['semantic']:.3f} "
                       f"geo={row['geometry']:.3f} elapsed={row['seconds']/60:.1f}min "
                       f"ETA={(row['seconds']/max(1,visits-first)*(len(order)-visits))/60:.1f}min", flush=True)
                 recent.clear()
@@ -1724,7 +1757,8 @@ def normal_main():
                 improved = measured["objective"] < best
                 best = min(best, measured["objective"])
                 print(f"development {stage} update={steps} objective={measured['objective']:.4f} "
-                      f"normal_accuracy={measured['set_accuracy']:.4f} mIoU={measured['mean_iou_present']:.4f} best={improved}", flush=True)
+                      f"normal_accuracy={measured['set_accuracy']:.4f} mIoU={measured['mean_iou_present']:.4f} "
+                      f"semantic_only_mIoU={measured['semantic_only']['mean_iou_present']:.4f} best={improved}", flush=True)
                 log.write(json.dumps(dict(stage=stage, update=steps, development=measured)) + "\n")
                 write_json(args.output / f"{stage}_development.json", dict(update=steps, best=best, latest=measured))
                 if improved:
@@ -1739,6 +1773,7 @@ def normal_main():
             if ending:
                 break
         selected = torch.load(args.output / f"{stage}_best.pt", map_location="cpu", weights_only=False)
+        NormalHypothesis.validate_checkpoint(selected)
         model.load_state_dict(selected["model"], strict=True)
         stage_results[stage] = dict(trained_frames=visits, selected_update=selected["update"], development=selected["development"])
         write_json(args.output / "stages.json", stage_results)
@@ -1748,8 +1783,7 @@ def normal_main():
     if full is None:
         full = normal_development(model, target_val, list(range(len(target_val))), device, args.workers, queries=8192)
     write_json(args.output / "normal201.json", full)
-    calibration = normal_calibration(model, [source_val[i] for i in source_indices], target_val,
-                                     target[::4], device, args.workers, args.output)
+    calibration = normal_calibration(model, target_val, device, args.workers, args.output, seed=config["seed"])
     final = dict(version=config["version"], mode=model.mode, model=model.state_dict(), config=config,
                  normal201=full, stages=stage_results, frozen=True, final_val19_evaluated=False)
     atomic_save(args.output / "frozen.pt", final)
