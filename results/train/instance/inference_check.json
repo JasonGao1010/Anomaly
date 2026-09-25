@@ -1,0 +1,8 @@
+{
+  "official_tensors_unchanged": 240,
+  "sampled_normal_points": 32,
+  "max_distance_abs_error": 0.00042575859765747737,
+  "max_distance_relative_error": 8.06660582202737e-07,
+  "finite": true,
+  "reference": "CPU float64 direct differences versus deployed float32 squared norm formula"
+}

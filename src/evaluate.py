@@ -113,7 +113,7 @@ def evaluate_normal(model, manifest, device, workers=2):
 @torch.no_grad()
 def evaluate_instance_normal(scorer, saved, device):
     """Compare learned and identity metrics on the same normal 201 points and bank."""
-    from .normal import InstanceSupport, INSTANCE_VERSION
+    from .normal import InstanceSupport, INSTANCE_VERSION, ScoreCalibration
     from .train import normal_cache, instance_development
 
     if saved.get("version") != INSTANCE_VERSION:
@@ -157,16 +157,31 @@ def evaluate_instance_normal(scorer, saved, device):
     # A fresh module avoids stale projected-bank caches and leaves the actual
     # scorer untouched. Its sole changed parameter is the metric transform.
     identity = InstanceSupport(memory_size=saved["config"]["memory_size"]).to(device)
+    identity.calibration = ScoreCalibration(
+        range_bandwidth=saved["config"]["calibration_bandwidth"]).to(device)
     identity.load_state_dict(scorer.state_dict(), strict=True)
     identity.transform.copy_(torch.eye(252, device=device, dtype=identity.transform.dtype))
     identity.eval()
     baseline = instance_development(identity, data, indices, retain=False)
+    bank, norms = scorer._bank()
+    support_counts = torch.zeros(19, 3, dtype=torch.long, device=device)
+    for start in range(0, len(indices), scorer.point_chunk):
+        at = indices[start:start + scorer.point_chunk]
+        distances = scorer._distance(scorer.encode(data["features"][at]), bank, norms)
+        nearest = distances.masked_fill(~scorer.memory_allowed.any(1)[None], torch.inf).argmin(1)
+        source = scorer.memory_source[nearest]
+        coarse = scorer.memory_allowed[nearest].sum(1) > 1
+        support_counts.index_add_(0, data["semantic"][at],
+            torch.stack((source == 1, source == 0, coarse), -1).long())
+    support_rows = [dict(category=c, target=int(row[0]), auxiliary=int(row[1]), coarse=int(row[2]))
+                    for c, row in enumerate(support_counts.cpu().tolist()) if row[0] + row[1]]
     gain = {}
     for key, sign in (("class_recall", 1), ("far_class_recall", 1), ("class_ce", -1)):
         if learned.get(key) is not None and baseline.get(key) is not None:
             gain[key] = sign * (learned[key] - baseline[key])
     return dict(version=INSTANCE_VERSION, points=len(indices), scans=len(selected_frames),
-        learned=learned, identity=baseline, metric_gain=gain,
+        learned=learned, identity=baseline, metric_gain=gain, support_sources=support_rows,
+        support_source_meaning="exact nearest complete normal instance: STU206 target or nuScenes auxiliary; coarse is a subset of either source",
         seconds=time.perf_counter() - started, cache=str(metadata_path.resolve()),
         cache_actual_count=cache["count"],
         population="all cached singleton normal 201 points in odd contiguous 64-frame blocks; no subsampling or source supplementation",

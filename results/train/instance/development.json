@@ -1,0 +1,400 @@
+{
+  "identity": {
+    "points": 644238,
+    "classes": [
+      {
+        "category": 0,
+        "points": 5841,
+        "recall": 0.4524910118130457,
+        "ce": 2.692379302688503,
+        "far_points": 5,
+        "far_recall": 0.2,
+        "mean_score": 573.6364517224976
+      },
+      {
+        "category": 3,
+        "points": 6712,
+        "recall": 0.11665673420738976,
+        "ce": 2.858388638095009,
+        "far_points": 37,
+        "far_recall": 0.4594594594594595,
+        "mean_score": 433.1348723148987
+      },
+      {
+        "category": 5,
+        "points": 1970,
+        "recall": 0.550253807106599,
+        "ce": 2.470071016289861,
+        "far_points": 335,
+        "far_recall": 0.564179104477612,
+        "mean_score": 392.25323401126764
+      },
+      {
+        "category": 8,
+        "points": 116902,
+        "recall": 0.8926622299019692,
+        "ce": 2.5937528544741983,
+        "far_points": 767,
+        "far_recall": 0.7235984354628422,
+        "mean_score": 205.92183890170335
+      },
+      {
+        "category": 9,
+        "points": 5911,
+        "recall": 0.0,
+        "ce": 4.055326045981278,
+        "far_points": 4,
+        "far_recall": 0.0,
+        "mean_score": 266.89670002704503
+      },
+      {
+        "category": 10,
+        "points": 98067,
+        "recall": 0.2946556945761571,
+        "ce": 2.7194796578549374,
+        "far_points": 1277,
+        "far_recall": 0.15270164447924825,
+        "mean_score": 225.2899417241006
+      },
+      {
+        "category": 12,
+        "points": 135685,
+        "recall": 0.6998268047315473,
+        "ce": 2.5743810872003334,
+        "far_points": 77817,
+        "far_recall": 0.805415269157125,
+        "mean_score": 210.3294366147957
+      },
+      {
+        "category": 13,
+        "points": 19584,
+        "recall": 0.050091911764705885,
+        "ce": 2.8815792850736113,
+        "far_points": 297,
+        "far_recall": 0.18855218855218855,
+        "mean_score": 287.1244727232877
+      },
+      {
+        "category": 14,
+        "points": 219253,
+        "recall": 0.4088290696136427,
+        "ce": 2.7748538967816603,
+        "far_points": 32256,
+        "far_recall": 0.5438678075396826,
+        "mean_score": 258.44360266030935
+      },
+      {
+        "category": 15,
+        "points": 8189,
+        "recall": 0.42044205641714494,
+        "ce": 2.7859820976902503,
+        "far_points": 311,
+        "far_recall": 0.33440514469453375,
+        "mean_score": 277.1955168036143
+      },
+      {
+        "category": 16,
+        "points": 21514,
+        "recall": 0.3508877939946082,
+        "ce": 2.7401528574891323,
+        "far_points": 512,
+        "far_recall": 0.33984375,
+        "mean_score": 269.3867035238364
+      },
+      {
+        "category": 17,
+        "points": 2868,
+        "recall": 0.4107391910739191,
+        "ce": 2.7584410018834444,
+        "far_points": 158,
+        "far_recall": 0.27848101265822783,
+        "mean_score": 285.68132538842025
+      },
+      {
+        "category": 18,
+        "points": 1742,
+        "recall": 0.6228473019517795,
+        "ce": 2.5777025872886385,
+        "far_points": 104,
+        "far_recall": 0.5288461538461539,
+        "mean_score": 291.55769096313196
+      }
+    ],
+    "class_recall": 0.405414123627116,
+    "class_ce": 2.8063454099069896,
+    "point_recall": 0.5224606434268081,
+    "far_points": 113880,
+    "far_recall": 0.7166139796276783,
+    "far_class_recall": 0.393796151563621,
+    "role": "normal instance-support development; no anomaly labels or density-likelihood surrogate"
+  },
+  "selected": {
+    "epoch": 4,
+    "development": {
+      "points": 644238,
+      "classes": [
+        {
+          "category": 0,
+          "points": 5841,
+          "recall": 0.7639102893340182,
+          "ce": 1.8232185946682853,
+          "far_points": 5,
+          "far_recall": 0.2,
+          "mean_score": 1379.6936634170174
+        },
+        {
+          "category": 3,
+          "points": 6712,
+          "recall": 0.11993444576877235,
+          "ce": 2.7042524193094977,
+          "far_points": 37,
+          "far_recall": 0.5675675675675675,
+          "mean_score": 992.1004282345505
+        },
+        {
+          "category": 5,
+          "points": 1970,
+          "recall": 0.6532994923857868,
+          "ce": 1.6479299942791452,
+          "far_points": 335,
+          "far_recall": 0.6029850746268657,
+          "mean_score": 944.9787558618535
+        },
+        {
+          "category": 8,
+          "points": 116902,
+          "recall": 0.9038681972934595,
+          "ce": 1.7389942604213318,
+          "far_points": 767,
+          "far_recall": 0.7405475880052151,
+          "mean_score": 481.4246101450531
+        },
+        {
+          "category": 9,
+          "points": 5911,
+          "recall": 0.0,
+          "ce": 6.309689072944694,
+          "far_points": 4,
+          "far_recall": 0.0,
+          "mean_score": 637.5656831573863
+        },
+        {
+          "category": 10,
+          "points": 98067,
+          "recall": 0.3159166692159442,
+          "ce": 2.1514862467284286,
+          "far_points": 1277,
+          "far_recall": 0.1581832419733751,
+          "mean_score": 521.8727325582912
+        },
+        {
+          "category": 12,
+          "points": 135685,
+          "recall": 0.7326380955890481,
+          "ce": 1.838293386506262,
+          "far_points": 77817,
+          "far_recall": 0.8429906061657478,
+          "mean_score": 542.2503023488259
+        },
+        {
+          "category": 13,
+          "points": 19584,
+          "recall": 0.05943627450980392,
+          "ce": 2.755003541409726,
+          "far_points": 297,
+          "far_recall": 0.18855218855218855,
+          "mean_score": 655.6724635557412
+        },
+        {
+          "category": 14,
+          "points": 219253,
+          "recall": 0.6877488563440409,
+          "ce": 2.228028556583703,
+          "far_points": 32256,
+          "far_recall": 0.5846044146825397,
+          "mean_score": 612.1668024031924
+        },
+        {
+          "category": 15,
+          "points": 8189,
+          "recall": 0.5441445841983148,
+          "ce": 2.271968754500402,
+          "far_points": 311,
+          "far_recall": 0.33762057877813506,
+          "mean_score": 606.2788542117344
+        },
+        {
+          "category": 16,
+          "points": 21514,
+          "recall": 0.3820303058473552,
+          "ce": 2.2800765105192355,
+          "far_points": 512,
+          "far_recall": 0.3359375,
+          "mean_score": 652.6546465207113
+        },
+        {
+          "category": 17,
+          "points": 2868,
+          "recall": 0.4208507670850767,
+          "ce": 2.3513626911192924,
+          "far_points": 158,
+          "far_recall": 0.2848101265822785,
+          "mean_score": 687.8394040117038
+        },
+        {
+          "category": 18,
+          "points": 1742,
+          "recall": 0.6239954075774972,
+          "ce": 1.838742360359338,
+          "far_points": 104,
+          "far_recall": 0.5480769230769231,
+          "mean_score": 654.8191258532308
+        }
+      ],
+      "class_recall": 0.47752102962685516,
+      "class_ce": 2.4568497222576413,
+      "point_recall": 0.63568277562019,
+      "far_points": 113880,
+      "far_recall": 0.7541710572532491,
+      "far_class_recall": 0.4147596776931412,
+      "role": "normal instance-support development; no anomaly labels or density-likelihood surrogate"
+    },
+    "trained_metric": true
+  },
+  "last": {
+    "epoch": 7,
+    "development": {
+      "points": 644238,
+      "classes": [
+        {
+          "category": 0,
+          "points": 5841,
+          "recall": 0.7606574216743708,
+          "ce": 1.8360690697481061,
+          "far_points": 5,
+          "far_recall": 0.2,
+          "mean_score": 1437.6403887852723
+        },
+        {
+          "category": 3,
+          "points": 6712,
+          "recall": 0.11844457687723481,
+          "ce": 2.7110924271442642,
+          "far_points": 37,
+          "far_recall": 0.5405405405405406,
+          "mean_score": 1044.365406327367
+        },
+        {
+          "category": 5,
+          "points": 1970,
+          "recall": 0.6477157360406092,
+          "ce": 1.645262388226152,
+          "far_points": 335,
+          "far_recall": 0.5940298507462687,
+          "mean_score": 994.1508521994964
+        },
+        {
+          "category": 8,
+          "points": 116902,
+          "recall": 0.9021830250979452,
+          "ce": 1.7307912728397836,
+          "far_points": 767,
+          "far_recall": 0.7249022164276402,
+          "mean_score": 502.05313830700277
+        },
+        {
+          "category": 9,
+          "points": 5911,
+          "recall": 0.0,
+          "ce": 6.424974124578025,
+          "far_points": 4,
+          "far_recall": 0.0,
+          "mean_score": 663.5168373341529
+        },
+        {
+          "category": 10,
+          "points": 98067,
+          "recall": 0.3170383513312327,
+          "ce": 2.150242643403421,
+          "far_points": 1277,
+          "far_recall": 0.15270164447924825,
+          "mean_score": 544.6972624150637
+        },
+        {
+          "category": 12,
+          "points": 135685,
+          "recall": 0.7256881748166709,
+          "ce": 1.8360830260393552,
+          "far_points": 77817,
+          "far_recall": 0.8383129650333475,
+          "mean_score": 566.5270078508435
+        },
+        {
+          "category": 13,
+          "points": 19584,
+          "recall": 0.05775122549019608,
+          "ce": 2.768387109595138,
+          "far_points": 297,
+          "far_recall": 0.17845117845117844,
+          "mean_score": 691.2267813121571
+        },
+        {
+          "category": 14,
+          "points": 219253,
+          "recall": 0.6866496695598235,
+          "ce": 2.226099039530514,
+          "far_points": 32256,
+          "far_recall": 0.5817522321428571,
+          "mean_score": 640.5716548327655
+        },
+        {
+          "category": 15,
+          "points": 8189,
+          "recall": 0.5377946025155697,
+          "ce": 2.280872436331981,
+          "far_points": 311,
+          "far_recall": 0.33440514469453375,
+          "mean_score": 638.1005261507731
+        },
+        {
+          "category": 16,
+          "points": 21514,
+          "recall": 0.3823091940132007,
+          "ce": 2.271019354804781,
+          "far_points": 512,
+          "far_recall": 0.333984375,
+          "mean_score": 678.4534588904477
+        },
+        {
+          "category": 17,
+          "points": 2868,
+          "recall": 0.4131799163179916,
+          "ce": 2.3515563566897537,
+          "far_points": 158,
+          "far_recall": 0.2721518987341772,
+          "mean_score": 723.8281991338796
+        },
+        {
+          "category": 18,
+          "points": 1742,
+          "recall": 0.6234213547646383,
+          "ce": 1.8277757474425518,
+          "far_points": 104,
+          "far_recall": 0.5384615384615384,
+          "mean_score": 691.2193181314917
+        }
+      ],
+      "class_recall": 0.4748333268076526,
+      "class_ce": 2.4661711535672173,
+      "point_recall": 0.633489486804566,
+      "far_points": 113880,
+      "far_recall": 0.7498946259220232,
+      "far_class_recall": 0.4068995065162561,
+      "role": "normal instance-support development; no anomaly labels or density-likelihood surrogate"
+    },
+    "training_loss": 1.7366971473373198,
+    "processed_points": 4720640,
+    "skipped_without_independent_allowed_anchors": 0,
+    "seconds": 249.35748786202748
+  }
+}

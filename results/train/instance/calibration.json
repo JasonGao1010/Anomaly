@@ -1,0 +1,941 @@
+{
+  "enabled": true,
+  "range_bandwidth": 0.5,
+  "candidates": [
+    {
+      "range_bandwidth": 0.0,
+      "classes": [
+        {
+          "category": 0,
+          "points": 728,
+          "raw_fpr01": 0.1607142835855484,
+          "calibrated_fpr01": 0.1607142835855484
+        },
+        {
+          "category": 3,
+          "points": 6931,
+          "raw_fpr01": 0.5486942529678345,
+          "calibrated_fpr01": 0.05843312665820122
+        },
+        {
+          "category": 4,
+          "points": 83,
+          "raw_fpr01": 0.3012048304080963,
+          "calibrated_fpr01": 0.3012048006057739
+        },
+        {
+          "category": 6,
+          "points": 982,
+          "raw_fpr01": 0.2525458335876465,
+          "calibrated_fpr01": 0.2525458335876465
+        },
+        {
+          "category": 7,
+          "points": 697,
+          "raw_fpr01": 0.21664275228977203,
+          "calibrated_fpr01": 0.21664275228977203
+        },
+        {
+          "category": 8,
+          "points": 37,
+          "raw_fpr01": 0.37837839126586914,
+          "calibrated_fpr01": 0.37837839126586914
+        },
+        {
+          "category": 9,
+          "points": 442,
+          "raw_fpr01": 0.2579185664653778,
+          "calibrated_fpr01": 0.2579185664653778
+        },
+        {
+          "category": 10,
+          "points": 95528,
+          "raw_fpr01": 0.006731010973453522,
+          "calibrated_fpr01": 0.012729251757264137
+        },
+        {
+          "category": 11,
+          "points": 23,
+          "raw_fpr01": 0.08695652335882187,
+          "calibrated_fpr01": 0.08695652335882187
+        },
+        {
+          "category": 12,
+          "points": 56295,
+          "raw_fpr01": 0.005311306565999985,
+          "calibrated_fpr01": 0.011528554372489452
+        },
+        {
+          "category": 13,
+          "points": 85748,
+          "raw_fpr01": 0.006600737106055021,
+          "calibrated_fpr01": 0.019359052181243896
+        },
+        {
+          "category": 14,
+          "points": 222537,
+          "raw_fpr01": 0.002952317940071225,
+          "calibrated_fpr01": 0.01048364955931902
+        },
+        {
+          "category": 15,
+          "points": 174207,
+          "raw_fpr01": 0.019959013909101486,
+          "calibrated_fpr01": 0.015039579942822456
+        }
+      ],
+      "fit": {
+        "points": 668912,
+        "minimum_points": 2048,
+        "class_counts": [
+          382,
+          1,
+          0,
+          4256,
+          121,
+          1,
+          1115,
+          666,
+          24,
+          99,
+          119186,
+          17,
+          87323,
+          101619,
+          191327,
+          162775
+        ],
+        "fallback_classes": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11
+        ],
+        "class_quantile_counts": [
+          0,
+          0,
+          0,
+          11,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11,
+          0,
+          11,
+          11,
+          11,
+          11
+        ],
+        "conditions": "frozen official 16-class prediction only; no range or spacing bins"
+      },
+      "mean_class_tail_error": 0.01126220241189003
+    },
+    {
+      "range_bandwidth": 0.25,
+      "classes": [
+        {
+          "category": 0,
+          "points": 728,
+          "raw_fpr01": 0.1607142835855484,
+          "calibrated_fpr01": 0.1607142835855484
+        },
+        {
+          "category": 3,
+          "points": 6931,
+          "raw_fpr01": 0.5486942529678345,
+          "calibrated_fpr01": 0.058000288903713226
+        },
+        {
+          "category": 4,
+          "points": 83,
+          "raw_fpr01": 0.3012048304080963,
+          "calibrated_fpr01": 0.3012048006057739
+        },
+        {
+          "category": 6,
+          "points": 982,
+          "raw_fpr01": 0.2525458335876465,
+          "calibrated_fpr01": 0.2525458335876465
+        },
+        {
+          "category": 7,
+          "points": 697,
+          "raw_fpr01": 0.21664275228977203,
+          "calibrated_fpr01": 0.21664275228977203
+        },
+        {
+          "category": 8,
+          "points": 37,
+          "raw_fpr01": 0.37837839126586914,
+          "calibrated_fpr01": 0.37837839126586914
+        },
+        {
+          "category": 9,
+          "points": 442,
+          "raw_fpr01": 0.2579185664653778,
+          "calibrated_fpr01": 0.2579185664653778
+        },
+        {
+          "category": 10,
+          "points": 95528,
+          "raw_fpr01": 0.006731010973453522,
+          "calibrated_fpr01": 0.011640566401183605
+        },
+        {
+          "category": 11,
+          "points": 23,
+          "raw_fpr01": 0.08695652335882187,
+          "calibrated_fpr01": 0.08695652335882187
+        },
+        {
+          "category": 12,
+          "points": 56295,
+          "raw_fpr01": 0.005311306565999985,
+          "calibrated_fpr01": 0.010977883823215961
+        },
+        {
+          "category": 13,
+          "points": 85748,
+          "raw_fpr01": 0.006600737106055021,
+          "calibrated_fpr01": 0.018519382923841476
+        },
+        {
+          "category": 14,
+          "points": 222537,
+          "raw_fpr01": 0.002952317940071225,
+          "calibrated_fpr01": 0.00884347315877676
+        },
+        {
+          "category": 15,
+          "points": 174207,
+          "raw_fpr01": 0.019959013909101486,
+          "calibrated_fpr01": 0.01599820889532566
+        }
+      ],
+      "fit": {
+        "points": 668912,
+        "minimum_points": 2048,
+        "class_counts": [
+          382,
+          1,
+          0,
+          4256,
+          121,
+          1,
+          1115,
+          666,
+          24,
+          99,
+          119186,
+          17,
+          87323,
+          101619,
+          191327,
+          162775
+        ],
+        "fallback_classes": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11
+        ],
+        "class_quantile_counts": [
+          0,
+          0,
+          0,
+          11,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11,
+          0,
+          11,
+          11,
+          11,
+          11
+        ],
+        "conditions": "continuous log range for sufficiently populated frozen 16-class groups; sparse classes use the range-independent global CDF; no spacing",
+        "range_bandwidth": 0.25,
+        "range_groups_enabled": [
+          false,
+          false,
+          false,
+          false,
+          true,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+          false,
+          true,
+          true,
+          true,
+          true
+        ],
+        "range_fallback_anchors": [
+          16,
+          16,
+          16,
+          16,
+          11,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          1,
+          16,
+          2,
+          1,
+          1,
+          0
+        ]
+      },
+      "mean_class_tail_error": 0.011048809631417194
+    },
+    {
+      "range_bandwidth": 0.5,
+      "classes": [
+        {
+          "category": 0,
+          "points": 728,
+          "raw_fpr01": 0.1607142835855484,
+          "calibrated_fpr01": 0.1607142835855484
+        },
+        {
+          "category": 3,
+          "points": 6931,
+          "raw_fpr01": 0.5486942529678345,
+          "calibrated_fpr01": 0.047467898577451706
+        },
+        {
+          "category": 4,
+          "points": 83,
+          "raw_fpr01": 0.3012048304080963,
+          "calibrated_fpr01": 0.3012048006057739
+        },
+        {
+          "category": 6,
+          "points": 982,
+          "raw_fpr01": 0.2525458335876465,
+          "calibrated_fpr01": 0.2525458335876465
+        },
+        {
+          "category": 7,
+          "points": 697,
+          "raw_fpr01": 0.21664275228977203,
+          "calibrated_fpr01": 0.21664275228977203
+        },
+        {
+          "category": 8,
+          "points": 37,
+          "raw_fpr01": 0.37837839126586914,
+          "calibrated_fpr01": 0.37837839126586914
+        },
+        {
+          "category": 9,
+          "points": 442,
+          "raw_fpr01": 0.2579185664653778,
+          "calibrated_fpr01": 0.2579185664653778
+        },
+        {
+          "category": 10,
+          "points": 95528,
+          "raw_fpr01": 0.006731010973453522,
+          "calibrated_fpr01": 0.01179758831858635
+        },
+        {
+          "category": 11,
+          "points": 23,
+          "raw_fpr01": 0.08695652335882187,
+          "calibrated_fpr01": 0.08695652335882187
+        },
+        {
+          "category": 12,
+          "points": 56295,
+          "raw_fpr01": 0.005311306565999985,
+          "calibrated_fpr01": 0.010444977320730686
+        },
+        {
+          "category": 13,
+          "points": 85748,
+          "raw_fpr01": 0.006600737106055021,
+          "calibrated_fpr01": 0.018775947391986847
+        },
+        {
+          "category": 14,
+          "points": 222537,
+          "raw_fpr01": 0.002952317940071225,
+          "calibrated_fpr01": 0.009526505134999752
+        },
+        {
+          "category": 15,
+          "points": 174207,
+          "raw_fpr01": 0.019959013909101486,
+          "calibrated_fpr01": 0.014195756055414677
+        }
+      ],
+      "fit": {
+        "points": 668912,
+        "minimum_points": 2048,
+        "class_counts": [
+          382,
+          1,
+          0,
+          4256,
+          121,
+          1,
+          1115,
+          666,
+          24,
+          99,
+          119186,
+          17,
+          87323,
+          101619,
+          191327,
+          162775
+        ],
+        "fallback_classes": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11
+        ],
+        "class_quantile_counts": [
+          0,
+          0,
+          0,
+          11,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11,
+          0,
+          11,
+          11,
+          11,
+          11
+        ],
+        "conditions": "continuous log range for sufficiently populated frozen 16-class groups; sparse classes use the range-independent global CDF; no spacing",
+        "range_bandwidth": 0.5,
+        "range_groups_enabled": [
+          false,
+          false,
+          false,
+          false,
+          true,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+          false,
+          true,
+          true,
+          true,
+          true
+        ],
+        "range_fallback_anchors": [
+          16,
+          16,
+          16,
+          16,
+          6,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          0,
+          16,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "mean_class_tail_error": 0.008859277088195084
+    },
+    {
+      "range_bandwidth": 1.0,
+      "classes": [
+        {
+          "category": 0,
+          "points": 728,
+          "raw_fpr01": 0.1607142835855484,
+          "calibrated_fpr01": 0.1607142835855484
+        },
+        {
+          "category": 3,
+          "points": 6931,
+          "raw_fpr01": 0.5486942529678345,
+          "calibrated_fpr01": 0.05367191135883331
+        },
+        {
+          "category": 4,
+          "points": 83,
+          "raw_fpr01": 0.3012048304080963,
+          "calibrated_fpr01": 0.3012048006057739
+        },
+        {
+          "category": 6,
+          "points": 982,
+          "raw_fpr01": 0.2525458335876465,
+          "calibrated_fpr01": 0.2525458335876465
+        },
+        {
+          "category": 7,
+          "points": 697,
+          "raw_fpr01": 0.21664275228977203,
+          "calibrated_fpr01": 0.21664275228977203
+        },
+        {
+          "category": 8,
+          "points": 37,
+          "raw_fpr01": 0.37837839126586914,
+          "calibrated_fpr01": 0.37837839126586914
+        },
+        {
+          "category": 9,
+          "points": 442,
+          "raw_fpr01": 0.2579185664653778,
+          "calibrated_fpr01": 0.2579185664653778
+        },
+        {
+          "category": 10,
+          "points": 95528,
+          "raw_fpr01": 0.006731010973453522,
+          "calibrated_fpr01": 0.012258186005055904
+        },
+        {
+          "category": 11,
+          "points": 23,
+          "raw_fpr01": 0.08695652335882187,
+          "calibrated_fpr01": 0.08695652335882187
+        },
+        {
+          "category": 12,
+          "points": 56295,
+          "raw_fpr01": 0.005311306565999985,
+          "calibrated_fpr01": 0.010942356660962105
+        },
+        {
+          "category": 13,
+          "points": 85748,
+          "raw_fpr01": 0.006600737106055021,
+          "calibrated_fpr01": 0.018915893509984016
+        },
+        {
+          "category": 14,
+          "points": 222537,
+          "raw_fpr01": 0.002952317940071225,
+          "calibrated_fpr01": 0.011265542358160019
+        },
+        {
+          "category": 15,
+          "points": 174207,
+          "raw_fpr01": 0.019959013909101486,
+          "calibrated_fpr01": 0.014477030374109745
+        }
+      ],
+      "fit": {
+        "points": 668912,
+        "minimum_points": 2048,
+        "class_counts": [
+          382,
+          1,
+          0,
+          4256,
+          121,
+          1,
+          1115,
+          666,
+          24,
+          99,
+          119186,
+          17,
+          87323,
+          101619,
+          191327,
+          162775
+        ],
+        "fallback_classes": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11
+        ],
+        "class_quantile_counts": [
+          0,
+          0,
+          0,
+          11,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11,
+          0,
+          11,
+          11,
+          11,
+          11
+        ],
+        "conditions": "continuous log range for sufficiently populated frozen 16-class groups; sparse classes use the range-independent global CDF; no spacing",
+        "range_bandwidth": 1.0,
+        "range_groups_enabled": [
+          false,
+          false,
+          false,
+          false,
+          true,
+          false,
+          false,
+          false,
+          false,
+          false,
+          false,
+          true,
+          false,
+          true,
+          true,
+          true,
+          true
+        ],
+        "range_fallback_anchors": [
+          16,
+          16,
+          16,
+          16,
+          0,
+          16,
+          16,
+          16,
+          16,
+          16,
+          16,
+          0,
+          16,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "mean_class_tail_error": 0.010255153377850849
+    }
+  ],
+  "reference": {
+    "points": 668912,
+    "classes": [
+      {
+        "category": 0,
+        "points": 4539,
+        "recall": 0.7801277814496586,
+        "ce": 1.8740358477678725,
+        "far_points": 36,
+        "far_recall": 0.25,
+        "mean_score": 1278.6919187557123
+      },
+      {
+        "category": 1,
+        "points": 26,
+        "recall": 0.07692307692307693,
+        "ce": 2.672056720807002,
+        "far_points": 3,
+        "far_recall": 0.0,
+        "mean_score": 423.4203855074369
+      },
+      {
+        "category": 3,
+        "points": 3564,
+        "recall": 0.11195286195286196,
+        "ce": 2.7653952821269714,
+        "far_points": 118,
+        "far_recall": 0.288135593220339,
+        "mean_score": 740.3226672085849
+      },
+      {
+        "category": 5,
+        "points": 2518,
+        "recall": 0.5524225575853853,
+        "ce": 1.840704928845392,
+        "far_points": 339,
+        "far_recall": 0.5545722713864307,
+        "mean_score": 934.3989812291928
+      },
+      {
+        "category": 8,
+        "points": 126002,
+        "recall": 0.9187314487071634,
+        "ce": 1.740913717709856,
+        "far_points": 879,
+        "far_recall": 0.7053469852104665,
+        "mean_score": 467.53121607007796
+      },
+      {
+        "category": 9,
+        "points": 5176,
+        "recall": 0.0,
+        "ce": 6.7756391947936425,
+        "far_points": 0,
+        "far_recall": null,
+        "mean_score": 538.5286036613736
+      },
+      {
+        "category": 10,
+        "points": 157601,
+        "recall": 0.3219776524260633,
+        "ce": 2.116498024517634,
+        "far_points": 1610,
+        "far_recall": 0.16459627329192547,
+        "mean_score": 512.3335578895172
+      },
+      {
+        "category": 12,
+        "points": 102917,
+        "recall": 0.6516610472516688,
+        "ce": 1.9803402338608833,
+        "far_points": 49717,
+        "far_recall": 0.7821067240581693,
+        "mean_score": 528.2741097033517
+      },
+      {
+        "category": 13,
+        "points": 18026,
+        "recall": 0.06063463885498724,
+        "ce": 2.763943212292613,
+        "far_points": 581,
+        "far_recall": 0.08777969018932874,
+        "mean_score": 620.2791924285634
+      },
+      {
+        "category": 14,
+        "points": 208016,
+        "recall": 0.6967060226136451,
+        "ce": 2.253221284875947,
+        "far_points": 23481,
+        "far_recall": 0.5519781951364934,
+        "mean_score": 598.1410015787806
+      },
+      {
+        "category": 15,
+        "points": 7042,
+        "recall": 0.4206191422891224,
+        "ce": 2.4000449599409874,
+        "far_points": 233,
+        "far_recall": 0.2832618025751073,
+        "mean_score": 556.5243477316209
+      },
+      {
+        "category": 16,
+        "points": 26526,
+        "recall": 0.3768755183593456,
+        "ce": 2.250430832086335,
+        "far_points": 734,
+        "far_recall": 0.23160762942779292,
+        "mean_score": 643.1070108379901
+      },
+      {
+        "category": 17,
+        "points": 4112,
+        "recall": 0.5525291828793775,
+        "ce": 2.2519997240040555,
+        "far_points": 231,
+        "far_recall": 0.19047619047619047,
+        "mean_score": 678.1776205426524
+      },
+      {
+        "category": 18,
+        "points": 2847,
+        "recall": 0.6743940990516333,
+        "ce": 1.6616789514102726,
+        "far_points": 117,
+        "far_recall": 0.5641025641025641,
+        "mean_score": 687.9744229894544
+      }
+    ],
+    "class_recall": 0.4706639964169932,
+    "class_ce": 2.513449707248651,
+    "point_recall": 0.601089530461406,
+    "far_points": 78079,
+    "far_recall": 0.6833847769566721,
+    "far_class_recall": 0.35799722454421595,
+    "role": "normal instance-support development; no anomaly labels or density-likelihood surrogate"
+  },
+  "holdout": {
+    "points": 644238,
+    "classes": [
+      {
+        "category": 0,
+        "points": 5841,
+        "recall": 0.7639102893340182,
+        "ce": 1.8232185946682853,
+        "far_points": 5,
+        "far_recall": 0.2,
+        "mean_score": 1379.6936634170174
+      },
+      {
+        "category": 3,
+        "points": 6712,
+        "recall": 0.11993444576877235,
+        "ce": 2.7042524193094977,
+        "far_points": 37,
+        "far_recall": 0.5675675675675675,
+        "mean_score": 992.1004282345505
+      },
+      {
+        "category": 5,
+        "points": 1970,
+        "recall": 0.6532994923857868,
+        "ce": 1.6479299942791452,
+        "far_points": 335,
+        "far_recall": 0.6029850746268657,
+        "mean_score": 944.9787558618535
+      },
+      {
+        "category": 8,
+        "points": 116902,
+        "recall": 0.9038681972934595,
+        "ce": 1.7389942604213318,
+        "far_points": 767,
+        "far_recall": 0.7405475880052151,
+        "mean_score": 481.4246101450531
+      },
+      {
+        "category": 9,
+        "points": 5911,
+        "recall": 0.0,
+        "ce": 6.309689072944694,
+        "far_points": 4,
+        "far_recall": 0.0,
+        "mean_score": 637.5656831573863
+      },
+      {
+        "category": 10,
+        "points": 98067,
+        "recall": 0.3159166692159442,
+        "ce": 2.1514862467284286,
+        "far_points": 1277,
+        "far_recall": 0.1581832419733751,
+        "mean_score": 521.8727325582912
+      },
+      {
+        "category": 12,
+        "points": 135685,
+        "recall": 0.7326380955890481,
+        "ce": 1.838293386506262,
+        "far_points": 77817,
+        "far_recall": 0.8429906061657478,
+        "mean_score": 542.2503023488259
+      },
+      {
+        "category": 13,
+        "points": 19584,
+        "recall": 0.05943627450980392,
+        "ce": 2.755003541409726,
+        "far_points": 297,
+        "far_recall": 0.18855218855218855,
+        "mean_score": 655.6724635557412
+      },
+      {
+        "category": 14,
+        "points": 219253,
+        "recall": 0.6877488563440409,
+        "ce": 2.228028556583703,
+        "far_points": 32256,
+        "far_recall": 0.5846044146825397,
+        "mean_score": 612.1668024031924
+      },
+      {
+        "category": 15,
+        "points": 8189,
+        "recall": 0.5441445841983148,
+        "ce": 2.271968754500402,
+        "far_points": 311,
+        "far_recall": 0.33762057877813506,
+        "mean_score": 606.2788542117344
+      },
+      {
+        "category": 16,
+        "points": 21514,
+        "recall": 0.3820303058473552,
+        "ce": 2.2800765105192355,
+        "far_points": 512,
+        "far_recall": 0.3359375,
+        "mean_score": 652.6546465207113
+      },
+      {
+        "category": 17,
+        "points": 2868,
+        "recall": 0.4208507670850767,
+        "ce": 2.3513626911192924,
+        "far_points": 158,
+        "far_recall": 0.2848101265822785,
+        "mean_score": 687.8394040117038
+      },
+      {
+        "category": 18,
+        "points": 1742,
+        "recall": 0.6239954075774972,
+        "ce": 1.838742360359338,
+        "far_points": 104,
+        "far_recall": 0.5480769230769231,
+        "mean_score": 654.8191258532308
+      }
+    ],
+    "class_recall": 0.47752102962685516,
+    "class_ce": 2.4568497222576413,
+    "point_recall": 0.63568277562019,
+    "far_points": 113880,
+    "far_recall": 0.7541710572532491,
+    "far_class_recall": 0.4147596776931412,
+    "role": "normal instance-support development; no anomaly labels or density-likelihood surrogate"
+  },
+  "raw_mean_class_tail_error": 0.09450964904855937,
+  "calibrated_mean_class_tail_error": 0.008859277088195084,
+  "normal_blocks_only": true
+}
