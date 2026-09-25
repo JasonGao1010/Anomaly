@@ -1467,6 +1467,9 @@ def preflight(args, train, val, device, config, resources, method="field"):
                      ("mixed_batch_seconds", "peak_vram_bytes", "parameter_updates", "scans")}))
 
 
+NORMAL_SELECTION = "maximum mIoU over the fixed ground-truth-present normal development classes; minimum normal objective breaks exact ties; no anomaly labels"
+
+
 @torch.no_grad()
 def normal_development(model, records, indices, device, workers, *, queries=4096):
     from .data import NormalScans
@@ -1475,6 +1478,12 @@ def normal_development(model, records, indices, device, workers, *, queries=4096
     loader = DataLoader(data, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=True, prefetch_factor=1 if workers else None)
     totals, count = defaultdict(float), 0
+    diagnostics = {}
+    class_changes = np.zeros((19, 2), np.int64)
+    strata = {name: dict(edges=edges, counts=np.zeros((len(edges) + 1, 5), np.int64),
+                        confusion=np.zeros((len(edges) + 1, 19, 19), np.int64))
+              for name, edges in (("distance_metres", [10., 20., 30., 40.]),
+                                  ("returns_per_angular_cell", [1, 3, 7, 15]))}
     confusions = {name: np.zeros((19, 19), np.int64) for name in ("joint", "semantic")}
     start = time.monotonic()
     for sample in loader:
@@ -1485,7 +1494,14 @@ def normal_development(model, records, indices, device, workers, *, queries=4096
         totals["objective"] += float(loss)
         for key, value in detail.items():
             totals[key] += float(value)
-        # Both decisions come from the same forward used by the joint objective.
+        for key, value in model.development_diagnostics.items():
+            value = np.asarray(value, dtype=np.float64)
+            if key not in diagnostics:
+                diagnostics[key] = np.zeros_like(value)
+            if diagnostics[key].shape != value.shape or not np.isfinite(value).all():
+                raise ValueError(f"invalid additive normal diagnostic: {key}")
+            diagnostics[key] += value
+        # Formal and semantic-only decisions share one backbone evaluation.
         predictions = dict(joint=model.development_prediction,
                            semantic=model.development_semantic_prediction)
         allowed = sample["allowed"]
@@ -1502,23 +1518,151 @@ def normal_development(model, records, indices, device, workers, *, queries=4096
         totals["corrected_points"] += int((correct["joint"] & ~correct["semantic"]).sum())
         totals["worsened_points"] += int((~correct["joint"] & correct["semantic"]).sum())
         totals["set_points"] += int(valid.sum())
+        joint_correct = predictions["joint"][single] == truth
+        semantic_correct = predictions["semantic"][single] == truth
+        for column, selected in enumerate((joint_correct & ~semantic_correct, ~joint_correct & semantic_correct)):
+            class_changes[:, column] += torch.bincount(truth[selected], minlength=19).cpu().numpy()
+        distance = sample["xyzi"][:, :3].norm(dim=1)
+        group = sample["observation"]["group"]
+        density = torch.bincount(group)[group]
+        for name, values in (("distance_metres", distance), ("returns_per_angular_cell", density)):
+            row = strata[name]
+            bins = torch.bucketize(values.contiguous(), values.new_tensor(row["edges"]), right=False)
+            normal_bins = bins[valid]
+            columns = (torch.ones_like(correct["joint"]), correct["joint"], correct["semantic"],
+                       correct["joint"] & ~correct["semantic"], ~correct["joint"] & correct["semantic"])
+            for column, selected in enumerate(columns):
+                row["counts"][:, column] += torch.bincount(normal_bins[selected], minlength=len(row["edges"]) + 1).cpu().numpy()
+            combined = bins[single] * 361 + truth * 19 + predictions["joint"][single]
+            row["confusion"] += torch.bincount(combined, minlength=(len(row["edges"]) + 1) * 361).reshape(-1, 19, 19).cpu().numpy()
         count += 1
     if not count or not totals["set_points"]:
         raise ValueError("normal development has no reliably labeled normal points")
     summaries = {}
     for name, confusion in confusions.items():
+        support = confusion.sum(1)
         union = confusion.sum(0) + confusion.sum(1) - np.diag(confusion)
         summaries[name] = dict(set_accuracy=totals[name + "_set_correct"] / totals["set_points"],
             iou=[float(confusion[c, c] / union[c]) if union[c] else None for c in range(19)],
             mean_iou_present=float(np.mean(np.diag(confusion)[union > 0] / union[union > 0])) if (union > 0).any() else None,
+            mean_iou_gt=float(np.mean(np.diag(confusion)[support > 0] / union[support > 0])) if (support > 0).any() else None,
+            ground_truth_points=support.tolist(), absent_classes=np.flatnonzero(support == 0).tolist(),
             confusion=confusion.tolist())
+    for row in strata.values():
+        row["counts"] = row["counts"].tolist()
+        row["confusion"] = row["confusion"].tolist()
+        row["count_columns"] = ["points", "correct", "semantic_correct", "corrected", "worsened"]
+        row["bins"] = "right-closed intervals split at edges; the first and last bins include the remaining tails"
     counts = ("joint_set_correct", "semantic_set_correct", "set_points", "corrected_points", "worsened_points")
     measured = {key: value / count for key, value in totals.items() if key not in counts}
     return dict(**measured, **summaries["joint"], semantic_only=summaries["semantic"],
                 joint_comparison={key: int(totals[key]) for key in ("set_points", "corrected_points", "worsened_points")},
-                semantic_definition="argmax of the same joint class evidence used for training and inference; semantic_only excludes geometric evidence",
-                iou_definition="pooled reliable singleton-label points; mean over classes with nonzero union; set accuracy also includes coarse labels",
+                per_class_comparison=dict(corrected_points=class_changes[:, 0].tolist(),
+                                          worsened_points=class_changes[:, 1].tolist(),
+                                          population="reliable singleton-label points; class index is ground truth"),
+                semantic_definition="formal inference decision for this variant; semantic_only is an internal diagnostic of these same weights, not an independently trained baseline",
+                iou_definition="pooled reliable singleton-label points; mean_iou_gt averages the fixed ground-truth-present classes; mean_iou_present averages nonzero unions; set accuracy also includes coarse labels",
+                strata=strata, observation_diagnostics={key: value.tolist() for key, value in diagnostics.items()},
+                observation_diagnostics_scope="additive statistics over the deterministic reliable supervision queries; normal semantic confusion covers every reliable input point",
                 scans=count, seconds=time.monotonic() - start)
+
+
+def normal_selection(measured):
+    """Fixed labeled classes select normal semantics before predictive likelihood."""
+    quality, objective = measured["mean_iou_gt"], measured["objective"]
+    if quality is None or not np.isfinite([quality, objective]).all():
+        raise ValueError("normal model selection requires finite ground-truth-class mIoU and loss")
+    return float(quality), -float(objective)
+
+
+def normal_replay_pools(source, target):
+    from .data import STU_NORMAL_SEMANTICS
+    present = set()
+    for row in target:
+        if row.get("source") != "normal_stu" or row.get("scene") != "206":
+            raise ValueError("normal replay priorities must be derived from STU 206 training labels")
+        labels = np.unique(np.fromfile(row["label"], dtype=np.uint32) & 0xFFFF)
+        present.update(STU_NORMAL_SEMANTICS[int(label)] for label in labels if int(label) in STU_NORMAL_SEMANTICS)
+    pools = defaultdict(list)
+    for index, row in enumerate(source):
+        for category in row.get("refinement_classes", []):
+            if category not in present:
+                pools[category].append(index)
+    return dict(pools), sorted(present)
+
+
+def normal_order(source_count, target_count, epochs, seed, stage, replay_pools=None):
+    if stage not in ("source", "target") or min(source_count, target_count, epochs) < 1:
+        raise ValueError("normal order requires two nonempty domains and positive epochs")
+    replay_rng = np.random.default_rng(np.random.SeedSequence([seed, 929]))
+    general = replay_rng.permutation(source_count)
+    pool_classes = sorted(replay_pools or {})
+    pools, pointers = {}, defaultdict(int)
+    for category in pool_classes:
+        values = np.unique(replay_pools[category])
+        if not len(values) or (values < 0).any() or (values >= source_count).any():
+            raise ValueError("normal replay pools must contain valid source record indices")
+        pools[category] = np.random.default_rng(np.random.SeedSequence([seed, 917, category])).permutation(values)
+    replay_count, general_count = 0, 0
+    order = []
+    for epoch in range(epochs):
+        rng = np.random.default_rng(np.random.SeedSequence([seed, int(stage == "target"), epoch]))
+        ids = rng.permutation(source_count if stage == "source" else target_count)
+        for visit, index in enumerate(ids):
+            order.append((epoch, int(index)))
+            if stage == "target" and visit % 4 == 3:
+                # Half of the fixed replay slots preserve explicitly refined normal
+                # classes; the remainder traverse the whole source pool without replacement.
+                if pool_classes and replay_count % 2 == 0:
+                    category = pool_classes[(replay_count // 2) % len(pool_classes)]
+                    selected = pools[category][pointers[category] % len(pools[category])]
+                    pointers[category] += 1
+                else:
+                    if general_count and general_count % source_count == 0:
+                        general = replay_rng.permutation(source_count)
+                    selected = general[general_count % source_count]
+                    general_count += 1
+                order.append((epoch, target_count + int(selected)))
+                replay_count += 1
+    return order
+
+
+def normal_reference(path, config):
+    """A matched run must complete the same visits and learning-rate schedule."""
+    path = Path(path)
+    other = json.loads((path / "config.json").read_text())
+    stages = json.loads((path / "stages.json").read_text())
+    keys = ("version", "architecture", "data_identity", "classes", "source_mapping", "target_mapping", "source_epochs", "target_epochs", "batch", "seed",
+            "eval_every", "target_eval_every", "queries", "source_replay_fraction", "source_replay", "initial_sha256", "budget", "selection")
+    # JSON stores integer mapping keys as strings; compare the same representation.
+    comparable = json.loads(json.dumps(config))
+    changed = [key for key in keys if identity(comparable.get(key)) != identity(other.get(key))]
+    if changed:
+        raise ValueError(f"normal comparison changes data, initialization or training budget: {changed}")
+    for stage, budget in config["budget"].items():
+        result = stages.get(stage, {})
+        if (not result.get("budget_complete") or result.get("trained_frames") != budget["visits"]
+                or result.get("trained_updates") != budget["updates"]
+                or result.get("planned_frames") != budget["visits"]
+                or result.get("planned_updates") != budget["updates"]):
+            raise ValueError(f"reference {stage} did not complete the common nominal update schedule")
+    return other, stages
+
+
+def normal_baseline_comparison(path, config, measured):
+    other, _ = normal_reference(path, config)
+    if other.get("variant") != "semantic":
+        raise ValueError("an independent normal semantic baseline must use variant=semantic")
+    baseline = json.loads((Path(path) / "normal201.json").read_text())
+    if baseline["ground_truth_points"] != measured["ground_truth_points"] or baseline["scans"] != measured["scans"]:
+        raise ValueError("normal baseline and method development must cover the identical labeled population")
+    difference = [None if first is None or second is None else first - second
+                  for first, second in zip(measured["iou"], baseline["iou"])]
+    return dict(baseline=str(Path(path).resolve()), comparison="independently trained semantic variant; identical normal data, frame order and nominal update schedule",
+                mean_iou_gt_difference=measured["mean_iou_gt"] - baseline["mean_iou_gt"],
+                set_accuracy_difference=measured["set_accuracy"] - baseline["set_accuracy"],
+                per_class_iou_difference=difference, ground_truth_points=measured["ground_truth_points"],
+                absent_classes=measured["absent_classes"])
 
 
 def normal_optimizer(model, stage):
@@ -1570,7 +1714,7 @@ def normal_calibration(model, records, device, workers, output, *, seed=206):
                   seconds=time.monotonic() - start, anomaly_labels_used=False,
                   point_scope="actual returns with at least one reliable normal class in the 2.5–50 metre supervision range",
                   sampling="uniform without replacement within each frame's reliable normal points; no class balancing or support filtering",
-                  score_definition="minimum joint class energy; identical raw_score as formal inference",
+                  score_definition=f"minimum formal class energy for variant={model.variant}; identical raw_score as inference",
                   meaning="one monotone normal-reference transform preserves the joint score ordering; not an anomaly probability or anomaly-performance estimate")
     write_json(output / "calibration.json", result)
     return result
@@ -1579,7 +1723,7 @@ def normal_calibration(model, records, device, workers, output, *, seed=206):
 def normal_main():
     from .data import NormalScans, normal_records, NORMAL_CLASSES, STU_NORMAL_SEMANTICS, NUSCENES_NORMAL_SETS
     from .model import (NormalHypothesis, NORMAL_VERSION, NORMAL_ARCHITECTURE,
-                        NORMAL_SCORE_VERSION, NORMAL_LOSS_WEIGHTS)
+                        NORMAL_SCORE_VERSION)
     parser = argparse.ArgumentParser(description="Real-normal semantic hypothesis training; stop before STU val19")
     parser.add_argument("--normal", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
@@ -1589,6 +1733,10 @@ def normal_main():
     parser.add_argument("--threads", type=int, default=2)
     parser.add_argument("--batch", type=int, default=2)
     parser.add_argument("--seed", type=int, default=206)
+    parser.add_argument("--variant", choices=("joint", "semantic", "separate"), default="joint",
+                        help="joint evidence, independent semantic baseline, or control without joint classification supervision")
+    parser.add_argument("--match-run", type=Path, help="completed reference run with the identical data order and nominal update schedule")
+    parser.add_argument("--baseline", type=Path, help="completed independent semantic run for a matched full-201 comparison")
     parser.add_argument("--eval-every", type=int, default=2000)
     parser.add_argument("--deadline", type=float, required=True, help="UTC Unix deadline; reserve target training and final normal calibration")
     parser.add_argument("--resume", action="store_true")
@@ -1608,6 +1756,8 @@ def normal_main():
     for saved in (initial, selected):
         if saved is not None:
             NormalHypothesis.validate_checkpoint(saved)
+            if saved["config"].get("variant") != args.variant:
+                raise ValueError("resume/calibration variant must match the recorded trained method")
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     seed_all(args.seed)
@@ -1624,6 +1774,13 @@ def normal_main():
         scenes[row["scene"]].append(i)
     source_indices = [indices[len(indices) // 2] for indices in scenes.values()]
     target_indices = np.linspace(0, len(target_val) - 1, 68, dtype=int).tolist()
+    replay_pools, target_label_classes = normal_replay_pools(source, target)
+    orders = {stage: normal_order(len(source), len(target), epochs, args.seed, stage, replay_pools)
+              for stage, epochs in (("source", args.source_epochs), ("target", args.target_epochs))}
+    budgets = {stage: dict(visits=len(order), updates=math.ceil(len(order) / args.batch),
+                           order_identity=identity(order), schedule="3% linear warmup times cosine decay to 5%; indexed by optimizer update")
+               for stage, order in orders.items()}
+    model = NormalHypothesis(variant=args.variant).to(device)
     config = dict(version=NORMAL_VERSION, architecture=NORMAL_ARCHITECTURE, classes=NORMAL_CLASSES, source_mapping=NUSCENES_NORMAL_SETS,
         target_mapping=STU_NORMAL_SEMANTICS, source_frames=len(source), target_frames=len(target),
         development_frames=len(target_val), source_validation_indices=source_indices[::3], target_validation_indices=target_indices,
@@ -1633,15 +1790,22 @@ def normal_main():
         eval_every=args.eval_every, target_eval_every=min(args.eval_every, 225),
         initial="assets/nuscenes.pth", initial_sha256=WEIGHTS_SHA256,
         synthetic_anomalies=False, final_val19_evaluated=False, queries=4096, source_replay_fraction=.2,
-        loss=dict(NORMAL_LOSS_WEIGHTS),
-        verification="the same joint class evidence in supervised classification, normal development and inference",
+        source_replay=dict(rule="one source visit per four target visits; alternate round-robin refined classes absent from 206 and uniform source permutations; use only uniform permutations if no refined missing classes",
+                           refinement_classes=sorted(replay_pools), refinement_frames={str(c): len(rows) for c, rows in replay_pools.items()},
+                           target_training_label_classes=target_label_classes),
+        variant=args.variant, loss=model.loss_weights(), budget=budgets,
+        verification={"joint": "joint class evidence participates in supervised classification and formal inference",
+                      "semantic": "independent semantic evidence in classification and formal inference; observation losses disabled",
+                      "separate": "classification uses semantic evidence; predictive losses and shared class parameters remain; formal inference adds both evidences"}[args.variant],
         normal_state="19 classes with four equally scaled 48-dimensional appearance modes per class",
         normal_surface="context-conditioned Student-t surface mixtures; target-cell observations excluded from prediction",
-        loss_population="joint, normal, geometry and context on bounded reliable queries; auxiliary semantic classification on all reliable points",
+        loss_population="classification, normal, geometry and context on bounded reliable queries; auxiliary semantic classification on all reliable points",
         normal_objective="negative log mean absolute appearance support over the allowed normal class set",
-        calibration="one global minimum-joint-energy reference; uniform reliable normal points from STU 201 only",
+        calibration="one global minimum-formal-class-energy reference; uniform reliable normal points from STU 201 only",
         score_version=NORMAL_SCORE_VERSION,
-        selection="minimum fixed normal development objective within each stage; no anomaly labels",
+        selection=NORMAL_SELECTION,
+        match_run=str(args.match_run.resolve()) if args.match_run else None,
+        baseline=str(args.baseline.resolve()) if args.baseline else None,
         deadline=args.deadline, code=code_record())
     if initial is not None:
         # Runtime limits may change on resume; scientific inputs and losses may not.
@@ -1653,10 +1817,17 @@ def normal_main():
         if selected["config"].get("data_identity") != config["data_identity"]:
             raise ValueError("normal calibration data differ from the selected model's recorded sources")
         config = dict(selected["config"], deadline=args.deadline, scoring_code=code_record())
+        for name in ("match_run", "baseline"):
+            if getattr(args, name) is not None:
+                config[name] = str(getattr(args, name).resolve())
+    for reference in (args.match_run, args.baseline):
+        if reference is not None:
+            other, _ = normal_reference(reference, config)
+            if reference == args.baseline and other.get("variant") != "semantic":
+                raise ValueError("--baseline requires an independently trained semantic variant")
     if not args.calibration_only:
         write_json(args.output / "config.json", config)
         write_json(args.output / "resources.json", resources)
-    model = NormalHypothesis().to(device)
     full = None
     if args.calibration_only:
         model.load_state_dict(selected["model"], strict=True)
@@ -1681,27 +1852,22 @@ def normal_main():
     log = (args.output / "log.jsonl").open("a", buffering=1)
     stage_results = (json.loads((args.output / "stages.json").read_text())
                      if (args.resume or args.calibration_only) and (args.output / "stages.json").exists() else {})
+    if args.calibration_only and (args.match_run or args.baseline):
+        normal_reference(args.output, config)
     stages = () if args.calibration_only else (("source", args.source_epochs), ("target", args.target_epochs))
     for stage, epochs in stages:
         if initial and initial["stage"] == "target" and stage == "source":
             continue
         records = source if stage == "source" else target + source
         dataset = NormalScans(records, augment=True, queries=4096)
-        order = []
-        for epoch in range(epochs):
-            rng = np.random.default_rng(np.random.SeedSequence([args.seed, int(stage == "target"), epoch]))
-            ids = rng.permutation(len(source) if stage == "source" else len(target))
-            for visit, index in enumerate(ids):
-                order.append((epoch, int(index)))
-                if stage == "target" and visit % 4 == 3:
-                    order.append((epoch, len(target) + int(rng.integers(len(source)))))
+        order = orders[stage]
         optimizer = normal_optimizer(model, stage)
-        first, best = 0, float("inf")
+        first, best = 0, (-float("inf"), -float("inf"))
         if initial and initial["stage"] == stage:
             NormalHypothesis.validate_checkpoint(initial)
             model.load_state_dict(initial["model"], strict=True)
             optimizer.load_state_dict(initial["optimizer"])
-            first, best = initial["visit"], initial["best"]
+            first, best = initial["visit"], tuple(initial["best"])
             restore_rng(initial["rng"], device)
             log.write(json.dumps(dict(event="resume", stage=stage, saved_visit=first,
                                      saved_update=initial["update"], training_objective_changed=False)) + "\n")
@@ -1743,7 +1909,7 @@ def normal_main():
                            seconds=time.monotonic() - started, gradient=float(gradient),
                            **{k: v / recent["frames"] for k, v in recent.items() if k != "frames"})
                 log.write(json.dumps(row) + "\n")
-                print(f"{stage} {visits}/{len(order)} loss={row['loss']:.3f} joint={row['joint']:.3f} sem={row['semantic']:.3f} "
+                print(f"{stage} {visits}/{len(order)} loss={row['loss']:.3f} cls={row['classification']:.3f} sem={row['semantic']:.3f} "
                       f"geo={row['geometry']:.3f} elapsed={row['seconds']/60:.1f}min "
                       f"ETA={(row['seconds']/max(1,visits-first)*(len(order)-visits))/60:.1f}min", flush=True)
                 recent.clear()
@@ -1754,11 +1920,12 @@ def normal_main():
             validate = steps % interval == 0 or ending
             if validate:
                 measured = normal_development(model, validation, indices, device, args.workers)
-                improved = measured["objective"] < best
-                best = min(best, measured["objective"])
+                quality = normal_selection(measured)
+                improved = quality > best
+                best = max(best, quality)
                 print(f"development {stage} update={steps} objective={measured['objective']:.4f} "
-                      f"normal_accuracy={measured['set_accuracy']:.4f} mIoU={measured['mean_iou_present']:.4f} "
-                      f"semantic_only_mIoU={measured['semantic_only']['mean_iou_present']:.4f} best={improved}", flush=True)
+                      f"normal_accuracy={measured['set_accuracy']:.4f} mIoU={measured['mean_iou_gt']:.4f} "
+                      f"same_weights_semantic_mIoU={measured['semantic_only']['mean_iou_gt']:.4f} best={improved}", flush=True)
                 log.write(json.dumps(dict(stage=stage, update=steps, development=measured)) + "\n")
                 write_json(args.output / f"{stage}_development.json", dict(update=steps, best=best, latest=measured))
                 if improved:
@@ -1775,13 +1942,19 @@ def normal_main():
         selected = torch.load(args.output / f"{stage}_best.pt", map_location="cpu", weights_only=False)
         NormalHypothesis.validate_checkpoint(selected)
         model.load_state_dict(selected["model"], strict=True)
-        stage_results[stage] = dict(trained_frames=visits, selected_update=selected["update"], development=selected["development"])
+        complete = visits == len(order)
+        stage_results[stage] = dict(trained_frames=visits, trained_updates=steps, planned_frames=len(order), planned_updates=total_steps,
+                                   budget_complete=complete, selected_update=selected["update"], development=selected["development"])
         write_json(args.output / "stages.json", stage_results)
+        if not complete and (args.match_run or args.baseline):
+            raise RuntimeError(f"{stage} reached the deadline before the matched update budget; last.pt is resumable, but this run is not a completed comparison")
         del optimizer, loader, dataset, selected
         gc.collect()
         torch.cuda.empty_cache()
     if full is None:
         full = normal_development(model, target_val, list(range(len(target_val))), device, args.workers, queries=8192)
+    if args.baseline is not None:
+        full["baseline_comparison"] = normal_baseline_comparison(args.baseline, config, full)
     write_json(args.output / "normal201.json", full)
     calibration = normal_calibration(model, target_val, device, args.workers, args.output, seed=config["seed"])
     final = dict(version=config["version"], mode=model.mode, model=model.state_dict(), config=config,
@@ -1789,7 +1962,9 @@ def normal_main():
     atomic_save(args.output / "frozen.pt", final)
     write_json(args.output / "config.json", config)
     write_json(args.output / "result.json", dict(stages=stage_results, normal201=full, frozen="frozen.pt",
-        calibration_seconds=calibration["seconds"], final_val19_evaluated=False, finished=time.time()))
+        calibration_seconds=calibration["seconds"],
+        budget_complete=set(stage_results) == {"source", "target"} and all(row["budget_complete"] for row in stage_results.values()),
+        matched_reference=config["match_run"], final_val19_evaluated=False, finished=time.time()))
     print("FROZEN: normal-only model selected and calibrated; STU val19 has NOT been evaluated.", flush=True)
     log.close()
 

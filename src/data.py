@@ -7,6 +7,7 @@ uses AJAE/assets/rays.npz and the formula already measured in the 206 analysis.
 from dataclasses import dataclass, field
 from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor
+from functools import lru_cache
 import hashlib
 import io
 import json
@@ -1268,21 +1269,144 @@ STU_NORMAL_SEMANTICS = {
     70: 14, 71: 15, 72: 16, 80: 17, 81: 18,
 }
 # Coarse source labels supervise sets, never invented fine target annotations.
+# nuScenes separates standing people from cycles, groups curbs/short bushes with
+# terrain and driveways/forecourts with roads, and includes three-wheel motorcycles.
+# The cited source definitions and reviewed exact slots are in assets/normal.json.
 NUSCENES_NORMAL_SETS = {
-    2: (5,), 3: (5,), 4: (5,), 6: (5,), 14: (1, 6), 15: (4,), 16: (4,),
-    17: (0,), 18: (4,), 19: (0, 3, 4), 20: (0, 2, 4, 7), 21: (2, 7),
-    22: (4,), 23: (3,), 24: (8, 9), 26: (10,), 27: (16,), 30: (14, 15),
+    2: (5, 6, 7), 3: (5, 6, 7), 4: (5, 6, 7), 6: (5, 6, 7), 14: (1, 6), 15: (4,), 16: (4,),
+    17: (0,), 18: (4,), 19: (0, 3, 4), 20: (0, 1, 2, 3, 4, 6, 7), 21: (2, 4, 7),
+    22: (4,), 23: (3,), 24: (8, 9, 10, 11), 26: (10,), 27: (10, 14, 16), 30: (14, 15),
 }
+NORMAL_ANNOTATIONS = Path(__file__).resolve().parents[1] / "assets" / "normal.json"
+
+
+@lru_cache(maxsize=2)
+def normal_cycle_annotations(root, metadata_sha256):
+    """Use official per-instance rider attributes; missing attributes stay coarse."""
+    import ijson
+    meta = Path(root) / "v1.0-trainval"
+    categories = {r["token"]: r["name"] for r in json.loads((meta / "category.json").read_text())}
+    raw_class = {"vehicle.bicycle": 14, "vehicle.motorcycle": 21}
+    instances = {r["token"]: raw_class[categories[r["category_token"]]]
+                 for r in json.loads((meta / "instance.json").read_text())
+                 if categories[r["category_token"]] in raw_class}
+    attributes = {r["token"]: r["name"] for r in json.loads((meta / "attribute.json").read_text())}
+    grouped = {}
+    with (meta / "sample_annotation.json").open("rb") as stream:
+        for row in ijson.items(stream, "item", use_float=True):
+            category = instances.get(row["instance_token"])
+            if category is None:
+                continue
+            states = {attributes[token] for token in row["attribute_tokens"]}
+            if {"cycle.with_rider", "cycle.without_rider"} <= states:
+                raise ValueError("a cycle has contradictory official rider attributes")
+            box = {key: row[key] for key in ("token", "instance_token", "translation", "rotation", "size")}
+            box.update(raw_class=category, with_rider="cycle.with_rider" in states)
+            grouped.setdefault(row["sample_token"], []).append(box)
+    return grouped
+
+
+def attach_normal_annotations(records, root):
+    """Attach observed point labels and official cycle attributes to their own scans."""
+    names = ("category", "instance", "attribute", "sample_annotation")
+    provenance = {name: file_sha256(Path(root) / "v1.0-trainval" / (name + ".json")) for name in names}
+    cycles = normal_cycle_annotations(str(Path(root).resolve()), tuple(provenance.values()))
+    reviewed = json.loads(NORMAL_ANNOTATIONS.read_text())["records"]
+    reviewed_sha256 = file_sha256(NORMAL_ANNOTATIONS)
+    source = {row["token"]: row for row in records}
+    if len(source) != len(records):
+        raise ValueError("normal source records contain duplicate lidar observations")
+    for row in records:
+        if row["sample_token"] in cycles:
+            row["normal_cycles"] = cycles[row["sample_token"]]
+        if row.get("normal_slots"):
+            path = Path(row["normal_annotation"])
+            annotations = json.loads(path.read_text())["records"]
+            match = [a for a in annotations if a["token"] == row["token"]]
+            if (len(match) != 1 or match[0]["semantic"] != "building"
+                    or any(match[0][key] != row[key] for key in ("scene", "subset"))
+                    or match[0]["point_slots"] != row["normal_slots"]):
+                raise ValueError("reviewed building slots do not match the original annotation")
+            row["normal_fine"] = [dict(semantic="building", raw_class=28,
+                point_slots=row["normal_slots"], provenance=str(path.resolve()),
+                provenance_sha256=file_sha256(path))]
+    for annotation in reviewed:
+        row = source.get(annotation["token"])
+        if row is None:
+            continue
+        if any(annotation[key] != row[key] for key in ("scene", "subset", "sample_token")):
+            raise ValueError("reviewed normal point annotation belongs to another scan or partition")
+        row.setdefault("normal_fine", []).append(annotation)
+    for row in records:
+        categories = {NORMAL_CLASSES.index(a["semantic"]) for a in row.get("normal_fine", ())}
+        candidates = {6 for box in row.get("normal_cycles", ())
+                      if box["raw_class"] == 14 and box["with_rider"]}
+        if candidates or categories:
+            # Replay eligibility requires actual in-range, uniquely assigned returns.
+            allowed = read_normal_record(row)["allowed"]
+            singleton = allowed.sum(1) == 1
+            categories = {category for category in categories | candidates
+                          if bool(np.any(singleton & allowed[:, category]))}
+        row["refinement_classes"] = sorted(categories)
+        row["normal_refinement"] = dict(version="normal-class-refinement-1",
+            identity=identity(dict(cycles=row.get("normal_cycles", []), fine=row.get("normal_fine", []))),
+            source_metadata_sha256=provenance, reviewed_sha256=reviewed_sha256,
+            cycles="Official nuScenes sample_annotation, instance and cycle.with_rider attributes; unique cuboid and source-label intersection")
+    return records
+
+
+def refine_normal_labels(record, xyzi, label, allowed, slots):
+    """Refine only uniquely attributed points; retain all unresolved label sets."""
+    from scipy.spatial.transform import Rotation
+    boxes = record.get("normal_cycles", ())
+    if boxes:
+        pose = np.asarray(record["pose"], dtype=np.float64)
+        for category, fine in ((14, (6,)), (21, (4, 7))):
+            selected = np.flatnonzero(label == category)
+            candidates = [box for box in boxes if box["raw_class"] == category]
+            if not len(selected) or not candidates:
+                continue
+            world = xyzi[selected, :3].astype(np.float64) @ pose[:3, :3].T + pose[:3, 3]
+            inside = []
+            for box in candidates:
+                rotation = Rotation.from_quat(np.asarray(box["rotation"])[[1, 2, 3, 0]]).as_matrix()
+                local = (world - box["translation"]) @ rotation
+                # Official cuboids use width/length/height; never enlarge a box.
+                inside.append(np.all(abs(local) < np.asarray(box["size"])[[1, 0, 2]] * .5, axis=1))
+            inside = np.stack(inside)
+            unique = inside.sum(0) == 1
+            for box, matched in zip(candidates, inside):
+                # A non-rider attribute does not exclude a person standing nearby.
+                if box["with_rider"]:
+                    points = selected[unique & matched]
+                    allowed[points] = False
+                    allowed[np.ix_(points, fine)] = True
+    claimed = set()
+    for annotation in record.get("normal_fine", ()):
+        points = np.asarray(annotation["point_slots"], dtype=np.int64)
+        if (points.ndim != 1 or len(points) != len(np.unique(points))
+                or np.any(points < 0) or claimed.intersection(points.tolist())):
+            raise ValueError("reviewed normal slots are invalid or overlap")
+        claimed.update(points.tolist())
+        position = np.searchsorted(slots, points)
+        if np.any(position >= len(slots)) or not np.array_equal(slots[position], points):
+            raise ValueError("reviewed normal annotation points are absent from this scan")
+        if not np.all(label[position] == annotation["raw_class"]):
+            raise ValueError("reviewed normal point annotation contradicts its original source labels")
+        category = NORMAL_CLASSES.index(annotation["semantic"])
+        allowed[position] = False
+        allowed[position, category] = True
 
 
 def normal_records(source, *, development=False):
     """Only original source scans or the explicitly allowed normal STU sequences."""
     if source == "nuscenes":
         path = Path("results/data/background") / ("val.json" if development else "train.json")
-        records = json.loads(path.read_text())["records"]
-        if any(row.get("delta") or row.get("anomaly", 0) for row in records):
+        manifest = json.loads(path.read_text())
+        records = manifest["records"]
+        if any(row.get("source") != "nuscenes" or row.get("delta") or row.get("anomaly", 0) for row in records):
             raise ValueError("normal-only training cannot consume inserted foregrounds")
-        return records
+        return attach_normal_annotations(records, manifest["root"])
     if source not in ("206", "201") or development != (source == "201"):
         raise ValueError("normal protocol permits 206 training and 201 development only")
     directory = DATA_ROOT / "train" / source
@@ -1302,14 +1426,28 @@ def normal_records(source, *, development=False):
     if len(scans) != len(poses):
         raise ValueError("normal sequence poses and scans differ")
     return [dict(source="normal_stu", scene=source, frame=int(scan.stem), scan=str(scan),
-                 label=str(directory / "labels" / (scan.stem + ".label")), pose=poses[i].tolist())
+                 label=str(directory / "labels" / (scan.stem + ".label")),
+                 scan_sha256=file_sha256(scan),
+                 label_sha256=file_sha256(directory / "labels" / (scan.stem + ".label")),
+                 pose=poses[i].tolist())
             for i, scan in enumerate(scans)]
 
 
 def read_normal_record(record):
     source = record["source"] == "nuscenes"
-    raw = np.fromfile(record["scan"], dtype="<f4").reshape(-1, 5 if source else 4)
-    label = np.fromfile(record["label"], dtype=np.uint8 if source else "<u4")
+    buffers = {}
+    for key in ("scan", "label"):
+        content = Path(record[key]).read_bytes()
+        expected = [item[key + "_sha256"] for item in (record, *record.get("normal_fine", ()))
+                    if key + "_sha256" in item]
+        if expected:
+            actual_sha256 = hashlib.sha256(content).hexdigest()
+            if any(value != actual_sha256 for value in expected):
+                raise ValueError("normal annotation source file changed: " + key)
+        buffers[key] = content
+    # Decode the exact verified bytes; do not reopen a potentially replaced file.
+    raw = np.frombuffer(buffers["scan"], dtype="<f4").reshape(-1, 5 if source else 4)
+    label = np.frombuffer(buffers["label"], dtype=np.uint8 if source else "<u4")
     if len(raw) != len(label) or not np.isfinite(raw).all():
         raise ValueError("normal scan and point labels do not correspond")
     label = label.astype(np.int64) & 65535
@@ -1324,6 +1462,8 @@ def read_normal_record(record):
     mapping = NUSCENES_NORMAL_SETS if source else {k: (v,) for k, v in STU_NORMAL_SEMANTICS.items()}
     for key, values in mapping.items():
         allowed[np.ix_(label == key, values)] = True
+    if source:
+        refine_normal_labels(record, xyzi, label, allowed, np.flatnonzero(actual))
     distance = np.linalg.norm(xyzi[:, :3], axis=1)
     allowed[(distance < 2.5) | (distance > 50)] = False
     return dict(xyzi=xyzi, allowed=allowed, slots=np.flatnonzero(actual), slot_count=len(raw),

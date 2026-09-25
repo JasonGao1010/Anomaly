@@ -1,0 +1,761 @@
+{
+  "scope": "Exact nuScenes training return annotations reviewed in original cameras and projected point clouds; no STU development or unknown labels.",
+  "semantic_definition": "https://openaccess.thecvf.com/content_ICCV_2019/supplemental/Behley_SemanticKITTI_A_Dataset_ICCV_2019_supplemental.pdf",
+  "records": [
+    {
+      "token": "29f104ead35947edb5ae39e9f743a959",
+      "sample_token": "4718847d48154a3e88ca746c694d3c28",
+      "scene": "scene-0180",
+      "subset": "train",
+      "semantic": "parking",
+      "raw_class": 24,
+      "point_slots": [
+        4364,
+        4365,
+        4396,
+        4397,
+        4428,
+        4429,
+        4460,
+        4461,
+        4492,
+        4493,
+        4524,
+        4525,
+        4556,
+        4557,
+        4588,
+        4589,
+        4620,
+        4621,
+        4652,
+        4653,
+        4684,
+        4685,
+        4716,
+        4717,
+        4748,
+        4749,
+        4780,
+        4781,
+        4812,
+        4813,
+        4844,
+        4845,
+        4876,
+        4877,
+        4908,
+        4909,
+        4940,
+        4941,
+        4972,
+        4973,
+        5004,
+        5005,
+        5036,
+        5037,
+        5068,
+        5069,
+        5100,
+        5101,
+        5132,
+        5133,
+        5164,
+        5165,
+        5196,
+        5197,
+        5228,
+        5229,
+        5260,
+        5261,
+        5292,
+        5293,
+        5324,
+        5325,
+        5356,
+        5357,
+        5388,
+        5389,
+        5420,
+        5421,
+        5452,
+        5453,
+        5484,
+        5485,
+        5516,
+        5517,
+        5548,
+        5549,
+        5580,
+        5581,
+        5612,
+        5613,
+        5644,
+        5645,
+        5676,
+        5677,
+        5708,
+        5709,
+        5741,
+        5773,
+        5805,
+        5837
+      ],
+      "scan_sha256": "4ea7281fd1f363d0f481cac44fe24587d17b78ac8a2d6031863e17658242a3f9",
+      "label_sha256": "b4884cc4c1170ad93684d69540e9e4cd8f7d79833393f5b52d117d3945c5a622",
+      "reviewer": "assistant_visual_review",
+      "independent_human_review": false,
+      "camera": {
+        "token": "9c82141432f24329a92f058338939c8f",
+        "sample_token": "4718847d48154a3e88ca746c694d3c28",
+        "ego_pose_token": "9c82141432f24329a92f058338939c8f",
+        "calibrated_sensor_token": "1e9cc5b12e5c497aa624d59fe731c807",
+        "timestamp": 1532662758404844,
+        "fileformat": "jpg",
+        "is_key_frame": true,
+        "height": 900,
+        "width": 1600,
+        "filename": "samples/CAM_FRONT_LEFT/n015-2018-07-27-11-36-48+0800__CAM_FRONT_LEFT__1532662758404844.jpg",
+        "prev": "d1ed5e7889e24bf0bd6b1cd0d2ee44d4",
+        "next": "f4c1e2193bd54f3aad8d626c4778b7dc"
+      },
+      "camera_calibration": {
+        "token": "1e9cc5b12e5c497aa624d59fe731c807",
+        "sensor_token": "ec4b5d41840a509984f7ec36419d4c09",
+        "translation": [
+          1.52387798135,
+          0.494631336551,
+          1.50932822144
+        ],
+        "rotation": [
+          0.6757265034669446,
+          -0.6736266522251881,
+          0.21214015046209478,
+          -0.21122827103904068
+        ],
+        "camera_intrinsic": [
+          [
+            1272.5979470598488,
+            0.0,
+            826.6154927353808
+          ],
+          [
+            0.0,
+            1272.5979470598488,
+            479.75165386361925
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "camera_ego_pose": {
+        "token": "9c82141432f24329a92f058338939c8f",
+        "timestamp": 1532662758404844,
+        "rotation": [
+          0.34586189636168935,
+          0.005223831106264006,
+          -0.015396170201224326,
+          0.9381445614492495
+        ],
+        "translation": [
+          686.2212077418726,
+          1787.9681679497285,
+          0.0
+        ]
+      },
+      "lidar_to_world": [
+        [
+          0.6521610109365102,
+          -0.7579259087273834,
+          -0.015307929123158967,
+          685.3413453955873
+        ],
+        [
+          0.7578380074372727,
+          0.6523301713911082,
+          -0.012120312551766743,
+          1788.6686261012446
+        ],
+        [
+          0.019172122933410942,
+          -0.0036965352180591115,
+          0.9998093644938562,
+          1.8586859095935662
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "pixel_polygons": [
+        [
+          [
+            940,
+            790
+          ],
+          [
+            1150,
+            766
+          ],
+          [
+            1480,
+            802
+          ],
+          [
+            1480,
+            850
+          ],
+          [
+            1260,
+            842
+          ],
+          [
+            1080,
+            820
+          ]
+        ]
+      ],
+      "review": "Visible paved parking-bay interior, separated from road and vegetation by kerbs; exclude vehicle, wheel stops, kerb and uncertain boundary. Only original driveable_surface returns selected in the manually inspected polygon; no cross-frame propagation."
+    },
+    {
+      "token": "3d63b730bbb24e1b908b552a1efee0b0",
+      "sample_token": "108de7d185324283b8abe64df99a7c6e",
+      "scene": "scene-0360",
+      "subset": "train",
+      "semantic": "parking",
+      "raw_class": 24,
+      "point_slots": [
+        11727,
+        11759,
+        11791,
+        11823,
+        11855,
+        11886,
+        11887,
+        11918,
+        11919,
+        11950,
+        11951,
+        11982,
+        11983,
+        12014,
+        12015,
+        12046,
+        12047,
+        12077,
+        12078,
+        12079,
+        12109,
+        12110,
+        12111,
+        12141,
+        12142,
+        12143,
+        12173,
+        12174,
+        12175,
+        12205,
+        12206,
+        12207,
+        12237,
+        12238,
+        12239,
+        12269,
+        12270,
+        12271,
+        12272,
+        12301,
+        12302,
+        12303,
+        12304,
+        12333,
+        12334,
+        12335,
+        12336,
+        12365,
+        12366,
+        12367,
+        12368,
+        12397,
+        12398,
+        12399,
+        12400,
+        12429,
+        12430,
+        12431,
+        12432,
+        12461,
+        12462,
+        12463,
+        12464,
+        12493,
+        12494,
+        12495,
+        12524,
+        12525,
+        12526,
+        12527,
+        12556,
+        12557,
+        12558,
+        12559,
+        12588,
+        12589,
+        12590,
+        12591,
+        12620,
+        12621,
+        12622,
+        12623,
+        12652,
+        12653,
+        12654,
+        12655,
+        12684,
+        12685,
+        12686,
+        12687,
+        12716,
+        12717,
+        12718,
+        12719,
+        12748,
+        12749,
+        12750,
+        12751,
+        12780,
+        12781,
+        12782,
+        12783,
+        12812,
+        12813,
+        12814,
+        12815,
+        12844,
+        12845,
+        12846,
+        12847,
+        12876,
+        12877,
+        12878,
+        12879,
+        12908,
+        12909,
+        12910,
+        12911,
+        12940,
+        12941,
+        12942,
+        12943,
+        12972,
+        12973,
+        12974,
+        12975,
+        13004,
+        13005,
+        13006,
+        13007,
+        13035,
+        13036,
+        13037,
+        13038,
+        13039,
+        13068,
+        13069,
+        13070,
+        13071,
+        13100,
+        13101,
+        13102,
+        13103,
+        13132,
+        13133,
+        13134,
+        13135,
+        13164,
+        13165,
+        13166,
+        13167,
+        13196,
+        13197,
+        13198,
+        13199,
+        13228,
+        13229,
+        13230,
+        13231,
+        13260,
+        13261,
+        13262,
+        13263,
+        13292,
+        13293,
+        13294,
+        13295,
+        13324,
+        13325,
+        13326,
+        13327,
+        13356,
+        13357,
+        13358,
+        13359,
+        13388,
+        13389,
+        13390,
+        13391,
+        13420,
+        13421,
+        13422,
+        13423,
+        13452,
+        13453,
+        13454,
+        13455,
+        13484,
+        13485,
+        13486,
+        13487,
+        13517,
+        13518,
+        13519,
+        13549,
+        13550,
+        13551,
+        13581,
+        13582,
+        13583,
+        13613,
+        13614,
+        13615,
+        13645,
+        13646,
+        13647,
+        13677,
+        13678,
+        13709,
+        13710,
+        13741,
+        13742,
+        13773,
+        13774,
+        13805,
+        13806,
+        13837,
+        13838,
+        13869,
+        13870,
+        13901,
+        13902,
+        13934,
+        13966,
+        13998,
+        14030,
+        14062,
+        14094,
+        14126,
+        14158
+      ],
+      "scan_sha256": "01489379b336fa5672f99415cf3fc5a262de88715d55f0a07d1b3faa46ed1f20",
+      "label_sha256": "278fe4079846eb27b9035ad828094e3abad19d45a6da28a9fa7da8241a00fa7a",
+      "reviewer": "assistant_visual_review",
+      "independent_human_review": false,
+      "camera": {
+        "token": "84bcee71c6944076876fe4ae7403e451",
+        "sample_token": "108de7d185324283b8abe64df99a7c6e",
+        "ego_pose_token": "84bcee71c6944076876fe4ae7403e451",
+        "calibrated_sensor_token": "05becc69faed4c0f9ed8bd35f30b0f19",
+        "timestamp": 1533279649020339,
+        "fileformat": "jpg",
+        "is_key_frame": true,
+        "height": 900,
+        "width": 1600,
+        "filename": "samples/CAM_FRONT_RIGHT/n015-2018-08-03-15-00-36+0800__CAM_FRONT_RIGHT__1533279649020339.jpg",
+        "prev": "861d22bde27943108450af82a6995424",
+        "next": "e59adb15cdda48b1aab18a3637655f8d"
+      },
+      "camera_calibration": {
+        "token": "05becc69faed4c0f9ed8bd35f30b0f19",
+        "sensor_token": "2f7ad058f1ac5557bf321c7543758f43",
+        "translation": [
+          1.5508477543,
+          -0.493404796419,
+          1.49574800619
+        ],
+        "rotation": [
+          0.2060347966337182,
+          -0.2026940577919598,
+          0.6824507824531167,
+          -0.6713610884174485
+        ],
+        "camera_intrinsic": [
+          [
+            1260.8474446004698,
+            0.0,
+            807.968244525554
+          ],
+          [
+            0.0,
+            1260.8474446004698,
+            495.3344268742088
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "camera_ego_pose": {
+        "token": "84bcee71c6944076876fe4ae7403e451",
+        "timestamp": 1533279649020339,
+        "rotation": [
+          -0.4323511537247642,
+          -0.018090214344328448,
+          -0.011513309021213195,
+          0.9014503135132979
+        ],
+        "translation": [
+          167.54736959994145,
+          1104.5192087286064,
+          0.0
+        ]
+      },
+      "lidar_to_world": [
+        [
+          -0.7811533565550266,
+          -0.6227337438453177,
+          -0.04474503122370077,
+          166.85099424605647
+        ],
+        [
+          0.6243388784211787,
+          -0.7792167230661993,
+          -0.05497511605952765,
+          1103.6362984655805
+        ],
+        [
+          -0.0006312167615463856,
+          -0.07088005904602812,
+          0.9974846458943776,
+          1.794145389967993
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "pixel_polygons": [
+        [
+          [
+            200,
+            748
+          ],
+          [
+            380,
+            695
+          ],
+          [
+            700,
+            704
+          ],
+          [
+            890,
+            742
+          ],
+          [
+            595,
+            850
+          ],
+          [
+            330,
+            810
+          ]
+        ]
+      ],
+      "review": "Marked accessible parking-bay interior bounded by the kerbed planted island and the separate asphalt driving aisle. Exclude kerb, parked car, pole, bay edges and road. Original driveable_surface labels intersect a manually inspected image polygon. No cross-frame propagation."
+    },
+    {
+      "token": "e5a4fe8c04ce4e72a084b2d5d48404ef",
+      "sample_token": "097d451a24e84c7b9d88bc9cbfd0ee40",
+      "scene": "scene-0168",
+      "subset": "train",
+      "semantic": "parking",
+      "raw_class": 24,
+      "point_slots": [
+        15758,
+        15790,
+        15822,
+        15854,
+        15886,
+        15918,
+        15950,
+        15982
+      ],
+      "scan_sha256": "83612d7a67cd565e76351357c1eb24042af793dabb134b9e848c40a3e664dcaf",
+      "label_sha256": "25332b372dc0e20f69b09faf1298be2afd3c31e9e6eeedec16ec453d40cf9e0e",
+      "reviewer": "assistant_visual_review",
+      "independent_human_review": false,
+      "camera": {
+        "token": "c0decf7d495a4965b91946456d9b6e36",
+        "sample_token": "097d451a24e84c7b9d88bc9cbfd0ee40",
+        "ego_pose_token": "c0decf7d495a4965b91946456d9b6e36",
+        "calibrated_sensor_token": "b91801ecdfd941c18f3baa04182fffc0",
+        "timestamp": 1526915461919956,
+        "fileformat": "jpg",
+        "is_key_frame": true,
+        "height": 900,
+        "width": 1600,
+        "filename": "samples/CAM_FRONT_RIGHT/n008-2018-05-21-11-06-59-0400__CAM_FRONT_RIGHT__1526915461919956.jpg",
+        "prev": "a4e792791542441c818bb0ab8e87696b",
+        "next": "b01aec82c4234ef9a9486e9d8a55e21d"
+      },
+      "camera_calibration": {
+        "token": "b91801ecdfd941c18f3baa04182fffc0",
+        "sensor_token": "2f7ad058f1ac5557bf321c7543758f43",
+        "translation": [
+          1.593,
+          -0.527,
+          1.526
+        ],
+        "rotation": [
+          0.22383629788979093,
+          -0.21087341359410547,
+          0.6710418554409988,
+          -0.6746351187363905
+        ],
+        "camera_intrinsic": [
+          [
+            1264.1253743585607,
+            0.0,
+            761.8659236816043
+          ],
+          [
+            0.0,
+            1264.125374358561,
+            415.0768894058469
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "camera_ego_pose": {
+        "token": "c0decf7d495a4965b91946456d9b6e36",
+        "timestamp": 1526915461919956,
+        "rotation": [
+          0.9998444582714131,
+          -0.007772118365646173,
+          0.004794383291529964,
+          0.015088649008732316
+        ],
+        "translation": [
+          1820.237656670315,
+          868.0605995521202,
+          0.0
+        ]
+      },
+      "lidar_to_world": [
+        [
+          0.02267105116915984,
+          0.9997344581932553,
+          0.0041275343637588256,
+          1821.3410525268594
+        ],
+        [
+          -0.9996541816406154,
+          0.022613818983106857,
+          0.013421338213142087,
+          868.1208323864715
+        ],
+        [
+          0.01332443497179544,
+          -0.00443038283198559,
+          0.9999014107103985,
+          1.83371750173313
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "pixel_polygons": [
+        [
+          [
+            1310,
+            670
+          ],
+          [
+            1400,
+            675
+          ],
+          [
+            1380,
+            710
+          ],
+          [
+            1320,
+            704
+          ]
+        ]
+      ],
+      "review": "Visible asphalt inside a yellow-lined parking bay beyond the kerbed sidewalk and planted strip. Select only the open gap between vehicles, excluding wheels, vehicle surfaces, line edges and sidewalk. Original driveable_surface labels intersect a manually inspected image polygon. No cross-frame propagation."
+    }
+  ],
+  "definitions": {
+    "nuScenes_annotations": {
+      "url": "https://github.com/nutonomy/nuscenes-devkit/blob/master/docs/instructions_nuscenes.md",
+      "applied": "Bicycle and motorcycle boxes include the rider; nearby standing people are annotated separately; cycle.with_rider supplies positive rider evidence, cycle.without_rider does not establish absence of a nearby person. The motorcycle category also includes light three-wheel vehicles. Police vehicles include police bicycles and motorcycles."
+    },
+    "nuScenes_lidarseg": {
+      "url": "https://github.com/nutonomy/nuscenes-devkit/blob/master/docs/instructions_lidarseg.md",
+      "applied": "Existing foreground definitions carry into point labels. driveable_surface includes paved and unpaved surfaces independent of traffic rules. Terrain includes a delimiting curb and bushes below 20 cm. Semantic names are authoritative here; numeric IDs are verified against local lidarseg/category.json."
+    },
+    "SemanticKITTI": {
+      "url": "https://openaccess.thecvf.com/content_ICCV_2019/supplemental/Behley_SemanticKITTI_A_Dataset_ICCV_2019_supplemental.pdf",
+      "applied": "Table 1: bicycle/motorcycle with a rider or a person within arm reach uses the rider category. Sidewalk includes curbs and private driveways; other-ground includes paved fuel-station areas; vegetation includes bushes. Parking is explicitly designated and separated from sidewalk/road; ambiguous ground remains a set label. A bicycle and its rider are not separated into different classes."
+    }
+  },
+  "source_policy": {
+    "human.pedestrian": [
+      "person",
+      "bicyclist",
+      "motorcyclist"
+    ],
+    "flat.driveable_surface": [
+      "road",
+      "parking",
+      "sidewalk",
+      "other-ground"
+    ],
+    "flat.terrain": [
+      "sidewalk",
+      "vegetation",
+      "terrain"
+    ],
+    "vehicle.motorcycle": [
+      "motorcycle",
+      "other-vehicle",
+      "motorcyclist"
+    ],
+    "vehicle.motorcycle_with_rider": [
+      "other-vehicle",
+      "motorcyclist"
+    ],
+    "vehicle.bicycle_with_rider": [
+      "bicyclist"
+    ],
+    "cycle_attribute_refinement": "Intersect original same-class lidarseg points with exactly one unexpanded official cuboid; without_rider and unmatched/overlapping points keep their coarse set. Only actual singleton labels qualify for rare-class replay."
+  }
+}

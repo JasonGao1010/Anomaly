@@ -25,9 +25,10 @@ POINT_CHUNK = 65536
 RELATION_CHUNK = 4096
 RELATION_MODES = ("local_attention", "relation", "relation_no_condition", "relation_no_difference")
 NORMAL_VERSION = "AJAE-normal-evidence"
-NORMAL_ARCHITECTURE = "multimode48_blind_joint"
-NORMAL_SCORE_VERSION = "joint_energy_logtail"
-NORMAL_LOSS_WEIGHTS = dict(joint=1., semantic=.5, normal=.05, geometry=.2, context=.2)
+NORMAL_ARCHITECTURE = "multimode48_blind_density"
+NORMAL_SCORE_VERSION = "joint_density_logtail"
+NORMAL_VARIANTS = ("joint", "semantic", "separate")
+NORMAL_LOSS_WEIGHTS = dict(classification=1., semantic=.5, normal=.05, geometry=.2, context=.2)
 CALIBRATION_PROBABILITIES = np.r_[np.linspace(0., .9, 33), 1 - np.geomspace(.1, 1e-4, 97)[1:]]
 CALIBRATION_LEVELS = -np.log1p(-CALIBRATION_PROBABILITIES)
 
@@ -245,9 +246,12 @@ class Relation(nn.Module):
 class NormalHypothesis(nn.Module):
     """One class evidence jointly supports normal semantics and unknown detection."""
 
-    def __init__(self):
+    def __init__(self, variant="joint"):
         super().__init__()
         from .normal import SemanticHypotheses
+        if variant not in NORMAL_VARIANTS:
+            raise ValueError(f"unknown normal perception variant: {variant}")
+        self.variant = variant
         self.mode = "normal_hypothesis"
         self.backbone = LitePT(shuffle_orders=False, fp32_attention=True)
         self.detail = mlp(7, 32, 32)
@@ -262,7 +266,8 @@ class NormalHypothesis(nn.Module):
         config = saved.get("config", {})
         if (saved.get("version") != NORMAL_VERSION
                 or config.get("architecture") != NORMAL_ARCHITECTURE
-                or config.get("score_version") != NORMAL_SCORE_VERSION):
+                or config.get("score_version") != NORMAL_SCORE_VERSION
+                or config.get("variant") not in NORMAL_VARIANTS):
             raise ValueError("incompatible normal model: initialize this method from the official nuScenes backbone")
         state = saved.get("model", {})
         if state.get("calibration", torch.empty(0)).shape != (len(CALIBRATION_PROBABILITIES),):
@@ -274,7 +279,13 @@ class NormalHypothesis(nn.Module):
         # Only the official backbone initializes this new normal-only experiment.
         return Segmentor.load_pretrained(self, path)
 
-    def semantic(self, sample):
+    def loss_weights(self):
+        weights = dict(NORMAL_LOSS_WEIGHTS)
+        if self.variant == "semantic":
+            weights.update(geometry=0., context=0.)
+        return weights
+
+    def semantic(self, sample, *, modes=False):
         point = self.backbone(dict(coord=sample["voxel_xyzi"][:, :3], feat=sample["voxel_xyzi"],
             grid_coord=sample["grid"], grid_size=GRID_SIZE,
             offset=torch.tensor([len(sample["grid"])], device=sample["xyzi"].device)))
@@ -286,24 +297,29 @@ class NormalHypothesis(nn.Module):
         centers = centers.flatten(0, 1)
         distance = (features.square().sum(-1, keepdim=True) + centers.square().sum(-1)[None]
                     - 2 * features @ centers.T).clamp_min(0) / 48
-        return -(torch.logsumexp(-distance.reshape(-1, 19, 4) / .2, -1) - np.log(4.))
+        costs = -distance.reshape(-1, 19, 4) / .2
+        energy = -(torch.logsumexp(costs, -1) - np.log(4.))
+        return (energy, costs[sample["queries"]].softmax(-1)) if modes else energy
 
     def components(self, sample, indices=None, *, semantic_energy=None):
         from .normal import geometry_energy
         semantic_energy = self.semantic(sample) if semantic_energy is None else semantic_energy
         if indices is None:
             indices = torch.arange(len(sample["xyzi"]), device=semantic_energy.device)
-        prediction = self.hypotheses(sample["observation"], indices)
-        geometry = geometry_energy(prediction)
         semantic_energy = semantic_energy[indices]
+        prediction = None if self.variant == "semantic" else self.hypotheses(sample["observation"], indices)
+        geometry = torch.zeros_like(semantic_energy) if prediction is None else geometry_energy(prediction)
         energy = semantic_energy + geometry
         return dict(logits=-energy, semantic_energy=semantic_energy, geometry_energy=geometry,
                     energy=energy, raw_score=energy.amin(-1), prediction=prediction)
 
     def loss(self, sample):
-        from .normal import allowed_loss, hypothesis_loss
+        from .normal import allowed_loss, hypothesis_loss, observation_diagnostics
         indices, allowed = sample["queries"], sample["allowed"]
-        semantic_energy = self.semantic(sample)
+        if self.training:
+            semantic_energy = self.semantic(sample)
+        else:
+            semantic_energy, appearance = self.semantic(sample, modes=True)
         parts = self.components(sample, indices if self.training else None, semantic_energy=semantic_energy)
         if self.training:
             logits, prediction = parts["logits"], parts["prediction"]
@@ -312,8 +328,15 @@ class NormalHypothesis(nn.Module):
             self.development_prediction = parts["logits"].argmax(-1).detach()
             self.development_semantic_prediction = semantic_energy.argmin(-1).detach()
             logits = parts["logits"][indices]
-            prediction = {key: value[indices] for key, value in parts["prediction"].items()}
-        joint = allowed_loss(logits, allowed[indices])
+            prediction = ({key: value[indices] for key, value in parts["prediction"].items()}
+                          if parts["prediction"] is not None else None)
+            self.development_diagnostics = observation_diagnostics(
+                prediction, sample["observation"], indices, allowed[indices], appearance)
+        # The control removes observation costs from supervised class competition.
+        # Shared class parameters and predictive losses remain; inference uses E.
+        if self.variant != "joint":
+            logits = -semantic_energy[indices]
+        classification = allowed_loss(logits, allowed[indices])
         semantic = allowed_loss(-semantic_energy, allowed)
         valid = allowed[indices].any(1)
         if bool(valid.any()):
@@ -322,12 +345,13 @@ class NormalHypothesis(nn.Module):
             normal = (-torch.logsumexp(support, -1) + admitted.sum(-1).float().log()).mean()
         else:
             normal = semantic_energy.sum() * 0
-        geometry, context = hypothesis_loss(prediction, allowed[indices])
-        terms = dict(joint=joint, semantic=semantic, normal=normal, geometry=geometry, context=context)
-        loss = sum(NORMAL_LOSS_WEIGHTS[key] * value for key, value in terms.items())
+        geometry, context = (hypothesis_loss(prediction, allowed[indices]) if prediction is not None
+                             else (semantic_energy.sum() * 0, semantic_energy.sum() * 0))
+        terms = dict(classification=classification, semantic=semantic, normal=normal, geometry=geometry, context=context)
+        loss = sum(self.loss_weights()[key] * value for key, value in terms.items())
         details = {key: value.detach() for key, value in terms.items()}
         details.update(supervised=int(allowed.any(1).sum()), queries=len(indices),
-                       supported=int(prediction["supported"].sum()))
+                       supported=int(prediction["supported"].sum()) if prediction is not None else 0)
         return loss, details
 
     def calibrate_score(self, raw_score):
@@ -353,7 +377,10 @@ class NormalHypothesis(nn.Module):
             parts = self.components(sample)
             return dict(semantic=parts["energy"].argmin(-1),
                         semantic_only=parts["semantic_energy"].argmin(-1),
-                        raw_score=parts["raw_score"], score=self.calibrate_score(parts["raw_score"]))
+                        raw_score=parts["raw_score"], score=self.calibrate_score(parts["raw_score"]),
+                        confidence=(-parts["energy"]).softmax(-1).amax(-1),
+                        semantic_confidence=(-parts["semantic_energy"]).softmax(-1).amax(-1),
+                        semantic_score=parts["semantic_energy"].amin(-1))
 
     def forward(self, sample):
         return self.predict(sample)["score"]

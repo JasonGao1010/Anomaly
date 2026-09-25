@@ -15,6 +15,8 @@ SCALES = (1, 2, 4)
 HYPOTHESES, KERNELS = 4, 8
 LOWER, UPPER = 2.5, 50.
 RAY_CHUNK, BLOCK_CHUNK = 2048, 256
+MIN_RETURN_SCALE = .001
+LOG_RETURN_PEAK = math.log(2 / (math.pi * math.sqrt(3) * MIN_RETURN_SCALE))
 
 
 def angular_observation(xyzi, *, origins=None, directions=None):
@@ -182,7 +184,7 @@ class SemanticHypotheses(nn.Module):
         # Unbounded, normalized quadratic coefficients can represent the steep
         # angular range changes of distant ground without a hand-set slope limit.
         return dict(mean=base[:, None, None] + raw[..., 0],
-                    slope=raw[..., 1:6], scale=.001 + F.softplus(raw[..., 6]),
+                    slope=raw[..., 1:6], scale=MIN_RETURN_SCALE + F.softplus(raw[..., 6]),
                     weight=raw[..., 7].log_softmax(-1), belief=self.belief(state).squeeze(-1),
                     supported=present.any(1))
 
@@ -212,8 +214,12 @@ class SemanticHypotheses(nn.Module):
 
 
 def geometry_energy(prediction):
-    """Dimensionless compatibility; absent context supplies no geometric evidence."""
-    energy = -torch.logsumexp(prediction["weight"] + prediction["log_compatibility"], -1)
+    """Normalized density support; retain the scale penalty in every mixture mode.
+
+    The common bound is the peak of a minimum-scale Student-t. Its additive
+    log constant cannot change class competition and keeps both supports <= 1.
+    """
+    energy = LOG_RETURN_PEAK - torch.logsumexp(prediction["weight"] + prediction["log_prob"], -1)
     return torch.where(prediction["supported"][:, None], energy.clamp_min(0), 0.)
 
 
@@ -242,6 +248,78 @@ def hypothesis_loss(prediction, allowed):
     probability = prediction["log_prob"][valid] + prediction["weight"][valid] + prior[..., None]
     nll = -torch.logsumexp(probability.flatten(1), -1)
     return nll.mean(), allowed_loss(prediction["belief"][valid], admitted)
+
+
+@torch.no_grad()
+def observation_diagnostics(prediction, observation, indices, allowed, appearance):
+    """Additive held-out diagnostics; coarse labels never become fine-class truth."""
+    device = allowed.device
+    count = allowed.sum(-1)
+    valid = (count == 1)
+    classes = allowed.long().argmax(-1)
+    result = dict(query_count=torch.bincount(classes[valid], minlength=19),
+                  appearance_mode_mass=torch.zeros(19, 4, device=device, dtype=torch.float64),
+                  appearance_mode_entropy_sum=torch.zeros(19, device=device, dtype=torch.float64))
+    responsibilities = appearance[valid, classes[valid]].double()
+    result["appearance_mode_mass"].index_add_(0, classes[valid], responsibilities)
+    result["appearance_mode_entropy_sum"].index_add_(0, classes[valid],
+        -(responsibilities * responsibilities.clamp_min(1e-300).log()).sum(-1))
+    for key in ("prediction_count", "nll_sum", "coverage90_count", "width90_m_sum",
+                "abs_median_error_m_sum", "finite_interval_count", "geometry_mode_entropy_sum",
+                "mean_pair_separation_sum"):
+        result[key] = torch.zeros(19, device=device, dtype=torch.float64)
+    result["geometry_mode_mass"] = torch.zeros(19, 3, device=device, dtype=torch.float64)
+    result["geometry_prior_mass"] = torch.zeros(19, 3, device=device, dtype=torch.float64)
+    result["geometry_scale_sum"] = torch.zeros(19, 3, device=device, dtype=torch.float64)
+    result.update(coarse_query_count=0, coarse_nll_sum=0., unsupported_query_count=0)
+    if prediction is None:
+        return {key: value.cpu().numpy() if torch.is_tensor(value) else value for key, value in result.items()}
+    supported = prediction["supported"]
+    result["unsupported_query_count"] = int(((count > 0) & ~supported).sum())
+    coarse = (count > 1) & supported
+    if bool(coarse.any()):
+        prior = prediction["belief"][coarse].double().masked_fill(~allowed[coarse], -torch.inf).log_softmax(-1)
+        lp = prediction["weight"][coarse].double() + prediction["log_prob"][coarse].double() + prior[..., None]
+        result["coarse_query_count"] = int(coarse.sum())
+        result["coarse_nll_sum"] = float(-torch.logsumexp(lp.flatten(1), -1).sum())
+    valid &= supported
+    c = classes[valid]
+    if len(c):
+        mean = prediction["mean"][valid, c].double()
+        scale = prediction["scale"][valid, c].double()
+        weights = prediction["weight"][valid, c].double().softmax(-1)
+        posterior = (prediction["weight"][valid, c].double() + prediction["log_prob"][valid, c].double()).softmax(-1)
+        value = observation["log_distance"][indices][valid].double()
+
+        def cdf(z):
+            u = (z[..., None] - mean[:, None]) / (scale[:, None] * math.sqrt(3))
+            return ((.5 + (u.atan() + u / (1 + u.square())) / math.pi) * weights[:, None]).sum(-1)
+
+        # Exact t3 component quantiles bracket every corresponding mixture quantile.
+        probabilities = value.new_tensor([.05, .5, .95])
+        component = mean[:, None] + scale[:, None] * value.new_tensor([-2.3533634348018233, 0., 2.3533634348018233])[None, :, None]
+        left, right = component.amin(-1), component.amax(-1)
+        for _ in range(40):
+            middle = (left + right) * .5
+            below = cdf(middle) < probabilities
+            left, right = torch.where(below, middle, left), torch.where(below, right, middle)
+        quantiles = ((left + right) * .5).exp()
+        finite = torch.isfinite(quantiles).all(-1)
+        pit = cdf(value[:, None]).squeeze(-1)
+        quantities = dict(prediction_count=torch.ones_like(value),
+            nll_sum=-torch.logsumexp(prediction["weight"][valid, c].double() + prediction["log_prob"][valid, c].double(), -1),
+            coverage90_count=((pit >= .05) & (pit <= .95)).double(),
+            geometry_mode_entropy_sum=-(posterior * posterior.clamp_min(1e-300).log()).sum(-1),
+            mean_pair_separation_sum=(mean[:, 0] - mean[:, 1]).abs() + (mean[:, 0] - mean[:, 2]).abs() + (mean[:, 1] - mean[:, 2]).abs(),
+            finite_interval_count=finite.double())
+        for key, values in quantities.items():
+            result[key].index_add_(0, c, values)
+        result["geometry_mode_mass"].index_add_(0, c, posterior)
+        result["geometry_prior_mass"].index_add_(0, c, weights)
+        result["geometry_scale_sum"].index_add_(0, c, scale)
+        result["width90_m_sum"].index_add_(0, c[finite], quantiles[finite, 2] - quantiles[finite, 0])
+        result["abs_median_error_m_sum"].index_add_(0, c[finite], (quantiles[finite, 1] - value[finite].exp()).abs())
+    return {key: value.cpu().numpy() if torch.is_tensor(value) else value for key, value in result.items()}
 
 
 class NormalField(nn.Module):

@@ -1519,3 +1519,96 @@ def test_fp32_patch_attention_matches_double_precision_formula(count, training):
     grad, = torch.autograd.grad(actual.square().sum(), feat, retain_graph=True)
     reference, = torch.autograd.grad(expected.square().sum(), feat)
     torch.testing.assert_close(grad, reference, atol=1e-6, rtol=1e-5)
+
+
+def test_normal_selection_prioritizes_fixed_gt_classes_before_likelihood():
+    from src.train import normal_selection
+    assert normal_selection(dict(mean_iou_gt=.8, objective=5.)) > normal_selection(dict(mean_iou_gt=.7, objective=-5.))
+    assert normal_selection(dict(mean_iou_gt=.8, objective=4.)) > normal_selection(dict(mean_iou_gt=.8, objective=5.))
+    for quality, objective in ((None, 0.), (.5, float("nan")), (float("inf"), 0.)):
+        with pytest.raises(ValueError, match="ground-truth-class"):
+            normal_selection(dict(mean_iou_gt=quality, objective=objective))
+
+
+def test_normal_replay_preserves_budget_and_covers_refined_training_classes(tmp_path):
+    from src.train import normal_order, normal_replay_pools
+    labels = tmp_path / "training.label"
+    np.array([0, 10, 50], dtype=np.uint32).tofile(labels)
+    source = [{"refinement_classes": []} for _ in range(20)]
+    for index, category in ((1, 6), (2, 6), (10, 9), (11, 9), (12, 12)):
+        source[index]["refinement_classes"] = [category]
+    target = [dict(source="normal_stu", scene="206", label=str(labels))]
+    pools, present = normal_replay_pools(source, target)
+    assert pools == {6: [1, 2], 9: [10, 11]} and present == [0, 12]
+    with pytest.raises(ValueError, match="206 training"):
+        normal_replay_pools(source, [dict(target[0], scene="201")])
+    order = normal_order(20, 9, 8, 206, "target", pools)
+    assert order == normal_order(20, 9, 8, 206, "target", pools)
+    assert len(order) == 8 * (9 + 9 // 4)
+    for epoch in range(8):
+        assert sorted(index for visit, index in order if visit == epoch and index < 9) == list(range(9))
+    replay = [index - 9 for _, index in order if index >= 9]
+    assert set(replay[::4]) == {1, 2} and set(replay[2::4]) == {10, 11}
+    assert len(set(replay[1::2])) == len(replay[1::2])
+    # Source pretraining does not depend on replay priorities or model variants.
+    assert normal_order(20, 9, 1, 206, "source", pools) == normal_order(20, 9, 1, 206, "source")
+
+
+def test_normal_reference_rejects_truncated_or_changed_comparison_budget(tmp_path):
+    from src.train import normal_reference
+    budget = {stage: dict(visits=visits, updates=visits // 2, order_identity=stage, schedule="fixed")
+              for stage, visits in (("source", 20), ("target", 22))}
+    config = dict(variant="semantic", architecture="method", budget=budget, seed=206,
+                  source_mapping={2: (5,), 14: (1, 6)})
+    stages = {stage: dict(budget_complete=True, trained_frames=row["visits"], trained_updates=row["updates"],
+                          planned_frames=row["visits"], planned_updates=row["updates"], selected_update=1)
+              for stage, row in budget.items()}
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    (tmp_path / "stages.json").write_text(json.dumps(stages))
+    # Integer mapping keys survive JSON, and independent variants may choose different best updates.
+    assert normal_reference(tmp_path, dict(config, variant="joint"))[0]["variant"] == "semantic"
+    with pytest.raises(ValueError, match="initialization or training budget"):
+        normal_reference(tmp_path, dict(config, seed=207))
+    for field, value in (("budget_complete", False), ("trained_frames", 20),
+                         ("trained_updates", 10), ("planned_updates", 12)):
+        changed = deepcopy(stages)
+        changed["target"][field] = value
+        (tmp_path / "stages.json").write_text(json.dumps(changed))
+        with pytest.raises(ValueError, match="complete the common nominal"):
+            normal_reference(tmp_path, config)
+
+
+def test_normal_development_keeps_all_point_semantics_and_additive_diagnostics(monkeypatch):
+    import src.data as data
+    from src.train import normal_development
+
+    class Dataset:
+        def __init__(self, records, queries):
+            self.records = records
+
+        def __getitem__(self, index):
+            allowed = torch.zeros((4, 19), dtype=torch.bool)
+            allowed[0, 0], allowed[1, 1], allowed[2, 1:3] = True, True, True
+            return dict(allowed=allowed, xyzi=torch.tensor([[3., 0, 0, 0], [15, 0, 0, 0],
+                                                            [35, 0, 0, 0], [60, 0, 0, 0]]),
+                        observation=dict(group=torch.tensor([0, 1, 1, 2])))
+
+    class Model:
+        def eval(self):
+            return self
+
+        def loss(self, sample):
+            self.development_prediction = torch.tensor([0, 0, 2, 1])
+            self.development_semantic_prediction = torch.tensor([1, 1, 0, 1])
+            self.development_diagnostics = dict(query_count=[1, 1], coarse_query_count=1)
+            return torch.tensor(2.), dict(classification=torch.tensor(1.))
+
+    monkeypatch.setattr(data, "NormalScans", Dataset)
+    measured = normal_development(Model(), [{}, {}], [0, 1], torch.device("cpu"), 0, queries=1)
+    assert measured["ground_truth_points"][:3] == [2, 2, 0]
+    assert measured["mean_iou_gt"] == .25
+    assert measured["joint_comparison"] == dict(set_points=6, corrected_points=4, worsened_points=2)
+    assert measured["per_class_comparison"]["corrected_points"][0] == 2
+    assert measured["observation_diagnostics"]["query_count"] == [2., 2.]
+    for name in ("distance_metres", "returns_per_angular_cell"):
+        assert sum(row[0] for row in measured["strata"][name]["counts"]) == 6

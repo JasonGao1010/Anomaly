@@ -58,7 +58,7 @@ def test_semantic_hypotheses_exclude_entire_target_cell_values_counts_and_gradie
 
 def test_normal_label_sets_do_not_invent_fine_source_labels():
     from src.data import NUSCENES_NORMAL_SETS, STU_NORMAL_SEMANTICS
-    assert NUSCENES_NORMAL_SETS[24] == (8, 9)
+    assert NUSCENES_NORMAL_SETS[24] == (8, 9, 10, 11)
     assert NUSCENES_NORMAL_SETS[30] == (14, 15)
     assert NUSCENES_NORMAL_SETS[14] == (1, 6)
     assert not ({0, 1, 9, 10, 11, 12, 25, 28, 29, 31} & NUSCENES_NORMAL_SETS.keys())
@@ -66,7 +66,7 @@ def test_normal_label_sets_do_not_invent_fine_source_labels():
 
 
 def test_hypothesis_density_matches_independent_student_t_in_log_distance():
-    from src.normal import hypothesis_observation, SemanticHypotheses, geometry_energy
+    from src.normal import hypothesis_observation, SemanticHypotheses, geometry_energy, LOG_RETURN_PEAK
     torch.manual_seed(13)
     xyzi, _ = angular_scan()
     observation = hypothesis_observation(xyzi)
@@ -89,10 +89,30 @@ def test_hypothesis_density_matches_independent_student_t_in_log_distance():
     mass, error = quad(lambda x: np.dot(weights[0, 0], student_t.pdf(
         x, df=3, loc=mean[0, 0], scale=scale[0, 0])), -np.inf, np.inf, epsabs=1e-10)
     assert abs(mass - 1) < 1e-9 and error < 1e-8
-    expected_energy = -np.log((weights * np.exp(expected - peak)).sum(-1))
+    expected_energy = LOG_RETURN_PEAK - np.log((weights * np.exp(expected)).sum(-1))
     expected_energy[~prediction["supported"].numpy()] = 0
     np.testing.assert_allclose(geometry_energy(prediction).detach(), expected_energy,
                                atol=2e-12, rtol=2e-12)
+
+
+def test_density_score_retains_width_cost_for_broad_mixture_modes():
+    from src.normal import geometry_energy, LOG_RETURN_PEAK
+    scale = torch.tensor([[.02, .02, .02], [.002, 1., 1.]], dtype=torch.float64)
+    weight = torch.tensor([[1/3, 1/3, 1/3], [.1, .45, .45]], dtype=torch.float64).log()
+    for residual in (0., 1.):
+        log_prob = torch.from_numpy(student_t.logpdf(residual, 3, scale=scale.numpy()))
+        prediction = dict(log_prob=log_prob[:, None], weight=weight[:, None],
+                          supported=torch.ones(2, dtype=torch.bool))
+        energy = geometry_energy(prediction).squeeze(-1)
+        nll = -torch.logsumexp(weight + log_prob, -1)
+        torch.testing.assert_close(energy, LOG_RETURN_PEAK + nll)
+        torch.testing.assert_close(energy[1] - energy[0], nll[1] - nll[0])
+    # At the predicted mean, tenfold broadening pays log(10), not zero cost.
+    prediction["log_prob"] = torch.from_numpy(student_t.logpdf(
+        0., 3, scale=np.array([.01, .1])[:, None, None])).expand(2, 1, 3)
+    prediction["weight"] = torch.full((2, 1, 3), -math.log(3), dtype=torch.float64)
+    energy = geometry_energy(prediction).squeeze(-1)
+    torch.testing.assert_close(energy[1] - energy[0], torch.tensor(math.log(10), dtype=torch.float64))
 
 
 def test_coarse_normal_labels_admit_different_fine_classes_in_one_cell():
@@ -145,8 +165,9 @@ def test_allowed_set_balancing_and_missing_supervision_have_finite_gradients():
     energy = geometry_energy(prediction)
     assert torch.equal(energy, torch.zeros_like(energy))
     (empty + energy.sum()).backward()
-    for value in (logits, prediction["log_prob"], prediction["log_compatibility"]):
+    for value in (logits, prediction["log_prob"]):
         assert torch.equal(value.grad, torch.zeros_like(value))
+    assert prediction["log_compatibility"].grad is None
 
 
 def test_joint_semantic_supervision_reaches_the_held_out_predictor(hypothesis_model, monkeypatch):
@@ -161,11 +182,12 @@ def test_joint_semantic_supervision_reaches_the_held_out_predictor(hypothesis_mo
     allowed[indices] = F.one_hot(torch.tensor([0, 5, 8]), 19).bool()
     sample = dict(xyzi=torch.from_numpy(xyzi), observation=observation,
                   queries=indices, allowed=allowed)
-    monkeypatch.setattr(model, "semantic", lambda sample: semantic)
+    monkeypatch.setattr(model, "semantic", lambda sample, modes=False:
+                        (semantic, torch.full((len(indices), 19, 4), .25)) if modes else semantic)
     monkeypatch.setattr("src.model.NORMAL_LOSS_WEIGHTS",
-                        dict(joint=1., semantic=0., normal=0., geometry=0., context=0.))
+                        dict(classification=1., semantic=0., normal=0., geometry=0., context=0.))
     loss, detail = model.loss(sample)
-    torch.testing.assert_close(loss.detach(), detail["joint"])
+    torch.testing.assert_close(loss.detach(), detail["classification"])
     loss.backward()
     assert semantic.grad.abs().sum() > 0
     assert torch.equal(semantic.grad[0], torch.zeros(19))
@@ -189,8 +211,50 @@ def hypothesis_model(monkeypatch):
     return NormalHypothesis().eval()
 
 
-def test_joint_components_use_matching_classes_and_preserve_point_subsets(hypothesis_model, monkeypatch):
+def test_variants_match_initialization_and_isolate_observation_class_gradients(hypothesis_model, monkeypatch):
+    from src.model import NormalHypothesis
     from src.normal import hypothesis_observation
+    xyzi, _ = angular_scan()
+    indices = torch.tensor([40, 74, 165])
+    allowed = torch.zeros(len(xyzi), 19, dtype=torch.bool)
+    allowed[indices] = F.one_hot(torch.tensor([0, 5, 8]), 19).bool()
+    sample = dict(xyzi=torch.from_numpy(xyzi), observation=hypothesis_observation(xyzi),
+                  queries=indices, allowed=allowed)
+    states, outputs = [], {}
+    for variant in ("joint", "semantic", "separate"):
+        torch.manual_seed(87)
+        model = NormalHypothesis(variant=variant).train()
+        states.append(deepcopy(model.state_dict()))
+        semantic = torch.full((len(xyzi), 19), 5., requires_grad=True)
+        monkeypatch.setattr(model, "semantic", lambda sample: semantic)
+        monkeypatch.setattr("src.model.NORMAL_LOSS_WEIGHTS",
+            dict(classification=1., semantic=0., normal=0., geometry=0., context=0.))
+        loss, _ = model.loss(sample)
+        loss.backward()
+        gradient = model.hypotheses.surface.weight.grad
+        assert semantic.grad.abs().sum() > 0
+        if variant == "joint":
+            assert gradient is not None and gradient.abs().sum() > 0
+        else:
+            assert gradient is None or torch.equal(gradient, torch.zeros_like(gradient))
+        outputs[variant] = model.components(sample)["energy"].detach()
+        if variant == "separate":
+            model.zero_grad(set_to_none=True)
+            monkeypatch.setattr("src.model.NORMAL_LOSS_WEIGHTS",
+                dict(classification=0., semantic=0., normal=0., geometry=1., context=1.))
+            model.loss(sample)[0].backward()
+            assert model.hypotheses.surface.weight.grad.abs().sum() > 0
+        if variant == "semantic":
+            monkeypatch.setattr(model.hypotheses, "forward", lambda *args: pytest.fail("semantic baseline must skip predictor"))
+            torch.testing.assert_close(model.components(sample)["energy"], semantic)
+    for state in states[1:]:
+        for key in states[0]:
+            torch.testing.assert_close(state[key], states[0][key], rtol=0, atol=0)
+    torch.testing.assert_close(outputs["joint"], outputs["separate"], rtol=0, atol=0)
+
+
+def test_joint_components_use_matching_classes_and_preserve_point_subsets(hypothesis_model, monkeypatch):
+    from src.normal import hypothesis_observation, LOG_RETURN_PEAK
     xyzi, _ = angular_scan()
     sample = dict(xyzi=torch.from_numpy(xyzi), observation=hypothesis_observation(xyzi))
     semantic = torch.rand(len(xyzi), 19)
@@ -215,9 +279,9 @@ def test_joint_components_use_matching_classes_and_preserve_point_subsets(hypoth
     semantic.fill_(20)
     semantic[:, :2] = torch.tensor([0., 1.])
     prediction = dict(weight=torch.full((len(xyzi), 19, 3), -math.log(3)),
-                      log_compatibility=torch.zeros(len(xyzi), 19, 3),
+                      log_prob=torch.full((len(xyzi), 19, 3), LOG_RETURN_PEAK),
                       supported=torch.ones(len(xyzi), dtype=torch.bool))
-    prediction["log_compatibility"][:, 0] = -5
+    prediction["log_prob"][:, 0] -= 5
     monkeypatch.setattr(hypothesis_model.hypotheses, "forward", lambda observation, indices:
                         {key: value[indices] for key, value in prediction.items()})
     changed = hypothesis_model.components(sample, indices)
@@ -262,10 +326,10 @@ def test_normal_checkpoint_rejects_previous_scientific_definition():
     from src.model import (NormalHypothesis, NORMAL_VERSION, NORMAL_ARCHITECTURE,
                            NORMAL_SCORE_VERSION)
     saved = dict(version=NORMAL_VERSION,
-                 config=dict(architecture=NORMAL_ARCHITECTURE, score_version=NORMAL_SCORE_VERSION),
+                 config=dict(architecture=NORMAL_ARCHITECTURE, score_version=NORMAL_SCORE_VERSION, variant="joint"),
                  model=dict(calibration=torch.zeros(129), calibrated=torch.tensor(True)))
     NormalHypothesis.validate_checkpoint(saved, require_calibrated=True)
-    for location, key in (("", "version"), ("config", "architecture"), ("config", "score_version")):
+    for location, key in (("", "version"), ("config", "architecture"), ("config", "score_version"), ("config", "variant")):
         previous = deepcopy(saved)
         (previous[location] if location else previous)[key] = "previous-method"
         with pytest.raises(ValueError, match="incompatible"):
@@ -1183,3 +1247,104 @@ def test_ordered_sparse_convolution_matches_dense_values_and_gradients(kernel, i
         for observed, reference in ((layer.weight.grad, weight.grad), (layer.bias.grad, bias.grad)):
             assert torch.isfinite(observed).all()
             torch.testing.assert_close(observed.double(), reference, atol=1e-5, rtol=1e-5)
+
+
+def test_cycle_refinement_uses_rider_attributes_unique_boxes_and_world_pose():
+    from scipy.spatial.transform import Rotation
+    from src.data import refine_normal_labels
+    rotation = Rotation.from_euler("z", 90, degrees=True)
+    pose = np.eye(4)
+    pose[:3, :3] = rotation.as_matrix()
+    pose[:3, 3] = [100., 200., 1.]
+    xyzi = np.array([[5., 0., 0., .5], [5.8, 0., 0., .5], [8., 0., 0., .5],
+                     [11., 0., 0., .5], [14., 0., 0., .5]], np.float32)
+    labels = np.full(5, 14)
+    allowed = np.zeros((5, 19), bool)
+    allowed[:, [1, 6]] = True
+    boxes = []
+    for token, center, rider in [("rider", 5., True), ("parked", 8., False),
+                                  ("overlap-a", 11., True), ("overlap-b", 11., False)]:
+        boxes.append(dict(token=token, instance_token=token, raw_class=14, with_rider=rider,
+            translation=(rotation.apply([center, 0, 0]) + pose[:3, 3]).tolist(),
+            rotation=rotation.as_quat()[[3, 0, 1, 2]].tolist(), size=[.5, 2., 2.]))
+    refine_normal_labels(dict(pose=pose, normal_cycles=boxes), xyzi, labels, allowed, np.arange(5))
+    assert np.array_equal(allowed.sum(1), [1, 1, 2, 2, 2])
+    assert allowed[:2, 6].all() and not allowed[:2, 1].any()
+    assert allowed[2:, [1, 6]].all()
+    # nuScenes motorcycles also include light three-wheel vehicles.
+    for box in boxes:
+        box["raw_class"] = 21
+    allowed[:] = False
+    allowed[:, [2, 4, 7]] = True
+    refine_normal_labels(dict(pose=pose, normal_cycles=boxes), xyzi,
+                         np.full(5, 21), allowed, np.arange(5))
+    assert np.array_equal(allowed.sum(1), [2, 2, 3, 3, 3])
+    assert allowed[:2, [4, 7]].all() and not allowed[:2, 2].any()
+
+
+def test_reviewed_point_labels_preserve_slots_source_labels_and_range(tmp_path):
+    from src.data import read_normal_record, file_sha256
+    raw = np.array([[0, 0, 0, 0, 0], [8, 0, 0, 127.5, 1], [9, 0, 0, 255, 2],
+                    [60, 0, 0, 255, 3], [10, 0, 0, 255, 4]], np.float32)
+    labels = np.array([24, 24, 28, 28, 28], np.uint8)
+    scan, label = tmp_path / "scan.bin", tmp_path / "label.bin"
+    raw.tofile(scan)
+    labels.tofile(label)
+    record = dict(source="nuscenes", scan=str(scan), label=str(label), pose=np.eye(4).tolist(),
+        normal_fine=[dict(semantic="parking", raw_class=24, point_slots=[1],
+            scan_sha256=file_sha256(scan), label_sha256=file_sha256(label)),
+            dict(semantic="building", raw_class=28, point_slots=[2, 3])])
+    loaded = read_normal_record(record)
+    np.testing.assert_array_equal(loaded["slots"], [1, 2, 3, 4])
+    np.testing.assert_array_equal(loaded["allowed"].sum(1), [1, 1, 0, 0])
+    assert loaded["allowed"][0, 9] and loaded["allowed"][1, 12]
+    assert loaded["xyzi"][0, 3] == .5
+    invalid = deepcopy(record)
+    invalid["normal_fine"][0]["point_slots"] = [2]
+    with pytest.raises(ValueError, match="source labels"):
+        read_normal_record(invalid)
+    invalid = deepcopy(record)
+    invalid["normal_fine"][0]["scan_sha256"] = "changed"
+    with pytest.raises(ValueError, match="source file changed"):
+        read_normal_record(invalid)
+    invalid = deepcopy(record)
+    invalid["normal_fine"][0]["point_slots"] = [0]
+    with pytest.raises(ValueError, match="absent"):
+        read_normal_record(invalid)
+
+
+def test_reviewed_normal_annotations_cannot_cross_scan_partition(tmp_path, monkeypatch):
+    import json
+    from src import data
+    annotation = dict(token="scan", sample_token="sample", scene="scene-a", subset="val",
+                      semantic="parking", raw_class=24, point_slots=[1])
+    path = tmp_path / "normal.json"
+    path.write_text(json.dumps(dict(records=[annotation])))
+    monkeypatch.setattr(data, "NORMAL_ANNOTATIONS", path)
+    monkeypatch.setattr(data, "file_sha256", lambda path: "test-source")
+    monkeypatch.setattr(data, "normal_cycle_annotations", lambda root, hashes: {})
+    record = dict(token="scan", sample_token="sample", scene="scene-a", subset="train")
+    with pytest.raises(ValueError, match="another scan or partition"):
+        data.attach_normal_annotations([record], tmp_path)
+
+
+def test_normal_reader_rejects_same_path_training_input_replacement(tmp_path):
+    from src.data import read_normal_record, file_sha256
+    scan, label = tmp_path / "scan.bin", tmp_path / "scan.label"
+    raw = np.array([[5., 0., 0., .5], [6., 0., 0., .5]], np.float32)
+    labels = np.array([40, 10], np.uint32)
+    raw.tofile(scan)
+    labels.tofile(label)
+    record = dict(source="normal_stu", scan=str(scan), label=str(label), pose=np.eye(4).tolist(),
+                  scan_sha256=file_sha256(scan), label_sha256=file_sha256(label))
+    assert read_normal_record(record)["allowed"].sum() == 2
+    raw[0, 0] = 7.
+    raw.tofile(scan)
+    with pytest.raises(ValueError, match="source file changed: scan"):
+        read_normal_record(record)
+    raw[0, 0] = 5.
+    raw.tofile(scan)
+    labels[0] = 10
+    labels.tofile(label)
+    with pytest.raises(ValueError, match="source file changed: label"):
+        read_normal_record(record)
