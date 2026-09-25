@@ -1,0 +1,187 @@
+{
+  "version": "AJAE-cross-evidence",
+  "complete": true,
+  "selected": {
+    "candidate": 2,
+    "configuration": {
+      "modes": 4,
+      "semantic_weight": 0.0
+    },
+    "epoch": 19,
+    "training_loss": 1.1553216443920342,
+    "development": {
+      "points": 647788,
+      "classes": [
+        {
+          "category": 0,
+          "points": 5841,
+          "nll": 374.17957281743884,
+          "ce": 3.181426144038094,
+          "recall": 0.0005136106831022085,
+          "log_range_mae": 0.23762720787572117,
+          "log_spacing_mae": 0.2996568270735577
+        },
+        {
+          "category": 3,
+          "points": 6712,
+          "nll": 346.4937290207564,
+          "ce": 2.495844117009455,
+          "recall": 0.07836710369487485,
+          "log_range_mae": 0.23005810942993687,
+          "log_spacing_mae": 0.2726364628893586
+        },
+        {
+          "category": 4,
+          "points": 3525,
+          "nll": 443.7300202893196,
+          "ce": 2.938897639166379,
+          "recall": 0.000851063829787234,
+          "log_range_mae": 0.38334762395696437,
+          "log_spacing_mae": 0.4564766116133818
+        },
+        {
+          "category": 5,
+          "points": 1970,
+          "nll": 321.8584360229182,
+          "ce": 3.234670715404646,
+          "recall": 0.051269035532994923,
+          "log_range_mae": 0.263880093025072,
+          "log_spacing_mae": 0.41765222384164175
+        },
+        {
+          "category": 6,
+          "points": 25,
+          "nll": 359.4244097900391,
+          "ce": 1.8626854848861694,
+          "recall": 0.8,
+          "log_range_mae": 0.199434118270874,
+          "log_spacing_mae": 0.36769156336784364
+        },
+        {
+          "category": 8,
+          "points": 116902,
+          "nll": 231.4264775415994,
+          "ce": 4.605547698145212,
+          "recall": 0.0,
+          "log_range_mae": 0.12198602934393209,
+          "log_spacing_mae": 0.17096661815710704
+        },
+        {
+          "category": 9,
+          "points": 5911,
+          "nll": 260.6201960525422,
+          "ce": 1.9505520881059266,
+          "recall": 0.3319235323972255,
+          "log_range_mae": 0.14392321845073827,
+          "log_spacing_mae": 0.1873911072071021
+        },
+        {
+          "category": 10,
+          "points": 98067,
+          "nll": 250.3334538185745,
+          "ce": 2.8525643365371747,
+          "recall": 0.0012134561065394068,
+          "log_range_mae": 0.1268207516107117,
+          "log_spacing_mae": 0.18616504672245546
+        },
+        {
+          "category": 12,
+          "points": 135685,
+          "nll": 306.2471015745324,
+          "ce": 3.521700912775285,
+          "recall": 7.370011423517707e-06,
+          "log_range_mae": 0.12942008383874934,
+          "log_spacing_mae": 0.22152627406841716
+        },
+        {
+          "category": 13,
+          "points": 19584,
+          "nll": 300.5234329948823,
+          "ce": 2.860108100498716,
+          "recall": 0.014195261437908497,
+          "log_range_mae": 0.181445830903363,
+          "log_spacing_mae": 0.21264645391165923
+        },
+        {
+          "category": 14,
+          "points": 219253,
+          "nll": 293.5450032757503,
+          "ce": 3.526508342228417,
+          "recall": 4.560941013349874e-06,
+          "log_range_mae": 0.1889782766863308,
+          "log_spacing_mae": 0.24165706577414628
+        },
+        {
+          "category": 15,
+          "points": 8189,
+          "nll": 288.9995711635562,
+          "ce": 2.8635144807986976,
+          "recall": 0.09927952130907315,
+          "log_range_mae": 0.200723412374915,
+          "log_spacing_mae": 0.24301949943580614
+        },
+        {
+          "category": 16,
+          "points": 21514,
+          "nll": 272.41035909573804,
+          "ce": 3.0067182403520833,
+          "recall": 0.0007901831365622386,
+          "log_range_mae": 0.15634633572314147,
+          "log_spacing_mae": 0.22080458713938
+        },
+        {
+          "category": 17,
+          "points": 2868,
+          "nll": 307.3519513144819,
+          "ce": 3.2226124395053923,
+          "recall": 0.0,
+          "log_range_mae": 0.2432039910862469,
+          "log_spacing_mae": 0.4720091189058417
+        },
+        {
+          "category": 18,
+          "points": 1742,
+          "nll": 306.46042201658616,
+          "ce": 2.7629146272087755,
+          "recall": 0.04420206659012629,
+          "log_range_mae": 0.2818699799024689,
+          "log_spacing_mae": 0.3258219025045394
+        }
+      ],
+      "class_nll": 307.441409071334,
+      "point_nll": 279.88237450261767,
+      "class_recall": 0.044472626119330796,
+      "log_range_mae": 0.15606968811661556,
+      "log_spacing_mae": 0.21803431450970548,
+      "selection_classes": [
+        0,
+        3,
+        4,
+        5,
+        8,
+        9,
+        10,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ]
+    },
+    "seconds": 2.6351021340233274
+  },
+  "configuration": {
+    "modes": 4,
+    "semantic_weight": 0.0
+  },
+  "calibration_enabled": true,
+  "training_seconds": 245.28347227099584,
+  "trainable_parameters": 145061,
+  "no_synthetic_anomalies": true,
+  "backbone_frozen": true,
+  "val19_used_for_selection": false,
+  "evaluation_status": "not yet repeated",
+  "gpu_peak_bytes": 8204184064
+}

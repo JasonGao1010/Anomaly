@@ -11,7 +11,7 @@ from torch_scatter import segment_csr
 
 
 SUPPORT_VERSION = "AJAE-frozen-support"
-CROSS_VERSION = "AJAE-cross-evidence"
+CROSS_VERSION = "AJAE-class-evidence"
 
 
 def support_conditions(xyzi, indices=None):
@@ -168,7 +168,9 @@ class ScoreCalibration(nn.Module):
             knots[group, size:] = float(unique[-1])
             levels[group, :size] = torch.from_numpy(quantile_levels[repetitions.cumsum() - 1])
             lengths[group], groups[group] = size, group
-            if conditional and size == len(probabilities):
+            # Range adjustment needs class-specific references. Sparse classes
+            # retain the original range-independent global fallback.
+            if conditional and group > 0 and size == len(probabilities):
                 # Atoms keep their original merged class CDF. Interpolate only
                 # strictly increasing quantiles, without artificial epsilon bins.
                 range_enabled[group] = True
@@ -202,7 +204,8 @@ class ScoreCalibration(nn.Module):
             self.range_groups_enabled.copy_(range_enabled)
             report.update(range_bandwidth=bandwidth, range_groups_enabled=range_enabled.tolist(),
                           range_fallback_anchors=range_fallback,
-                          conditions="frozen official 16-class prediction and continuous log range; no spacing")
+                          conditions="continuous log range for sufficiently populated frozen 16-class groups; "
+                                     "sparse classes use the range-independent global CDF; no spacing")
         return report
 
     def forward(self, scores, predicted, conditions):
@@ -223,7 +226,7 @@ class ScoreCalibration(nn.Module):
             right = torch.searchsorted(anchors, distance.contiguous(), right=True).clamp(1, len(anchors) - 1)
             fraction = ((distance - anchors[right - 1]) / (anchors[right] - anchors[right - 1])).clamp(0, 1)
             local = torch.lerp(self.range_knots[rows, right - 1], self.range_knots[rows, right], fraction[:, None])
-            # Sparse classes already select the global row, which can use range.
+            # Saved flags remain authoritative, including historical global fits.
             knots = torch.where(self.range_groups_enabled[rows, None], local, knots)
         upper = torch.searchsorted(knots, scores.contiguous()[:, None], right=True).flatten()
         upper = torch.minimum(upper.clamp_min(1), self.lengths[rows] - 1)
@@ -235,13 +238,15 @@ class ScoreCalibration(nn.Module):
 
 
 class CrossEvidence(nn.Module):
-    """Joint normal support for frozen deep features and cross-level observations.
+    """Class-conditional normal support for deep features and observed detail.
 
     Deep features already observe the target point: this is cross-level consistency,
     not a blind-spot model or a guarantee that an unknown object is unpredictable.
     """
 
     dimensions = 182
+    classes = 19
+    point_chunk = 1024
 
     def __init__(self, modes=1, hidden=128, latent=64):
         super().__init__()
@@ -261,11 +266,15 @@ class CrossEvidence(nn.Module):
         self.calibration = ScoreCalibration()
         self.encoder = nn.Sequential(nn.Linear(72, hidden), nn.SiLU(),
                                      nn.Linear(hidden, latent), nn.SiLU())
-        self.class_head = nn.Linear(latent, 19)
+        self.class_embedding = nn.Embedding(self.classes, latent)
+        nn.init.normal_(self.class_embedding.weight, std=.02)
         self.density_head = nn.Sequential(nn.Linear(latent, hidden), nn.SiLU(),
-            nn.Linear(hidden, modes * self.dimensions + self.dimensions + modes))
+            nn.Linear(hidden, modes * self.dimensions + modes))
+        self.scale_head = nn.Linear(latent, self.dimensions)
+        nn.init.zeros_(self.scale_head.weight)
+        nn.init.zeros_(self.scale_head.bias)
         output = self.density_head[-1]
-        nn.init.zeros_(output.weight)
+        nn.init.normal_(output.weight, std=.001)
         nn.init.zeros_(output.bias)
         # Distinct component means break the exact symmetry of a mixture at startup.
         with torch.no_grad():
@@ -276,18 +285,17 @@ class CrossEvidence(nn.Module):
             raise ValueError("cross evidence requires point features with shape [N, 252]")
         return (features.float() - self.feat_location) / self.feat_scale
 
-    def predict(self, features, *, semantics=False):
+    def predict(self, features):
         with torch.autocast(features.device.type, enabled=False):
             deep = self._features(features)[:, 180:]
             latent = self.encoder(deep)
-            raw = self.density_head(latent)
-            means, scale, weights = raw.split(
-                (self.modes * self.dimensions, self.dimensions, self.modes), -1)
-            result = dict(latent=latent, means=means.reshape(-1, self.modes, self.dimensions),
-                          log_scale=3 * torch.tanh(scale / 3), log_weights=weights.log_softmax(-1))
-            if semantics:
-                result["logits"] = self.class_head(latent)
-            return result
+            raw = self.density_head(latent[:, None] + self.class_embedding.weight[None])
+            means, weights = raw.split((self.modes * self.dimensions, self.modes), -1)
+            # Shared uncertainty prevents classes from competing through arbitrary
+            # covariance volumes; means and mode weights provide class differences.
+            return dict(means=means.reshape(-1, self.classes, self.modes, self.dimensions),
+                        log_scale=3 * torch.tanh(self.scale_head(latent) / 3),
+                        log_weights=weights.log_softmax(-1))
 
     def observations(self, features, conditions):
         if conditions.shape != (len(features), 2):
@@ -299,41 +307,73 @@ class CrossEvidence(nn.Module):
             base = F.pad(values[:, 180:], (1, 0), value=1) @ self.linear
             return (observed - base) @ self.whitener
 
-    def deep_energy(self, features):
-        """Equal-prior normal class mixture with one shared within-class covariance."""
+    def deep_class_energy(self, features):
+        """Negative log p(c, D), with equal priors over singleton-anchored classes."""
         with torch.autocast(features.device.type, enabled=False):
             if not bool(self.deep_present.any()):
                 raise ValueError("deep support requires at least one observed normal class")
             deep = self._features(features)[:, 180:] @ self.deep_whitener
-            centers = self.deep_centers[self.deep_present] @ self.deep_whitener
+            centers = self.deep_centers @ self.deep_whitener
             square = (deep.square().sum(-1, keepdim=True) + centers.square().sum(-1)[None]
                       - 2 * deep @ centers.T).clamp_min(0)
-            components = -.5 * square - math.log(len(centers))
-            return self.deep_log_volume + 36 * math.log(2 * math.pi) - torch.logsumexp(components, -1)
+            energy = (.5 * square + self.deep_log_volume + 36 * math.log(2 * math.pi)
+                      + self.deep_present.sum().to(deep.dtype).log())
+            return energy.masked_fill(~self.deep_present[None], torch.inf)
+
+    def deep_energy(self, features):
+        return -torch.logsumexp(-self.deep_class_energy(features), -1)
+
+    def class_energy(self, features, conditions, predicted=None):
+        if features.ndim != 2 or features.shape[1] != 252 or conditions.shape != (len(features), 2):
+            raise ValueError("class evidence features and observations must identify the same points")
+        with torch.autocast(features.device.type, enabled=False):
+            if predicted is not None:
+                # The observation likelihood updates the class posterior itself:
+                # p(c,D,O) = p(c,D) p(O|D,c), rather than a class-shared multiplier.
+                return (self.deep_class_energy(features)
+                        + self.negative_log_likelihood(predicted, self.observations(features, conditions)))
+            chunks = []
+            for start in range(0, len(features), self.point_chunk):
+                stop = start + self.point_chunk
+                f, g = features[start:stop], conditions[start:stop]
+                chunks.append(self.class_energy(f, g, self.predict(f)))
+            return torch.cat(chunks) if chunks else features.new_empty((0, self.classes), dtype=torch.float32)
 
     def raw_score(self, features, conditions):
         with torch.autocast(features.device.type, enabled=False):
-            predicted = self.predict(features)
-            observed = self.observations(features, conditions)
-            # A plausible cross-level relation cannot excuse an unsupported deep
-            # representation: p(deep, observation) = p(deep) p(observation | deep).
-            return self.deep_energy(features) + self.negative_log_likelihood(predicted, observed)
+            # Class prediction and normal rejection use the same joint evidence.
+            return -torch.logsumexp(-self.class_energy(features, conditions), -1)
 
     def negative_log_likelihood(self, predicted, observed):
+        if (observed.ndim != 2 or observed.shape[1] != self.dimensions
+                or predicted["means"].shape != (len(observed), self.classes, self.modes, self.dimensions)
+                or predicted["log_weights"].shape != (len(observed), self.classes, self.modes)
+                or predicted["log_scale"].shape != observed.shape):
+            raise ValueError("class-conditional predictions and observations have incompatible shapes")
         with torch.autocast(observed.device.type, enabled=False):
-            residual = (observed[:, None] - predicted["means"]) * torch.exp(-predicted["log_scale"][:, None])
+            residual = ((observed[:, None, None] - predicted["means"])
+                        * torch.exp(-predicted["log_scale"][:, None, None]))
             component = predicted["log_weights"] - .5 * residual.square().sum(-1)
             # Include covariance volume; inflating predicted uncertainty is not free.
             return (.5 * self.dimensions * math.log(2 * math.pi)
-                    + predicted["log_scale"].sum(-1) - torch.logsumexp(component, -1))
+                    + predicted["log_scale"].sum(-1)[:, None] - torch.logsumexp(component, -1))
 
     def prediction(self, features):
         with torch.autocast(features.device.type, enabled=False):
-            predicted = self.predict(features)
-            mean = (predicted["log_weights"].exp()[..., None] * predicted["means"]).sum(1)
-            base = F.pad(self._features(features)[:, 180:], (1, 0), value=1) @ self.linear
-            # Row-vector whitening is inverted by solving W.T @ residual.T = mean.T.
-            expected = base + torch.linalg.solve(self.whitener.T, mean.T).T
+            if features.ndim != 2 or features.shape[1] != 252:
+                raise ValueError("cross evidence requires point features with shape [N, 252]")
+            inverse = torch.linalg.inv(self.whitener)
+            chunks = []
+            for start in range(0, len(features), self.point_chunk):
+                f = features[start:start+self.point_chunk]
+                predicted = self.predict(f)
+                conditional_mean = (predicted["log_weights"].exp()[..., None] * predicted["means"]).sum(2)
+                # Use p(c|D), not p(c|D,O): this prediction must not read its target.
+                class_probability = (-self.deep_class_energy(f)).softmax(-1)
+                mean = (class_probability[..., None] * conditional_mean).sum(1)
+                base = F.pad(self._features(f)[:, 180:], (1, 0), value=1) @ self.linear
+                chunks.append(base + mean @ inverse)
+            expected = torch.cat(chunks) if chunks else features.new_empty((0, self.dimensions), dtype=torch.float32)
             return dict(features=expected[:, :180] * self.feat_scale[:180] + self.feat_location[:180],
                         conditions=expected[:, 180:] * self.geo_scale + self.geo_location)
 

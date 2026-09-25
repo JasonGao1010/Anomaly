@@ -386,6 +386,11 @@ def test_cross_evidence_predictions_exclude_observed_targets_and_labels():
     sample = dict(features=torch.zeros(3, 252), conditions=torch.zeros(3, 2),
                   labels=torch.tensor([0, 1, 2]))
     predicted = model.predict(sample["features"])
+    assert set(predicted) == {"means", "log_scale", "log_weights"}
+    assert predicted["means"].shape == (3, 19, 2, 182)
+    assert predicted["log_weights"].shape == (3, 19, 2)
+    assert predicted["log_scale"].shape == (3, 182)
+    assert not hasattr(model, "class_head")
     score = model.raw_score(sample["features"], sample["conditions"])
     sample["labels"] = torch.tensor([18, 17, 16])
     sample["conditions"] += 4
@@ -413,7 +418,7 @@ def test_cross_evidence_matches_independent_gaussian_mixture_and_inverse_transfo
     from src.normal import CrossEvidence
 
     rng = np.random.default_rng(43)
-    model = CrossEvidence(modes=2)
+    model = CrossEvidence(modes=2, hidden=2, latent=2)
     features = rng.normal(size=(3, 252)).astype(np.float32)
     conditions = rng.normal(size=(3, 2)).astype(np.float32)
     location = rng.normal(scale=.2, size=252).astype(np.float32)
@@ -424,36 +429,76 @@ def test_cross_evidence_matches_independent_gaussian_mixture_and_inverse_transfo
     whitener = np.eye(182, dtype=np.float32) + np.triu(
         rng.normal(scale=.01, size=(182, 182)).astype(np.float32), 1)
     means = rng.normal(scale=.2, size=(2, 182)).astype(np.float32)
+    mean_offsets = rng.normal(scale=.15, size=(2, 182)).astype(np.float32)
+    embedding = np.linspace(-1, 1, 19, dtype=np.float32)
     raw_scale = np.linspace(-.8, .5, 182, dtype=np.float32)
     raw_weights = np.array([-.7, .3], np.float32)
+    weight_offsets = np.array([.4, -.2], np.float32)
+    centers = np.zeros((19, 72), np.float32)
+    centers[:, 0] = np.linspace(-1.5, 1.5, 19)
+    present = [0, 7, 18]
     with torch.no_grad():
         for name, value in (("feat_location", location), ("feat_scale", scale),
                             ("geo_location", geo_location), ("geo_scale", geo_scale),
                             ("linear", linear), ("whitener", whitener)):
             getattr(model, name).copy_(torch.from_numpy(value))
-        model.density_head[-1].bias.copy_(torch.from_numpy(
-            np.concatenate((means.ravel(), raw_scale, raw_weights))))
+        # A tiny deterministic head makes class-dependent parameters independently
+        # reproducible; this artificial fixture verifies implementation only.
+        for parameter in model.parameters():
+            parameter.zero_()
+        model.class_embedding.weight[:, 0].copy_(torch.from_numpy(embedding))
+        model.density_head[0].weight[0, 0] = 1
+        model.density_head[-1].weight[:, 0].copy_(torch.from_numpy(
+            np.concatenate((mean_offsets.ravel(), weight_offsets))))
+        model.density_head[-1].bias.copy_(torch.from_numpy(np.concatenate((means.ravel(), raw_weights))))
+        model.scale_head.bias.copy_(torch.from_numpy(raw_scale))
+        model.deep_centers.copy_(torch.from_numpy(centers))
+        model.deep_present.zero_()
+        model.deep_present[present] = True
     values = (features.astype(np.float64) - location) / scale
     geometry = (conditions.astype(np.float64) - geo_location) / geo_scale
     base = np.column_stack((np.ones(3), values[:, 180:])) @ linear.astype(np.float64)
     observed = (np.column_stack((values[:, :180], geometry)) - base) @ whitener.astype(np.float64)
     log_scale = 3 * np.tanh(raw_scale.astype(np.float64) / 3)
     covariance = np.diag(np.exp(2 * log_scale))
-    log_weights = raw_weights.astype(np.float64) - logsumexp(raw_weights.astype(np.float64))
+    activation = embedding.astype(np.float64) / (1 + np.exp(-embedding.astype(np.float64)))
+    class_means = means.astype(np.float64)[None] + activation[:, None, None] * mean_offsets
+    class_weights = raw_weights.astype(np.float64)[None] + activation[:, None] * weight_offsets
+    log_weights = class_weights - logsumexp(class_weights, axis=1, keepdims=True)
     # SciPy evaluates the full normalized density, including its scale-dependent volume.
-    components = np.column_stack([multivariate_normal.logpdf(observed, mean=mean, cov=covariance)
-                                  for mean in means.astype(np.float64)])
-    expected_score = -logsumexp(components + log_weights, axis=1)
+    components = np.stack([np.column_stack([
+        multivariate_normal.logpdf(observed, mean=mean, cov=covariance) for mean in class_mean])
+        for class_mean in class_means], axis=1)
+    expected_conditional = -logsumexp(components + log_weights[None], axis=2)
+    expected_deep = np.full((len(features), 19), np.inf)
+    for category in present:
+        expected_deep[:, category] = -multivariate_normal.logpdf(
+            values[:, 180:], mean=centers[category], cov=np.eye(72)) + np.log(len(present))
+    expected_joint = expected_deep + expected_conditional
     tensor_features = torch.from_numpy(features)
-    actual = model.raw_score(tensor_features, torch.from_numpy(conditions)) - model.deep_energy(tensor_features)
-    np.testing.assert_allclose(actual.detach().numpy(), expected_score, rtol=2e-6, atol=2e-5)
-    mean = softmax(raw_weights.astype(np.float64)) @ means.astype(np.float64)
-    expected = base + np.linalg.solve(whitener.astype(np.float64).T, mean)
-    predicted = model.prediction(torch.from_numpy(features))
+    tensor_conditions = torch.from_numpy(conditions)
+    predicted_parameters = model.predict(tensor_features)
+    conditional = model.negative_log_likelihood(predicted_parameters,
+                                                model.observations(tensor_features, tensor_conditions))
+    np.testing.assert_allclose(conditional.detach().numpy(), expected_conditional, rtol=2e-6, atol=2e-5)
+    joint = model.class_energy(tensor_features, tensor_conditions, predicted_parameters)
+    np.testing.assert_allclose(joint.detach().numpy(), expected_joint, rtol=2e-6, atol=3e-5)
+    expected_score = -logsumexp(-expected_joint, axis=1)
+    np.testing.assert_allclose(model.raw_score(tensor_features, tensor_conditions).detach().numpy(),
+                               expected_score, rtol=2e-6, atol=3e-5)
+    mean_by_class = (softmax(class_weights, axis=1)[..., None] * class_means).sum(1)
+    mean = softmax(-expected_deep, axis=1) @ mean_by_class
+    expected = base + np.linalg.solve(whitener.astype(np.float64).T, mean.T).T
+    predicted = model.prediction(tensor_features)
     np.testing.assert_allclose(predicted["features"].detach().numpy(),
                                expected[:, :180] * scale[:180] + location[:180], rtol=3e-6, atol=2e-6)
     np.testing.assert_allclose(predicted["conditions"].detach().numpy(),
                                expected[:, 180:] * geo_scale + geo_location, rtol=3e-6, atol=2e-6)
+    model.point_chunk = 1
+    np.testing.assert_allclose(model.raw_score(tensor_features, tensor_conditions).detach().numpy(),
+                               expected_score, rtol=2e-6, atol=3e-5)
+    for name, value in model.prediction(tensor_features).items():
+        torch.testing.assert_close(value, predicted[name], rtol=3e-6, atol=2e-6)
 
 
 def test_cross_evidence_deep_support_matches_shared_covariance_class_mixture():
@@ -483,14 +528,67 @@ def test_cross_evidence_deep_support_matches_shared_covariance_class_mixture():
     deep = ((features.astype(np.float64) - location) / scale)[:, 180:]
     components = np.stack([multivariate_normal.logpdf(deep, mean=center, cov=covariance)
                            for center in centers], axis=1)
-    expected = -logsumexp(components - np.log(len(centers)), axis=1)
-    actual = model.deep_energy(torch.from_numpy(features))
-    np.testing.assert_allclose(actual.numpy(), expected, rtol=2e-6, atol=2e-5)
+    expected_classes = np.full((len(features), 19), np.inf)
+    expected_classes[:, [0, 7, 18]] = -components + np.log(len(centers))
+    actual = model.deep_class_energy(torch.from_numpy(features))
+    np.testing.assert_allclose(actual.numpy(), expected_classes, rtol=2e-6, atol=2e-5)
+    np.testing.assert_allclose(model.deep_energy(torch.from_numpy(features)).numpy(),
+                               -logsumexp(-expected_classes, axis=1), rtol=2e-6, atol=2e-5)
     with torch.autocast("cpu", dtype=torch.bfloat16):
-        torch.testing.assert_close(model.deep_energy(torch.from_numpy(features)), actual, rtol=0, atol=0)
+        torch.testing.assert_close(model.deep_class_energy(torch.from_numpy(features)), actual, rtol=0, atol=0)
     model.deep_present.zero_()
     with pytest.raises(ValueError, match="observed normal class"):
-        model.deep_energy(torch.from_numpy(features))
+        model.deep_class_energy(torch.from_numpy(features))
+
+
+def test_cross_evidence_observations_change_joint_class_support_and_partial_label_gradients():
+    from src.normal import CrossEvidence
+
+    # Artificial mechanism fixture: identical deep input, distinct observed detail.
+    # Other normal classes are alternative explanations, never anomaly labels.
+    model = CrossEvidence(modes=1, hidden=4, latent=2)
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.zero_()
+        model.deep_present.zero_()
+        model.deep_present[:2] = True
+        model.class_embedding.weight[0, 0] = 1
+        model.class_embedding.weight[1, 0] = 3
+        model.density_head[0].weight[0, 0] = 1
+        model.density_head[-1].weight[0, 0] = 1
+        model.density_head[-1].weight[180, 0] = 1
+    features = torch.zeros(2, 252)
+    conditions = torch.zeros(2, 2)
+    parameters = model.predict(features)
+    means = parameters["means"][0, :2, 0].detach()
+    features[:, :180] = means[:, :180]
+    conditions[:] = means[:, 180:]
+    for name, value in model.predict(features).items():
+        torch.testing.assert_close(value, parameters[name], rtol=0, atol=0)
+        torch.testing.assert_close(value[0], value[1], rtol=0, atol=0)
+    deep = model.deep_class_energy(features)
+    torch.testing.assert_close(deep[0], deep[1], rtol=0, atol=0)
+    energy = model.class_energy(features, conditions)
+    assert energy.argmin(1).tolist() == [0, 1]
+    assert energy[0, 0] < energy[0, 1] and energy[1, 1] < energy[1, 0]
+    torch.testing.assert_close(model.raw_score(features, conditions),
+                               -torch.logsumexp(-energy, -1), rtol=0, atol=0)
+    allowed = torch.zeros(2, 19, dtype=torch.bool)
+    allowed[0, 0], allowed[1, 1] = True, True
+    logits = -energy
+    normalizer = torch.logsumexp(logits, -1)
+    partial_ce = normalizer - torch.logsumexp(logits.masked_fill(~allowed, -torch.inf), -1)
+    torch.testing.assert_close(partial_ce, -torch.log(logits.softmax(-1)[allowed]), rtol=1e-4, atol=1e-5)
+    # Admitting both normal explanations makes their summed posterior one; no
+    # separate binary rejection target is assigned to either class.
+    allowed[:, :2] = True
+    coarse_ce = normalizer - torch.logsumexp(logits.masked_fill(~allowed, -torch.inf), -1)
+    torch.testing.assert_close(coarse_ce, torch.zeros_like(coarse_ce), rtol=0, atol=0)
+    assert (coarse_ce <= partial_ce).all()
+    partial_ce.mean().backward()
+    assert model.class_embedding.weight.grad[:2].abs().sum() > 0
+    for layer in (model.density_head[0], model.density_head[-1]):
+        assert torch.isfinite(layer.weight.grad).all() and layer.weight.grad.abs().sum() > 0
 
 
 def test_score_calibration_uses_frozen_groups_and_preserves_unbounded_tail_order():
@@ -615,14 +713,28 @@ def test_range_calibration_effective_sample_fallback_and_rare_class_global():
     assert report["range_fallback_anchors"][1] == 16
     assert calibration.range_groups_enabled[1]
     torch.testing.assert_close(calibration.range_knots[1], calibration.knots[1].expand(16, -1), rtol=0, atol=0)
-    assert calibration.groups[3] == 0 and calibration.range_groups_enabled[0]
+    assert calibration.groups[3] == 0 and not calibration.range_groups_enabled[0]
     calibration.enabled.fill_(True)
     probes = torch.full((2,), 12.)
-    context = torch.tensor([[np.log(2.5), 0.], [np.log(50), 0.]])
+    context = torch.tensor([[np.log(10), 0.], [np.log(20), 0.]])
     rare = calibration(probes, torch.full((2,), 2), context)
     absent = calibration(probes, torch.full((2,), 15), context)
     torch.testing.assert_close(rare, absent, rtol=0, atol=0)
-    assert rare.diff().abs().item() > .1
+    original = ScoreCalibration()
+    original.fit(scores, classes, conditions)
+    original.enabled.fill_(True)
+    torch.testing.assert_close(rare, original(probes, torch.full((2,), 2), context), rtol=0, atol=0)
+    assert rare[0] == rare[1]
+    supported = calibration(probes, torch.ones(2, dtype=torch.long), context)
+    assert calibration.range_groups_enabled[2] and supported.diff().abs().item() > .1
+
+    # Loading an older fitted state must not silently change its scoring rule.
+    state = deepcopy(calibration.state_dict())
+    state["range_groups_enabled"][0] = True
+    state["range_knots"][0] = state["range_knots"][2]
+    historical = ScoreCalibration(range_bandwidth=.25)
+    historical.load_state_dict(state, strict=True)
+    torch.testing.assert_close(historical(probes, torch.full((2,), 2), context), supported, rtol=0, atol=0)
 
 
 def test_range_calibration_atoms_keep_class_cdf_and_local_atoms_fall_back():
@@ -667,19 +779,23 @@ def test_cross_evidence_calibrates_one_raw_score_using_supplied_official_predict
 
     model = CrossEvidence()
     features, conditions = torch.zeros(3, 252), torch.zeros(3, 2)
+    with torch.no_grad():
+        model.deep_present.zero_()
+        model.deep_present[18] = True
     predicted = model.predict(features)
+    energy = model.class_energy(features, conditions)
     raw = model.raw_score(features, conditions)
     torch.testing.assert_close(model.negative_log_likelihood(
-        predicted, model.observations(features, conditions)) + model.deep_energy(features), raw, rtol=0, atol=0)
+        predicted, model.observations(features, conditions)) + model.deep_class_energy(features),
+        energy, rtol=0, atol=0)
+    torch.testing.assert_close(-torch.logsumexp(-energy, -1), raw, rtol=0, atol=0)
     scores = torch.cat((torch.linspace(0, 200, 2048), torch.linspace(300, 500, 2048)))
     official_classes = torch.cat((torch.zeros(2048), torch.ones(2048))).long()
     model.calibration.fit(scores, official_classes, torch.zeros(len(scores), 2))
     model.calibration.enabled.fill_(True)
-    with torch.no_grad():
-        model.class_head.weight.zero_()
-        model.class_head.bias.zero_()
-        model.class_head.bias[18] = 10
-    assert (model.predict(features, semantics=True)["logits"].argmax(1) == 18).all()
+    # The learned 19-class explanation cannot replace the supplied official
+    # 16-class prediction that selects a frozen calibration group.
+    assert (energy.argmin(1) == 18).all()
     with pytest.raises(ValueError, match="16-class"):
         model(features, conditions)
     supplied = torch.tensor([0, 1, 0])
@@ -734,3 +850,58 @@ def test_support_queries_and_cache_preserve_coarse_normal_candidate_sets(monkeyp
     np.testing.assert_array_equal(np.load(info["paths"]["features"])[:info["count"], 0], expected)
     with pytest.raises(ValueError, match="will not overwrite"):
         support_cache(model, records, tmp_path, torch.device("cpu"), workers=0)
+
+
+def test_partial_label_normal_em_matches_independent_penalized_likelihood(tmp_path):
+    from scipy.special import logsumexp
+    from scipy.stats import multivariate_normal
+    from src.normal import CrossEvidence
+    from src.train import cross_initialize
+
+    # Artificial implementation fixture, not measured scientific training data.
+    rng = np.random.default_rng(206)
+    latent = np.r_[np.zeros(60), np.ones(60), np.arange(120) % 2].astype(int)
+    features = rng.normal(size=(240, 252)).astype(np.float32)
+    features[:, 180:188] += (latent[:, None] * 2 - 1) * .45
+    semantic = np.r_[np.full(60, 3), np.full(60, 8), np.full(120, -1)].astype(np.int16)
+    allowed = np.zeros((240, 19), dtype=bool)
+    allowed[:60, 3], allowed[60:120, 8] = True, True
+    allowed[120:, [3, 8, 14]] = True  # Class 14 has no singleton anchor.
+    values = dict(features=features, conditions=rng.normal(size=(240, 2)).astype(np.float32),
+                  semantic=semantic, allowed=allowed)
+    paths = {key: str(tmp_path / (key + ".npy")) for key in values}
+    for key, value in values.items():
+        np.save(paths[key], value)
+    indices = [np.flatnonzero(semantic == category) for category in range(19)]
+    indices.append(np.flatnonzero(semantic == -1))
+    model = CrossEvidence()
+    report = cross_initialize(model, dict(paths=paths, count=240), indices)
+    assert report["singleton_points"] == report["coarse_points"] == 120
+    assert 1 <= report["deep_em_iterations"] <= 20
+    assert np.all(np.diff(report["deep_penalized_objectives"]) >= -1e-6)
+    np.testing.assert_array_equal(model.deep_present.nonzero().flatten().numpy(), [3, 8])
+
+    # Reconstruct the covariance from saved FP32 parameters; SciPy evaluates the
+    # class densities independently of the implementation's whitened-distance E-step.
+    deep = ((features.astype(float) - model.feat_location.numpy())
+            / model.feat_scale.numpy())[:, 180:]
+    inverse = np.linalg.inv(model.deep_whitener.numpy().astype(float))
+    covariance = inverse.T @ inverse
+    component = np.column_stack([multivariate_normal.logpdf(
+        deep, mean=model.deep_centers[category].numpy(), cov=covariance) for category in (3, 8)]) - np.log(2)
+    unrestricted = logsumexp(component, axis=1).sum()
+    admitted = allowed[:, [3, 8]]
+    component[~admitted] = -np.inf
+    marginal = logsumexp(component, axis=1)
+    responsibility = np.exp(component - marginal[:, None])
+    assert np.all(responsibility[~admitted] == 0)
+    np.testing.assert_array_equal(responsibility[:120], np.eye(2)[latent[:120]])
+    assert unrestricted - marginal.sum() > .01  # The label constraint changes this fixture.
+    objective = marginal.sum() - .5 * len(deep) * .01 * np.trace(np.linalg.inv(covariance))
+    assert abs(objective - report["deep_penalized_objective"]) / len(deep) < 2e-5
+    assert abs(marginal.sum() - report["deep_partial_log_likelihood"]) / len(deep) < 2e-5
+
+    semantic[120] = allowed[120].argmax()
+    np.save(paths["semantic"], semantic)
+    with pytest.raises(ValueError, match="singleton identities disagree"):
+        cross_initialize(CrossEvidence(), dict(paths=paths, count=240), indices)

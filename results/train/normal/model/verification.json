@@ -1,0 +1,32 @@
+{
+  "independent_metrics": {
+    "AP": 0.4419350744527316,
+    "AUROC": 89.35251424376874,
+    "FPR95": 52.74132839113924,
+    "threshold": 0.5138245224952698
+  },
+  "points": 193879969,
+  "normal_points": 193792470,
+  "anomaly_points": 87499,
+  "scans": 1960,
+  "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "seconds": 3.5797683330019936,
+  "method": "exact score ranks with whole ties and the official ROC vertex-removal rule",
+  "official_metrics": {
+    "AP": 0.4419350744527317,
+    "FPR95": 52.74132839113924,
+    "AUROC": 89.35251424376874,
+    "threshold": 0.5138245224952698
+  },
+  "absolute_difference": {
+    "AP": 1.1102230246251565e-16,
+    "AUROC": 0.0,
+    "FPR95": 0.0,
+    "threshold": 0.0
+  },
+  "consistent": true,
+  "official_perception_unchanged_tensors": 240,
+  "normal_training_points": 4720640,
+  "val19_used_for_selection": false,
+  "role": "completed class-independent normal-coverage reference; not the new class-conditioned model"
+}

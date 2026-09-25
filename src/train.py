@@ -2190,39 +2190,63 @@ def cross_cache(cache, device):
 
 @torch.no_grad()
 def cross_development(scorer, data, indices, *, retain=False):
-    """Normal held-out likelihood, semantic recall and physical prediction error."""
+    """Evaluate the same class explanations used by the anomaly score."""
     scorer.eval()
-    totals = torch.zeros(19,7,device=data["features"].device,dtype=torch.float64)
+    totals = torch.zeros(19,14,device=data["features"].device,dtype=torch.float64)
     all_scores = []
     inverse = torch.linalg.inv(scorer.whitener)
-    for start in range(0,len(indices),16384):
-        at = indices[start:start+16384]
+    for start in range(0,len(indices),2048):
+        at = indices[start:start+2048]
         f,g,y = data["features"][at],data["conditions"][at],data["semantic"][at]
-        predicted = scorer.predict(f,semantics=True)
-        nll = scorer.negative_log_likelihood(predicted,scorer.observations(f,g))+scorer.deep_energy(f)
-        ce = F.cross_entropy(predicted["logits"],y,reduction="none")
-        mean = (predicted["means"]*predicted["log_weights"].exp()[...,None]).sum(1)
+        predicted = scorer.predict(f)
+        deep = scorer.deep_class_energy(f)
+        energy = scorer.negative_log_likelihood(predicted,scorer.observations(f,g))+deep
+        logits = -energy
+        # Labels evaluate the true explanation; the deployed score marginalizes
+        # all explanations and never receives a ground-truth class.
+        nll = energy.gather(1,y[:,None]).squeeze(1)
+        score = -torch.logsumexp(logits,-1)
+        ce = F.cross_entropy(logits,y,reduction="none")
+        mixture = torch.softmax(-deep,-1)[...,None]*predicted["log_weights"].exp()
+        mean = (predicted["means"]*mixture[...,None]).sum((1,2))
         base = F.pad(scorer._features(f)[:,180:],(1,0),value=1)@scorer.linear
         expected = ((base+mean@inverse)[:,180:]*scorer.geo_scale+scorer.geo_location)
         error = expected-g
+        correct=logits.argmax(-1)==y
+        deep_correct=deep.argmin(-1)==y
+        far=g[:,0]>=math.log(35.)
         v = torch.stack((torch.ones_like(nll),nll,ce,
-                         (predicted["logits"].argmax(-1)==y).float(),
-                         error[:,0].abs(),error[:,1].abs(),error.square().sum(-1)),-1)
+                         correct.float(),error[:,0].abs(),error[:,1].abs(),error.square().sum(-1),
+                         deep_correct.float(),(correct&~deep_correct).float(),
+                         (~correct&deep_correct).float(),far.float(),
+                         (far&correct).float(),(far&deep_correct).float(),score),-1)
         if not bool(torch.isfinite(v).all()):
             raise ValueError("nonfinite cross-level normal development")
         totals.index_add_(0,y,v.double())
         if retain:
-            all_scores.append(nll.cpu())
+            all_scores.append(score.cpu())
     totals = totals.cpu().numpy()
     rows = [dict(category=c,points=int(t[0]),nll=float(t[1]/t[0]),ce=float(t[2]/t[0]),
                  recall=float(t[3]/t[0]),log_range_mae=float(t[4]/t[0]),
-                 log_spacing_mae=float(t[5]/t[0])) for c,t in enumerate(totals) if t[0]]
+                 log_spacing_mae=float(t[5]/t[0]),deep_recall=float(t[7]/t[0]),
+                 corrected_deep_errors=int(t[8]),spoiled_deep_correct=int(t[9]),
+                 far_points=int(t[10]),far_recall=float(t[11]/t[10]) if t[10] else None,
+                 far_deep_recall=float(t[12]/t[10]) if t[10] else None,
+                 marginal_nll=float(t[13]/t[0]))
+            for c,t in enumerate(totals) if t[0]]
     # A handful of points cannot reliably select mixture capacity for a rare class.
     selection = [r for r in rows if r["points"]>=128]
     report = dict(points=int(totals[:,0].sum()),classes=rows,
                   class_nll=float(np.mean([r["nll"] for r in selection])),
+                  class_marginal_nll=float(np.mean([r["marginal_nll"] for r in selection])),
                   point_nll=float(totals[:,1].sum()/totals[:,0].sum()),
                   class_recall=float(np.mean([r["recall"] for r in selection])),
+                  deep_class_recall=float(np.mean([r["deep_recall"] for r in selection])),
+                  corrected_deep_errors=int(totals[:,8].sum()),
+                  spoiled_deep_correct=int(totals[:,9].sum()),
+                  far_points=int(totals[:,10].sum()),
+                  far_recall=float(totals[:,11].sum()/max(totals[:,10].sum(),1)),
+                  far_deep_recall=float(totals[:,12].sum()/max(totals[:,10].sum(),1)),
                   log_range_mae=float(totals[:,4].sum()/totals[:,0].sum()),
                   log_spacing_mae=float(totals[:,5].sum()/totals[:,0].sum()),
                   selection_classes=[r["category"] for r in selection])
@@ -2238,6 +2262,8 @@ def normal_main():
     parser.add_argument("--normal",action="store_true")
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--features",type=Path,default=Path("results/train/normal/features"))
+    parser.add_argument("--reference",type=Path,required=True,
+                        help="completed class-independent model on the identical normal feature cache")
     parser.add_argument("--threads",type=int,default=4)
     parser.add_argument("--workers",type=int,default=16)
     parser.add_argument("--epochs",type=int,default=40)
@@ -2280,14 +2306,25 @@ def normal_main():
     dev_cache=json.loads((args.features/"development_features.json").read_text())
     if any(row.get("labels")!="normal_candidate_sets_v1" for row in (cache,dev_cache)):
         raise ValueError("extract a new normal feature cache that retains coarse normal label sets")
+    reference_config=json.loads((args.reference/"config.json").read_text())
+    reference_result=json.loads((args.reference/"result.json").read_text())
+    if (reference_config["version"]!="AJAE-cross-evidence"
+            or Path(reference_config["features"]).resolve()!=args.features.resolve()
+            or reference_config["training_points"]!=cache["count"]
+            or reference_config["development_points"]!=dev_cache["count"]
+            or not reference_result["complete"]):
+        raise ValueError("normal reference must use the same observed point population")
+    reference_nll=reference_result["selected"]["development"]["class_nll"]
     args.output.mkdir(parents=True,exist_ok=True)
-    config=dict(version=CROSS_VERSION,architecture="frozen_litept_cross_level_evidence",
-        score_version="joint_deep_support_cross_level_normal_nll",initial_sha256=WEIGHTS_SHA256,seed=206,
+    config=dict(version=CROSS_VERSION,architecture="frozen_litept_class_observation_evidence",
+        score_version="joint_class_conditioned_observation_nll",initial_sha256=WEIGHTS_SHA256,seed=206,
         features=str(args.features),training_points=cache["count"],development_points=dev_cache["count"],
-        epochs=args.epochs,batch_size=16384,learning_rate=.001,weight_decay=.0001,
+        epochs=args.epochs,batch_size=4096,learning_rate=.001,weight_decay=.0001,
         training="all cached trusted normal points with their allowed class sets; each point once per epoch",
         weighting="80% target / 20% source; within each domain inverse-square-root annotation-set frequency",
-        selection="mean class normal NLL, classes with >=128 points; odd 64-frame STU201 blocks plus missing-class source normal development",
+        selection="joint-posterior mean class recall first, true-class joint NLL second; classes >=128 points in odd STU201 blocks plus missing-class source normals",
+        normal_reference=str(args.reference),normal_reference_marginal_nll=reference_nll,
+        eligibility="improve fixed deep-only class recall and do not worsen reference class-average marginal NLL",
         calibration="even 64-frame STU201 blocks; original16 predicted class with optional continuous log-range; no actual-spacing conditioning",
         calibration_bandwidths=[0., .25, .5, 1.],
         candidates=[dict(modes=k,semantic_weight=w) for k in (1,4) for w in (0.,.1)],
@@ -2299,6 +2336,12 @@ def normal_main():
     chosen,counts=support_indices(cache,training=True,include_coarse=True)
     template=CrossEvidence()
     initialization=cross_initialize(template,cache,chosen)
+    prior_state=torch.load(args.reference/"frozen.pt",map_location="cpu",weights_only=False)["model"]
+    for key in ("feat_location","feat_scale","geo_location","geo_scale","linear","whitener",
+                "deep_centers","deep_whitener","deep_log_volume","deep_present"):
+        if not torch.equal(getattr(template,key),prior_state["scorer."+key]):
+            raise ValueError(f"normal reference uses different density coordinates: {key}")
+    del prior_state
     write_json(args.output/"initialization.json",dict(**initialization,sampling=counts))
     device=torch.device("cuda")
     data,dev=cross_cache(cache,device),cross_cache(dev_cache,device)
@@ -2349,13 +2392,14 @@ def normal_main():
                 for start in range(0,count,config["batch_size"]):
                     at=order[start:start+config["batch_size"]]
                     f,g=data["features"][at],data["conditions"][at]
-                    predicted=scorer.predict(f,semantics=True)
-                    nll=scorer.negative_log_likelihood(predicted,scorer.observations(f,g))/scorer.dimensions
+                    predicted=scorer.predict(f)
+                    logits=-(scorer.negative_log_likelihood(predicted,scorer.observations(f,g))
+                             +scorer.deep_class_energy(f))
                     # A coarse normal label asserts membership in its set, never
                     # an invented fine class or a simultaneous multi-class target.
-                    logits=predicted["logits"]
-                    ce=(torch.logsumexp(logits,-1)
-                        -torch.logsumexp(logits.masked_fill(~data["allowed"][at],-torch.inf),-1))
+                    supported=torch.logsumexp(logits.masked_fill(~data["allowed"][at],-torch.inf),-1)
+                    nll=-supported/scorer.dimensions
+                    ce=torch.logsumexp(logits,-1)-supported
                     loss=((nll+spec["semantic_weight"]*ce)*weights[at]).mean()
                     optimizer.zero_grad(set_to_none=True)
                     loss.backward()
@@ -2364,26 +2408,33 @@ def normal_main():
                     train_loss+=float(loss.detach())*len(at)
             measured=cross_development(scorer,dev,selected)
             row=dict(candidate=candidate,configuration=spec,epoch=epoch,training_loss=train_loss/count,
-                     development=measured,seconds=time.perf_counter()-epoch_start)
+                     development=measured,seconds=time.perf_counter()-epoch_start,
+                     normal_eligible=(measured["class_recall"]>measured["deep_class_recall"]
+                                      and measured["class_marginal_nll"]<=reference_nll))
             with (args.output/"training.jsonl").open("a") as handle:
                 handle.write(json.dumps(row)+"\n")
             print(f"normal candidate {candidate+1}/4 epoch {epoch}/{args.epochs}: "
-                  f"NLL={measured['class_nll']:.3f}, geometry MAE="
+                  f"class recall={measured['class_recall']:.4f}, NLL={measured['class_nll']:.3f}, geometry MAE="
                   f"{measured['log_range_mae']:.3f}/{measured['log_spacing_mae']:.3f}, "
                   f"{row['seconds']:.1f}s",flush=True)
-            if local_best is None or measured["class_nll"]<local_best["development"]["class_nll"]-.01:
+            quality=(measured["class_recall"],-measured["class_nll"])
+            if local_best is None or quality>(local_best["development"]["class_recall"],
+                                              -local_best["development"]["class_nll"]):
                 local_best,stale=row,0
-                if best is None or measured["class_nll"]<best["development"]["class_nll"]:
-                    best=row
-                    atomic_save(args.output/"selected.pt",dict(scorer={k:v.cpu() for k,v in scorer.state_dict().items()},
-                                                              selection=best))
             else:
                 stale+=1
+            if row["normal_eligible"] and (best is None or quality>(best["development"]["class_recall"],
+                                                                  -best["development"]["class_nll"])):
+                best=row
+                atomic_save(args.output/"selected.pt",dict(scorer={k:v.cpu() for k,v in scorer.state_dict().items()},
+                                                          selection=best))
             if epoch>=10 and stale>=6:
                 break
         summaries.append(local_best)
         write_json(args.output/"development.json",dict(candidates=summaries,selected=best))
         del scorer,optimizer
+    if best is None:
+        raise ValueError("no candidate improved normal class evidence while preserving normal marginal fit")
     saved=torch.load(args.output/"selected.pt",map_location="cpu",weights_only=False)
     spec=saved["selection"]["configuration"]
     scorer=CrossEvidence(modes=spec["modes"]).to(device)

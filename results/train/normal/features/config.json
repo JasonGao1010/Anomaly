@@ -1,0 +1,8 @@
+{
+  "initial_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+  "trained_backbone_parameters": 0,
+  "labels": "normal_candidate_sets_v1",
+  "seed": 206,
+  "training_records": "c791dfbadf6935ebac676a8a6be9c710f86790f3ea1c5b0e7f4c8000ac7a0a18",
+  "development_records": "a03d1cc68de17adecc40f6a0aef06f8532ba2a9fe2fa27b8e7abee4c796580a3"
+}

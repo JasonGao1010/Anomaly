@@ -246,6 +246,8 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
+    if saved.get("version") == "AJAE-cross-evidence":
+        raise ValueError("class-independent evidence checkpoints require their recorded code revision (6ad0371)")
     from .model import NormalHypothesis, NORMAL_VERSION
     from .normal import FeatureSupport, CrossEvidence, ScoreCalibration, SUPPORT_VERSION, CROSS_VERSION
     if saved.get("version") in (SUPPORT_VERSION, CROSS_VERSION):
