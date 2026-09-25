@@ -263,3 +263,115 @@ def test_observation_diagnostics_matches_independent_student_mixture_quantiles()
     for key, value in semantic.items():
         if key not in ("query_count", "appearance_mode_mass", "appearance_mode_entropy_sum"):
             assert np.all(np.asarray(value) == 0), key
+
+
+def test_feature_support_matches_independent_conditional_gaussian_mixture():
+    from scipy.special import logsumexp
+    from scipy.stats import multivariate_normal
+    from src.normal import FeatureSupport
+
+    rng = np.random.default_rng(206)
+    scorer = FeatureSupport(features=3, classes=3, modes=3)
+    features = rng.normal(size=(7, 3)).astype(np.float32)
+    conditions = np.column_stack((np.linspace(1., 4., 7), rng.normal(size=7))).astype(np.float32)
+    location = np.array([.3, -.4, .7, -.8])
+    scale = np.array([1.2, .7, 1.6, .4])
+    coefficients = rng.normal(scale=.2, size=(3, 3, 4))
+    log_variance_coefficients = np.array([[.45, -.35, .3], [0., 0., 0.], [-.4, .55, -.2]])
+    centers = rng.normal(scale=.5, size=(3, 3, 4))
+    scorer.location.copy_(torch.from_numpy(location))
+    scorer.scale.copy_(torch.from_numpy(scale))
+    scorer.range_location.fill_(2.1)
+    scorer.range_scale.fill_(.8)
+    scorer.coefficients.copy_(torch.from_numpy(coefficients))
+    scorer.log_variance_coefficients.copy_(torch.from_numpy(log_variance_coefficients))
+    scorer.centers.copy_(torch.from_numpy(centers))
+    expected = np.full((len(features), 3), np.inf)
+    values = (np.column_stack((features, conditions[:, 1])).astype(np.float64) - location) / scale
+    distance = (conditions[:, 0].astype(np.float64) - 2.1) / .8
+    basis = np.column_stack((np.ones(len(features)), distance, distance ** 2))
+    for category, weights in ((0, [.2, .8, 0.]), (2, [.15, .35, .5])):
+        # Off-diagonal covariance detects a transposed precision factor.
+        factor = np.tril(rng.normal(scale=.3, size=(4, 4)))
+        np.fill_diagonal(factor, [.7, 1.1, 1.4, .9])
+        covariance = factor @ factor.T
+        precision = np.linalg.solve(factor, np.eye(4)).T
+        log_weights = np.full(3, -np.inf)
+        active = np.asarray(weights) > 0
+        log_weights[active] = np.log(np.asarray(weights)[active])
+        scorer.present[category] = True
+        scorer.precision_cholesky[category].copy_(torch.from_numpy(precision))
+        scorer.log_volume[category] = np.log(np.diag(factor)).sum()
+        scorer.log_weights[category].copy_(torch.from_numpy(log_weights))
+        for row in range(len(features)):
+            means = basis[row] @ coefficients[category] + centers[category]
+            log_variance = 4 * np.tanh(basis[row] @ log_variance_coefficients[category] / 4)
+            # SciPy includes the changing covariance volume as well as residual scaling.
+            conditional_covariance = np.exp(log_variance) * covariance
+            components = [multivariate_normal.logpdf(values[row], mean=mean, cov=conditional_covariance)
+                          for mean in means]
+            expected[row, category] = -logsumexp(log_weights + components)
+    actual = scorer.class_energy(torch.from_numpy(features), torch.from_numpy(conditions))
+    assert torch.isinf(actual[:, 1]).all()
+    np.testing.assert_allclose(actual.numpy()[:, [0, 2]], expected[:, [0, 2]], rtol=3e-6, atol=3e-6)
+    np.testing.assert_allclose(scorer(torch.from_numpy(features), torch.from_numpy(conditions)).numpy(),
+                               expected.min(1), rtol=3e-6, atol=3e-6)
+
+
+def test_feature_support_rejects_unfitted_mismatched_and_nonfinite_inputs():
+    from src.normal import FeatureSupport
+
+    scorer = FeatureSupport(features=3, classes=2, modes=1)
+    features, conditions = torch.zeros(2, 3), torch.zeros(2, 2)
+    with pytest.raises(ValueError, match="not been fitted"):
+        scorer(features, conditions)
+    scorer.present[0] = True
+    scorer.log_weights[0, 0] = 0
+    for wrong_features, wrong_conditions in ((torch.zeros(2, 4), conditions),
+                                               (features, torch.zeros(3, 2)),
+                                               (features, torch.zeros(2, 3))):
+        with pytest.raises(ValueError, match="same points"):
+            scorer(wrong_features, wrong_conditions)
+    conditions[0, 1] = torch.nan
+    with pytest.raises(ValueError, match="nonfinite"):
+        scorer(features, conditions)
+
+
+def test_feature_support_can_distinguish_joint_values_at_identical_class_confidence():
+    from src.normal import FeatureSupport
+
+    scorer = FeatureSupport(features=3, classes=2, modes=1)
+    scorer.present[0] = True
+    scorer.log_weights[0, 0] = 0
+    features = torch.tensor([[0., 0., 0.], [3., 0., 0.], [0., 0., 0.]])
+    conditions = torch.tensor([[2., 0.], [2., 0.], [2., 2.]])
+    logits = torch.full((3, 16), -5.)
+    logits[:, 3] = 5.
+    confidence = logits.softmax(-1).amax(-1)
+    assert torch.equal(confidence, confidence[0].expand_as(confidence))
+    assert confidence[0] > .999
+    # This arithmetic fixture verifies score dependence, not anomaly performance.
+    scores = scorer(features, conditions)
+    torch.testing.assert_close(scores[1:] - scores[0], torch.tensor([4.5, 2.]))
+
+
+def test_support_conditions_preserves_raw_query_identity_and_repeated_indices():
+    from src.normal import support_conditions
+
+    xyz = np.array([[1 + i * .3, (i % 3) * .4, (i % 2) * .2] for i in range(13)], np.float32)
+    xyzi = np.column_stack((xyz, np.arange(len(xyz), dtype=np.float32)))
+    distances = np.linalg.norm(xyz.astype(np.float64), axis=1)
+    pairwise = np.linalg.norm(xyz.astype(np.float64)[:, None] - xyz.astype(np.float64)[None], axis=-1)
+    eighth_neighbor = np.sort(pairwise, axis=1)[:, 8]
+    expected = np.column_stack((np.log(distances), np.log(eighth_neighbor))).astype(np.float32)
+    actual = support_conditions(xyzi)
+    np.testing.assert_allclose(actual, expected, rtol=1e-7, atol=1e-7)
+    indices = np.array([9, 2, 9, 0, 11])
+    # Neighbors come from the complete raw scan, even for fewer than nine queries.
+    np.testing.assert_array_equal(support_conditions(xyzi, indices), actual[indices])
+    order = np.random.default_rng(43).permutation(len(xyzi))
+    np.testing.assert_array_equal(support_conditions(xyzi[order], np.argsort(order)[indices]), actual[indices])
+    coincident = support_conditions(np.repeat(xyzi[:1], 9, axis=0))
+    np.testing.assert_allclose(coincident[:, 1], np.float32(np.log(.001)), rtol=0, atol=0)
+    with pytest.raises(ValueError, match="nine finite"):
+        support_conditions(xyzi[:8])

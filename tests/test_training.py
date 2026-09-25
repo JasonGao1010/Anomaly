@@ -199,7 +199,7 @@ def test_evaluation_record_preserves_official_population_and_ignored_returns(tmp
                   targets=torch.tensor([1, 1, 1, 1, 1, 0, 0, -1, -1]),
                   prediction=torch.tensor([2., 1., 3., 1., 4., .5, 1.5, 100., -100.]))
     monkeypatch.setattr(evaluation, "PreparedScans", lambda manifest, **kwargs: [sample])
-    manifest = dict(kind="val", sha256="fixture", records=[dict(eligible=True, normal=2, anomaly=5, points=9)])
+    manifest = dict(kind="val", sha256="fixture", records=[dict(eligible=True, normal=2, anomaly=5, points=9, slots=19)])
     expected = evaluation.evaluate(Score(), manifest, torch.device("cpu"), 0)
     actual = evaluation.evaluate(Score(), manifest, torch.device("cpu"), 0, tmp_path / "val1.npy", record_points=True)
     assert actual["metrics"] == expected["metrics"]
@@ -208,6 +208,44 @@ def test_evaluation_record_preserves_official_population_and_ignored_returns(tmp
     identities = np.load(tmp_path / "val_points.npy")
     np.testing.assert_array_equal(identities["slot"], sample["slots"].numpy())
     np.testing.assert_array_equal(identities["target"], sample["targets"].numpy())
+    independent = evaluation.recompute_metrics(tmp_path / "val1.npy", manifest)
+    for name, value in expected["metrics"].items():
+        assert independent["independent_metrics"][name] == pytest.approx(value, abs=1e-12, rel=0)
+    assert independent["points"] == 7 and independent["normal_points"] == 2
+    changed = np.load(tmp_path / "val1.npy", mmap_mode="r+")
+    changed[0] += 1
+    changed.flush()
+    with pytest.raises(ValueError, match="original-point scores"):
+        evaluation.recompute_metrics(tmp_path / "val1.npy", manifest)
+
+
+def test_independent_score_ranks_match_official_ties_and_roc_vertex_removal():
+    from src.evaluate import rank_metrics
+    from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
+    cases = [
+        (np.array([1., 1., 0., -1.], np.float32), np.array([1., 1., 0.], np.float32)),
+        # Every intermediate mixed-class ROC vertex is collinear; simply using
+        # the first raw threshold above 95% would report a different FPR95.
+        (np.arange(100, dtype=np.float32), np.arange(100, dtype=np.float32)),
+        # Exactly 19/20 recall must be passed, not accepted.
+        (np.array([3., 1.], np.float32), np.r_[np.arange(22., 3., -1), 2.].astype(np.float32)),
+        (np.array([2., 2.], np.float32), np.array([2., 2.], np.float32)),
+    ]
+    rng = np.random.default_rng(873)
+    for size in (20, 100, 1000):
+        for _ in range(12):
+            cases.append((rng.integers(-size, size, size=size).astype(np.float32),
+                          rng.integers(-size, size, size=size // 2).astype(np.float32)))
+    for normal, anomaly in cases:
+        official = PointOODMetricsCalculator()
+        official.all_scores = [np.r_[normal, anomaly]]
+        official.all_labels = [np.r_[np.zeros(len(normal), np.int8), np.ones(len(anomaly), np.int8)]]
+        expected = official.compute_metrics()
+        measured = rank_metrics(normal.copy(), anomaly)
+        for name, value in expected.items():
+            assert measured[name] == pytest.approx(value, abs=1e-12, rel=0), (name, normal, anomaly)
+    assert rank_metrics(*[scores.copy() for scores in cases[1]])["FPR95"] == 100.
+    assert rank_metrics(*[scores.copy() for scores in cases[2]])["FPR95"] == 50.
 
 
 def test_local_observation_preserves_rng_buffers_modes_and_next_training_update():

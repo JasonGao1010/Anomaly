@@ -38,8 +38,8 @@ def mlp(inputs, hidden, outputs):
                          nn.GELU(), nn.Linear(hidden, outputs))
 
 
-def voxelize(xyzi):
-    """All-return means on an origin-anchored grid; preserve every point identity."""
+def voxelize(xyzi, *, official=False):
+    """Preserve every point identity while constructing the selected voxel input."""
     xyzi = np.asarray(xyzi)
     if xyzi.dtype != np.float32 or xyzi.ndim != 2 or xyzi.shape[1] != 4:
         raise ValueError("input must be float32[N,4]")
@@ -56,11 +56,22 @@ def voxelize(xyzi):
     inverse = np.empty(len(grid), dtype=np.int64)
     inverse[order] = np.cumsum(starts) - 1
     mean = (np.add.reduceat(xyzi[order].astype(np.float64), pointer[:-1], axis=0)
-            / counts[:, None]).astype(np.float32)
-    # A multiple of 16 preserves the sensor-origin grid at all four pooling steps.
-    shift = (unique.min(axis=0) // 16) * 16
+            / counts[:, None])
+    if official:
+        # Deterministic single-view representatives, not the official multi-view inference.
+        groups = inverse[order]
+        distance = np.square(xyzi[order, :3].astype(np.float64) - mean[groups, :3]).sum(1)
+        nearest = np.minimum.reduceat(distance, pointer[:-1])
+        candidates = np.where(distance == nearest[groups], order, len(xyzi))
+        representatives = np.minimum.reduceat(candidates, pointer[:-1])
+        voxel_xyzi = xyzi[representatives]
+        shift = unique.min(axis=0)
+    else:
+        voxel_xyzi = mean.astype(np.float32)
+        # A multiple of 16 preserves the sensor-origin grid at all four pooling steps.
+        shift = (unique.min(axis=0) // 16) * 16
     return dict(xyzi=torch.from_numpy(xyzi), grid=torch.from_numpy(unique - shift),
-                voxel_xyzi=torch.from_numpy(mean), inverse=torch.from_numpy(inverse),
+                voxel_xyzi=torch.from_numpy(voxel_xyzi), inverse=torch.from_numpy(inverse),
                 order=torch.from_numpy(order), pointer=torch.from_numpy(pointer),
                 offset=torch.from_numpy(((xyzi[:, :3].astype(np.float64)
                                           - (grid + .5) * GRID_SIZE) / GRID_SIZE).astype(np.float32)))
@@ -90,8 +101,8 @@ def relation_neighbors(xyz, neighbors=8):
     return torch.from_numpy(result)
 
 
-def prepare_scan(sample, *, relations=False):
-    result = voxelize(sample["xyzi"])
+def prepare_scan(sample, *, relations=False, official=False):
+    result = voxelize(sample["xyzi"], official=official)
     if relations:
         result["neighbors"] = relation_neighbors(result["voxel_xyzi"][:, :3].numpy())
     for name in ("targets", "slots"):
@@ -104,6 +115,69 @@ def to_device(sample, device):
     return {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor)
             else to_device(v, device) if isinstance(v, dict) else v
             for k, v in sample.items()}
+
+
+class FrozenPerception(nn.Module):
+    """Fixed official nuScenes semantics and point-aligned multilevel features."""
+
+    def __init__(self, pretrained="assets/nuscenes.pth"):
+        super().__init__()
+        self.backbone = LitePT(shuffle_orders=False, fp32_attention=True)
+        self.seg_head = nn.Linear(72, 16)
+        if file_sha256(pretrained) != WEIGHTS_SHA256:
+            raise ValueError("checkpoint differs from the pinned official nuScenes LitePT-S weights")
+        saved = torch.load(pretrained, map_location="cpu", weights_only=False, mmap=True)["state_dict"]
+        self.load_state_dict({key.removeprefix("module."): value for key, value in saved.items()}, strict=True)
+        self.requires_grad_(False)
+        self.eval()
+
+    def train(self, mode=True):
+        # Freezing weights also requires fixed normalization statistics and stochastic layers.
+        return super().train(False)
+
+    @torch.no_grad()
+    def encode(self, sample, indices=None):
+        inverse = sample["inverse"]
+        if indices is not None:
+            if not isinstance(indices, torch.Tensor) or indices.ndim != 1 or indices.dtype != torch.long:
+                raise ValueError("point indices must be a one-dimensional int64 tensor")
+            inverse = inverse[indices]
+        with torch.autocast(sample["voxel_xyzi"].device.type, enabled=False):
+            xyzi = sample["voxel_xyzi"].float()
+            point = Point(coord=xyzi[:, :3], feat=xyzi, grid_coord=sample["grid"],
+                          grid_size=GRID_SIZE,
+                          offset=torch.tensor([len(xyzi)], device=xyzi.device))
+            point.sparsify()
+            point = self.backbone.embedding(point)
+            ancestry = inverse
+            features = []
+            for level, encoder in enumerate(self.backbone.enc):
+                point = encoder(point)
+                if level:
+                    ancestry = point.pooling_inverse[ancestry]
+                if level in (0, 2):
+                    # Gather before unpooling replaces the parent Point's feature field.
+                    features.append(point.feat[ancestry].float())
+            point = self.backbone.dec(point)
+            features.append(point.feat[inverse].float())
+            return dict(features=torch.cat(features, dim=-1),
+                        logits=self.seg_head(point.feat.float())[inverse].float())
+
+
+class FrozenSupport(nn.Module):
+    """Learn normal support without changing the official 16-class perception model."""
+
+    def __init__(self, scorer=None, pretrained="assets/nuscenes.pth"):
+        super().__init__()
+        from .normal import FeatureSupport
+        self.mode = "frozen_support"
+        self.perception = FrozenPerception(pretrained)
+        self.scorer = FeatureSupport() if scorer is None else scorer
+
+    def forward(self, sample):
+        with torch.autocast(sample["voxel_xyzi"].device.type, enabled=False):
+            encoded = self.perception.encode(sample)
+            return self.scorer(encoded["features"], sample["conditions"].float())
 
 
 class Interaction(nn.Module):

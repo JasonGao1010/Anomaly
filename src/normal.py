@@ -1,4 +1,4 @@
-"""Target-blind Gaussian return fields and analytic conditional ray observations."""
+"""Normal observation models and distributions of frozen point features."""
 
 import math
 
@@ -8,6 +8,83 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 from torch_scatter import segment_csr
+
+
+SUPPORT_VERSION = "AJAE-frozen-support"
+
+
+def support_conditions(xyzi, indices=None):
+    """Measured range and eighth-neighbor spacing, using actual returns only."""
+    from scipy.spatial import cKDTree
+    xyz = np.asarray(xyzi[:, :3], dtype=np.float64)
+    selected = xyz if indices is None else xyz[np.asarray(indices)]
+    if len(xyz) < 9 or not np.isfinite(xyz).all():
+        raise ValueError("normal support requires at least nine finite returns")
+    distance = np.linalg.norm(selected, axis=1)
+    if np.any(distance <= 0):
+        raise ValueError("range must be positive at actual returns")
+    spacing = cKDTree(xyz).query(selected, k=[9], workers=1)[0][:, 0]
+    # A millimetre floor handles coincident returns without an infinite logarithm.
+    return np.column_stack((np.log(distance), np.log(np.maximum(spacing, .001)))).astype(np.float32)
+
+
+class FeatureSupport(nn.Module):
+    """Normal class mixtures of joint multilevel features and observed spacing.
+
+    Range can condition the mean and covariance scale. Spacing is scored, so unusual
+    sparsity is not silently removed as a nuisance. All targets are frozen.
+    """
+
+    def __init__(self, modes=4, features=252, classes=19):
+        super().__init__()
+        self.modes, self.features, self.classes = modes, features, classes
+        dimensions = features + 1
+        self.register_buffer("location", torch.zeros(dimensions))
+        self.register_buffer("scale", torch.ones(dimensions))
+        self.register_buffer("range_location", torch.tensor(0.))
+        self.register_buffer("range_scale", torch.tensor(1.))
+        self.register_buffer("coefficients", torch.zeros(classes, 3, dimensions))
+        self.register_buffer("log_variance_coefficients", torch.zeros(classes, 3))
+        self.register_buffer("centers", torch.zeros(classes, modes, dimensions))
+        self.register_buffer("precision_cholesky", torch.eye(dimensions).repeat(classes, 1, 1))
+        self.register_buffer("log_volume", torch.zeros(classes))
+        self.register_buffer("log_weights", torch.full((classes, modes), -torch.inf))
+        self.register_buffer("present", torch.zeros(classes, dtype=torch.bool))
+
+    def class_energy(self, features, conditions):
+        if features.ndim != 2 or features.shape[1] != self.features or conditions.shape != (len(features), 2):
+            raise ValueError("support features and measured conditions must identify the same points")
+        if not bool(self.present.any()):
+            raise ValueError("normal support has not been fitted")
+        if not torch.isfinite(features).all() or not torch.isfinite(conditions).all():
+            raise ValueError("nonfinite normal support input")
+        with torch.autocast(features.device.type, enabled=False):
+            values = torch.cat((features.float(), conditions[:, 1:2].float()), -1)
+            values = (values - self.location) / self.scale
+            distance = (conditions[:, 0].float() - self.range_location) / self.range_scale
+            basis = torch.stack((torch.ones_like(distance), distance, distance.square()), -1)
+            result = values.new_full((len(values), self.classes), torch.inf)
+            for category in self.present.nonzero().flatten().tolist():
+                precision = self.precision_cholesky[category]
+                centers = self.centers[category] @ precision
+                norm = centers.square().sum(-1)[None]
+                for start in range(0, len(values), 16384):
+                    stop = min(start + 16384, len(values))
+                    residual = values[start:stop] - basis[start:stop] @ self.coefficients[category]
+                    white = residual @ precision
+                    square = (white.square().sum(-1, keepdim=True) + norm - 2 * white @ centers.T).clamp_min(0)
+                    log_variance = 4 * torch.tanh((basis[start:stop] @ self.log_variance_coefficients[category]) / 4)
+                    component = self.log_weights[category] - .5 * square * torch.exp(-log_variance[:, None])
+                    # The feature standardization Jacobian is common to all classes
+                    # and points; omitting that constant cannot alter score ranking.
+                    result[start:stop, category] = (self.log_volume[category]
+                        + .5 * values.shape[1] * (math.log(2 * math.pi) + log_variance)
+                        - torch.logsumexp(component, -1))
+            return result
+
+    def forward(self, features, conditions):
+        # Equal class priors avoid penalizing a valid but uncommon normal class.
+        return self.class_energy(features, conditions).amin(-1)
 
 
 NORMAL_MODES = ("field",)

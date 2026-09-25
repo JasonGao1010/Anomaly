@@ -27,18 +27,23 @@ def normal_record(record):
 
 
 class PreparedScans(Scans):
-    def __init__(self, manifest, *, relations=False, normal=False, voxel=True, normal_reference=True, hypotheses=False):
+    def __init__(self, manifest, *, relations=False, normal=False, voxel=True, normal_reference=True, hypotheses=False,
+                 frozen=False):
         super().__init__(manifest)
         self.relations = relations
         self.normal, self.voxel = normal, voxel
         self.normal_reference = normal_reference
         self.hypotheses = hypotheses
+        self.frozen = frozen
 
     def __getitem__(self, index):
         sample = super().__getitem__(index)
-        result = (prepare_scan(sample, relations=self.relations) if self.voxel else
+        result = (prepare_scan(sample, relations=self.relations, official=self.frozen) if self.voxel else
                   {key: torch.from_numpy(value) if isinstance(value, np.ndarray) else value
                    for key, value in sample.items()})
+        if self.frozen:
+            from .normal import support_conditions
+            result["conditions"] = torch.from_numpy(support_conditions(sample["xyzi"]))
         if self.hypotheses:
             from .normal import hypothesis_observation
             result["observation"] = hypothesis_observation(sample["xyzi"])
@@ -152,7 +157,8 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
         raise RuntimeError(f"official metrics require about {required / 1e9:.1f} GB free RAM")
     dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
                             normal=getattr(model, "normal", None) is not None, normal_reference=False,
-                            hypotheses=getattr(model, "mode", None) == "normal_hypothesis")
+                            hypotheses=getattr(model, "mode", None) == "normal_hypothesis",
+                            frozen=getattr(model, "mode", None) == "frozen_support")
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),
@@ -206,8 +212,13 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
                                metric_start=cursor, metric_stop=stop))
             raw_cursor = raw_stop
         cursor = stop
-        if number % 100 == 0 or number == len(indices):
-            print(f"validation {number}/{len(indices)} scans, {cursor}/{count} points", flush=True)
+        if number % 50 == 0 or number == len(indices):
+            elapsed = time.perf_counter() - start
+            print(f"validation {number}/{len(indices)} scans, {cursor}/{count} points, "
+                  f"{elapsed/60:.1f} min, remaining {(len(indices)-number)*elapsed/number/60:.1f} min", flush=True)
+        if number % 250 == 0 and score_path is not None:
+            from .train import disk_check
+            disk_check()
     if cursor != count:
         raise ValueError("official evaluation count differs from the fixed manifest")
     if score_path is not None:
@@ -236,6 +247,15 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
     from .model import NormalHypothesis, NORMAL_VERSION
+    from .normal import FeatureSupport, SUPPORT_VERSION
+    if saved.get("version") == SUPPORT_VERSION:
+        from .model import FrozenSupport
+        if (not saved.get("frozen") or not saved.get("complete") or not saved.get("selected")
+                or saved["config"]["initial_sha256"] != "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"):
+            raise ValueError("frozen support requires completed normal-only model selection")
+        model = FrozenSupport(scorer=FeatureSupport(modes=saved["config"]["modes"]))
+        model.load_state_dict(saved["model"], strict=True)
+        return model.to(device).eval(), saved
     if saved.get("version") in (NORMAL_VERSION, "AJAE-normal-hypothesis"):
         # Shape-compatible historical weights still represent a different model.
         NormalHypothesis.validate_checkpoint(saved, require_calibrated=True)
@@ -249,6 +269,102 @@ def load_model(path, device):
     model = Segmentor(saved["mode"])
     model.load_state_dict(saved["model"], strict=True)
     return model.to(device).eval(), saved
+
+
+def rank_metrics(normal_scores, anomaly_scores):
+    """Independently recompute exact pooled metrics; sort normal scores in place."""
+    normal_scores, anomaly_scores = np.asarray(normal_scores), np.asarray(anomaly_scores)
+    if (normal_scores.ndim != 1 or anomaly_scores.ndim != 1
+            or not len(normal_scores) or not len(anomaly_scores)
+            or not np.isfinite(normal_scores).all() or not np.isfinite(anomaly_scores).all()):
+        raise ValueError("rank verification requires finite scores from both classes")
+    normal_scores.sort(kind="quicksort")
+    thresholds, positives = np.unique(anomaly_scores, return_counts=True)
+    thresholds, positives = thresholds[::-1], positives[::-1]
+    less = np.searchsorted(normal_scores, thresholds, side="left")
+    right = np.searchsorted(normal_scores, thresholds, side="right")
+    tied = right - less
+    false_positives = len(normal_scores) - less
+    true_positives = positives.cumsum(dtype=np.int64)
+    recall = true_positives.astype(np.float64) / len(anomaly_scores)
+    precision = true_positives / (true_positives + false_positives)
+    ap = np.sum(positives.astype(np.float64) / len(anomaly_scores) * precision)
+    # AUROC is the fraction of positive/negative pairs ordered correctly, with
+    # half credit for a tie; no float32 accumulation over millions of points.
+    auroc = np.dot(positives.astype(np.float64), less.astype(np.float64) + .5 * tied)
+    auroc /= len(anomaly_scores) * len(normal_scores)
+    # sklearn removes a ROC vertex only when adjacent positive AND negative
+    # increments agree. A negative-only threshold between positive groups keeps
+    # the preceding positive vertex. Pure negative vertices cannot first cross 95%.
+    keep = np.ones(len(thresholds), dtype=bool)
+    keep[:-1] = ((less[:-1] > right[1:]) | (positives[:-1] != positives[1:])
+                | (tied[:-1] != tied[1:]))
+    if thresholds[0] >= normal_scores[-1]:
+        keep[0] = True  # The first vertex is retained even on a straight ROC segment.
+    crossing = np.flatnonzero(keep & (recall > .95))[0]
+    return dict(AP=float(100 * ap), AUROC=float(100 * auroc),
+                FPR95=float(100 * (false_positives[crossing] / len(normal_scores))),
+                threshold=float(thresholds[crossing]))
+
+
+def recompute_metrics(score_path, manifest):
+    """Verify saved identities and scores, then independently check official metrics.
+
+    This is a post-evaluation arithmetic check, never a score-selection procedure.
+    Memory is bounded by one float32 copy of the metric population plus scan slices.
+    """
+    score_path = Path(score_path)
+    records = json.loads((score_path.parent / "val.json").read_text())
+    scores = np.load(score_path, mmap_mode="r", allow_pickle=False)
+    raw = np.load(score_path.with_stem(score_path.stem + "_all"), mmap_mode="r", allow_pickle=False)
+    identities = np.load(score_path.parent / "val_points.npy", mmap_mode="r", allow_pickle=False)
+    indices = evaluation_indices(manifest)
+    counts = {key: sum(manifest["records"][i][key] for i in indices)
+              for key in ("normal", "anomaly", "points")}
+    metric_count = counts["normal"] + counts["anomaly"]
+    if (not counts["normal"] or not counts["anomaly"]
+            or records["manifest_sha256"] != manifest["sha256"]
+            or records["metric_points"] != metric_count or records["points"] != counts["points"]
+            or [row["index"] for row in records["frames"]] != indices
+            or scores.shape != (metric_count,) or raw.shape != (counts["points"],)
+            or scores.dtype != np.dtype("float32") or raw.dtype != np.dtype("float32")
+            or identities.shape != raw.shape
+            or identities.dtype != np.dtype([("slot", "<u4"), ("target", "i1")])):
+        raise ValueError("saved metric population does not match the official manifest")
+    normal = np.empty(counts["normal"], np.float32)
+    anomaly = np.empty(counts["anomaly"], np.float32)
+    cursor = raw_cursor = normal_cursor = anomaly_cursor = 0
+    started = time.perf_counter()
+    for row in records["frames"]:
+        expected = manifest["records"][row["index"]]
+        raw_stop, stop = raw_cursor + expected["points"], cursor + expected["normal"] + expected["anomaly"]
+        if (row["start"], row["stop"], row["metric_start"], row["metric_stop"]) != (raw_cursor, raw_stop, cursor, stop):
+            raise ValueError("saved frame offsets do not preserve official point order")
+        points = identities[raw_cursor:raw_stop]
+        targets, slots = points["target"], points["slot"]
+        if (np.any((targets < -1) | (targets > 1)) or np.any(slots[1:] <= slots[:-1])
+                or (len(slots) and slots[-1] >= expected["slots"])
+                or np.count_nonzero(targets == 0) != expected["normal"]
+                or np.count_nonzero(targets == 1) != expected["anomaly"]):
+            raise ValueError("saved point identities or labels differ from the official population")
+        chosen = targets >= 0
+        values = scores[cursor:stop]
+        if (not np.isfinite(raw[raw_cursor:raw_stop]).all()
+                or not np.array_equal(values, raw[raw_cursor:raw_stop][chosen])):
+            raise ValueError("metric scores differ from recorded original-point scores")
+        selected_targets = targets[chosen]
+        normal[normal_cursor:normal_cursor + expected["normal"]] = values[selected_targets == 0]
+        anomaly[anomaly_cursor:anomaly_cursor + expected["anomaly"]] = values[selected_targets == 1]
+        normal_cursor += expected["normal"]
+        anomaly_cursor += expected["anomaly"]
+        cursor, raw_cursor = stop, raw_stop
+    # Close mappings before sorting; only the bounded float32 class arrays remain.
+    del scores, raw, identities, points, targets, slots, values
+    measured = rank_metrics(normal, anomaly)
+    return dict(independent_metrics=measured, points=metric_count, normal_points=normal_cursor,
+                anomaly_points=anomaly_cursor, scans=len(indices), manifest_sha256=manifest["sha256"],
+                seconds=time.perf_counter() - started,
+                method="exact score ranks with whole ties and the official ROC vertex-removal rule")
 
 
 def comparison_conditions(checkpoints, *, exploratory=False):
@@ -511,8 +627,8 @@ def compare(checkpoints, manifest, output, device, *, workers=4, fprs=(.01, .05)
 
 @torch.no_grad()
 def infer(model, scan, device, *, return_semantics=False):
-    if return_semantics and model.mode != "normal_hypothesis":
-        raise ValueError("semantic export requires the joint normal-evidence model")
+    if return_semantics and model.mode not in ("normal_hypothesis", "frozen_support"):
+        raise ValueError("semantic export requires a normal perception model")
     if device.type == "cuda":
         torch.cuda.synchronize(device)
         torch.cuda.reset_peak_memory_stats(device)
@@ -526,19 +642,28 @@ def infer(model, scan, device, *, return_semantics=False):
         sample = prepare_scan(dict(xyzi=xyzi, slots=frame.return_slots,
                                    targets=np.full(int(frame.actual.sum()), -1, np.int8),
                                    slot_count=len(frame.xyzi), index=frame.frame_id),
-                              relations=getattr(model, "relation", None) is not None)
+                              relations=getattr(model, "relation", None) is not None,
+                              official=model.mode == "frozen_support")
         if getattr(model, "normal", None) is not None:
             sample["observation"] = angular_observation(xyzi)
         elif model.mode == "normal_hypothesis":
             from .normal import hypothesis_observation
             sample["observation"] = hypothesis_observation(xyzi)
+        elif model.mode == "frozen_support":
+            from .normal import support_conditions
+            sample["conditions"] = torch.from_numpy(support_conditions(xyzi))
         sample = to_device(sample, device)
         with autocast(device):
             if return_semantics:
-                outputs = model.predict(sample)
-                prediction, classes = outputs["score"], outputs["semantic"]
-                if classes.shape != prediction.shape or classes.is_floating_point() or bool(((classes < 0) | (classes >= 19)).any()):
-                    raise ValueError("semantic outputs must be integer normal classes 0–18 in original return order")
+                if model.mode == "frozen_support":
+                    encoded = model.perception.encode(sample)
+                    prediction = model.scorer(encoded["features"], sample["conditions"])
+                    classes, count = encoded["logits"].argmax(-1), 16
+                else:
+                    outputs = model.predict(sample)
+                    prediction, classes, count = outputs["score"], outputs["semantic"], 19
+                if classes.shape != prediction.shape or classes.is_floating_point() or bool(((classes < 0) | (classes >= count)).any()):
+                    raise ValueError("semantic outputs must follow the model's class vocabulary in original return order")
                 semantic[frame.return_slots] = classes.to(torch.int16).cpu().numpy()
             else:
                 prediction = model(sample)
@@ -707,7 +832,7 @@ def main():
             command.add_argument("--scans", type=Path, nargs="+", required=True)
             if name == "infer":
                 command.add_argument("--semantic-output", action="store_true",
-                    help="also save *.semantic.npy: int16 class IDs 0–18 in NORMAL_CLASSES order; empty slots are -1")
+                    help="also save *.semantic.npy: frozen support uses official nuScenes 16-class order; older normal models use STU19; empty slots are -1")
             if name == "benchmark":
                 command.add_argument("--warmup", type=int, default=5)
                 command.add_argument("--repeats", type=int, default=20)
@@ -741,7 +866,10 @@ def main():
         return
     model, saved = load_model(args.checkpoint, device)
     from .model import NORMAL_VERSION
-    normal_run = saved.get("version") == NORMAL_VERSION
+    from .normal import SUPPORT_VERSION
+    if saved.get("version") == SUPPORT_VERSION:
+        torch.backends.cuda.matmul.allow_tf32 = False
+    normal_run = saved.get("version") in (NORMAL_VERSION, SUPPORT_VERSION)
     if args.action == "infer" and args.semantic_output and not normal_run:
         parser.error("--semantic-output requires a joint normal-evidence checkpoint")
     if normal_run and args.action in ("normal", "mine"):
