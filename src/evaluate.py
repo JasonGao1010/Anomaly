@@ -27,17 +27,21 @@ def normal_record(record):
 
 
 class PreparedScans(Scans):
-    def __init__(self, manifest, *, relations=False, normal=False, voxel=True, normal_reference=True):
+    def __init__(self, manifest, *, relations=False, normal=False, voxel=True, normal_reference=True, hypotheses=False):
         super().__init__(manifest)
         self.relations = relations
         self.normal, self.voxel = normal, voxel
         self.normal_reference = normal_reference
+        self.hypotheses = hypotheses
 
     def __getitem__(self, index):
         sample = super().__getitem__(index)
         result = (prepare_scan(sample, relations=self.relations) if self.voxel else
                   {key: torch.from_numpy(value) if isinstance(value, np.ndarray) else value
                    for key, value in sample.items()})
+        if self.hypotheses:
+            from .normal import hypothesis_observation
+            result["observation"] = hypothesis_observation(sample["xyzi"])
         if self.manifest["version"] == SOURCE_VERSION and self.manifest["kind"] == "train":
             record = self.records[index]
             control = np.zeros(len(sample["targets"]), dtype=bool)
@@ -147,7 +151,8 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
     if memory_available() < required:
         raise RuntimeError(f"official metrics require about {required / 1e9:.1f} GB free RAM")
     dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
-                            normal=getattr(model, "normal", None) is not None, normal_reference=False)
+                            normal=getattr(model, "normal", None) is not None, normal_reference=False,
+                            hypotheses=model.mode == "normal_hypothesis")
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),
@@ -230,6 +235,13 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
+    if saved.get("version") == "AJAE-normal-hypothesis":
+        from .model import NormalHypothesis, SCORE_VERSION
+        if bool(saved["model"]["calibrated"]) and saved["config"].get("score_version") != SCORE_VERSION:
+            raise ValueError("normal references were fitted for another score; refit with --calibration-only")
+        model = NormalHypothesis()
+        model.load_state_dict(saved["model"], strict=True)
+        return model.to(device).eval(), saved
     if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION):
         raise ValueError("checkpoint does not belong to a supported V4 experiment")
     if saved["mode"] == "field" and "compatibility.tokens.0.weight" in saved["model"]:
@@ -256,6 +268,9 @@ def infer(model, scan, device):
                               relations=getattr(model, "relation", None) is not None)
         if getattr(model, "normal", None) is not None:
             sample["observation"] = angular_observation(xyzi)
+        elif model.mode == "normal_hypothesis":
+            from .normal import hypothesis_observation
+            sample["observation"] = hypothesis_observation(xyzi)
         sample = to_device(sample, device)
         with autocast(device):
             prediction = model(sample)
@@ -431,6 +446,9 @@ def main():
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
     model, saved = load_model(args.checkpoint, device)
+    normal_run = saved.get("version") == "AJAE-normal-hypothesis"
+    if normal_run and args.action in ("normal", "mine"):
+        parser.error("this action belongs to the earlier supervised field; normal-only development is recorded by src.train --normal")
     if args.action == "normal":
         result = evaluate_normal(model, load_manifest(args.manifest, "train"), device, args.workers)
         write_json(args.output, dict(checkpoint=str(args.checkpoint.resolve()), **result))
@@ -438,18 +456,20 @@ def main():
         mine(model, load_manifest(args.manifest, "train"), args.checkpoint, args.output, device, args.workers)
     elif args.action in ("validate", "test"):
         if args.action == "test":
-            if not saved.get("selected") or not saved.get("complete"):
+            if not (saved.get("frozen") if normal_run else saved.get("selected") and saved.get("complete")):
                 raise ValueError("test requires a selected checkpoint from a completed fixed budget")
             manifest = make_real_manifest(args.data, partition="test", workers=args.workers)
-            if manifest["directory"] == saved["config"]["val_directory"]:
+            if manifest["directory"] == saved["config"].get("val_directory"):
                 raise ValueError("the validation set cannot be presented as final test data")
         else:
             manifest = load_manifest(args.manifest, "val")
         result = evaluate(model, manifest, device, args.workers)
-        write_json(args.output, dict(version=VERSION, complete=saved["complete"],
-                                    checkpoint=str(args.checkpoint.resolve()), seed=saved["seed"],
-                                    mode=saved["mode"], method=saved["method"],
-                                    checkpoint_epoch=saved["epoch"], **result))
+        metadata = (dict(version=saved["version"], complete=saved.get("frozen", False),
+                         seed=saved["config"]["seed"], mode=saved["mode"], method=saved["mode"],
+                         checkpoint_update=saved.get("stages", {}).get("target", {}).get("selected_update"))
+                    if normal_run else dict(version=VERSION, complete=saved["complete"], seed=saved["seed"],
+                                            mode=saved["mode"], method=saved["method"], checkpoint_epoch=saved["epoch"]))
+        write_json(args.output, dict(**metadata, checkpoint=str(args.checkpoint.resolve()), **result))
     elif args.action == "infer":
         from .train import disk_check
         disk_check(sum(p.stat().st_size // 16 * 24 for p in args.scans))

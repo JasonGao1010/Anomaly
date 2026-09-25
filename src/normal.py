@@ -79,6 +79,147 @@ def network(inputs, hidden, outputs):
     return nn.Sequential(nn.Linear(inputs, hidden), nn.LayerNorm(hidden), nn.GELU(), nn.Linear(hidden, outputs))
 
 
+def hypothesis_observation(xyzi, cell_degrees=.5):
+    """Independent angular cells; withheld cell values never construct its state."""
+    xyz = np.asarray(xyzi[:, :3], dtype=np.float64)
+    distance = np.linalg.norm(xyz, axis=1)
+    if not len(xyz) or np.any(distance <= 0):
+        raise ValueError("normal hypotheses require actual returns")
+    rays = xyz / distance[:, None]
+    azimuth = (np.rad2deg(np.arctan2(rays[:, 1], rays[:, 0])) + 180) % 360
+    elevation = np.rad2deg(np.arcsin(np.clip(rays[:, 2], -1, 1))) + 90
+    width, height = round(360 / cell_degrees), round(180 / cell_degrees)
+    col = np.floor(azimuth / cell_degrees).astype(np.int64) % width
+    row = np.floor(elevation / cell_degrees).astype(np.int64).clip(0, height - 1)
+    cells, group, counts = np.unique(row * width + col, return_inverse=True, return_counts=True)
+    row, col = cells // width, cells % width
+    ca, ce = np.deg2rad((col + .5) * cell_degrees - 180), np.deg2rad((row + .5) * cell_degrees - 90)
+    table = np.full(width * height, len(cells), dtype=np.int64)
+    table[cells] = np.arange(len(cells))
+    neighbors = []
+    # Two radii expose local shape and its surroundings without another backbone.
+    for radius in (1, 3):
+        for dy, dx in ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)):
+            valid = (row + dy * radius >= 0) & (row + dy * radius < height)
+            ids = np.clip(row + dy * radius, 0, height - 1) * width + (col + dx * radius) % width
+            neighbors.append(np.where(valid, table[ids], len(cells)))
+    da = (np.deg2rad(azimuth - 180) - ca[group] + np.pi) % (2 * np.pi) - np.pi
+    de = np.deg2rad(elevation - 90) - ce[group]
+    da, de = da / np.deg2rad(cell_degrees / 2), de / np.deg2rad(cell_degrees / 2)
+    values = dict(features=np.column_stack((xyz / 50, xyzi[:, 3], rays)),
+                  log_distance=np.log(distance), group=group, order=np.argsort(group, kind="stable"),
+                  pointer=np.r_[0, np.cumsum(counts)], neighbors=np.stack(neighbors, 1),
+                  position=np.column_stack((np.cos(ca), np.sin(ca), ce / (np.pi / 2))),
+                  offset=np.column_stack((da, de, da * da, da * de, de * de)), cells=cells)
+    return {key: torch.from_numpy(value.astype(np.int64 if value.dtype.kind in "iu" else np.float32))
+            for key, value in values.items()}
+
+
+class SemanticHypotheses(nn.Module):
+    """Nineteen normal explanations, each predicting a held-out return surface."""
+
+    def __init__(self):
+        super().__init__()
+        self.encoder = network(7, 32, 32)
+        self.pool = nn.Linear(64, 48)
+        self.position = nn.Linear(3, 48)
+        self.queries = nn.Parameter(torch.randn(19, 48) * .1)
+        self.empty = nn.Parameter(torch.zeros(48))
+        self.layers = nn.ModuleList(nn.ModuleDict(dict(
+            attention=nn.MultiheadAttention(48, 3, batch_first=True),
+            norm=nn.LayerNorm(48), feedforward=network(48, 96, 48), final_norm=nn.LayerNorm(48),
+        )) for _ in range(2))
+        self.surface = nn.Linear(48, 3 * 8)
+        self.belief = nn.Linear(48, 1)
+        nn.init.normal_(self.surface.weight, std=.001)
+        nn.init.zeros_(self.surface.bias)
+        with torch.no_grad():
+            self.surface.bias.reshape(3, 8)[:, 6] = -2.
+
+    def encode(self, observation):
+        features = self.encoder(observation["features"])
+        ordered = features[observation["order"]]
+        pointer = observation["pointer"]
+        pooled = torch.cat((segment_csr(ordered, pointer, reduce="mean"),
+                            segment_csr(ordered, pointer, reduce="max")), -1)
+        tokens = self.pool(pooled) + self.position(observation["position"])
+        depth = segment_csr(observation["log_distance"][observation["order"]], pointer, reduce="mean")
+        return tokens, depth
+
+    def propose(self, observation, encoded, groups):
+        tokens, depth = encoded
+        neighbors = observation["neighbors"][groups]
+        present = neighbors < len(tokens)
+        context = torch.cat((tokens, self.empty[None]))[neighbors]
+        # An explicit empty token keeps completely isolated cells numerically valid.
+        context = torch.cat((context, self.empty.expand(len(groups), 1, -1)), 1)
+        mask = torch.cat((~present, present.any(1, keepdim=True)), 1)
+        # The very same prototypes classify observed points and generate normal geometry.
+        prototypes = F.normalize(self.queries, dim=-1) * math.sqrt(48)
+        state = prototypes[None] + self.position(observation["position"][groups])[:, None]
+        for layer in self.layers:
+            update = layer["attention"](state, context, context, key_padding_mask=mask, need_weights=False)[0]
+            state = layer["norm"](state + update)
+            state = layer["final_norm"](state + layer["feedforward"](state))
+        base = (F.pad(depth, (0, 1))[neighbors] * present).sum(1) / present.sum(1).clamp_min(1)
+        base = torch.where(present.any(1), base, torch.full_like(base, math.log(20)))
+        raw = self.surface(state).reshape(-1, 19, 3, 8)
+        # Unbounded, normalized quadratic coefficients can represent the steep
+        # angular range changes of distant ground without a hand-set slope limit.
+        return dict(mean=base[:, None, None] + raw[..., 0],
+                    slope=raw[..., 1:6], scale=.001 + F.softplus(raw[..., 6]),
+                    weight=raw[..., 7].log_softmax(-1), belief=self.belief(state).squeeze(-1),
+                    supported=present.any(1))
+
+    def forward(self, observation, indices):
+        encoded = self.encode(observation)
+        groups, inverse = observation["group"][indices].unique(sorted=True, return_inverse=True)
+        parts = [self.propose(observation, encoded, part) for part in groups.split(256)]
+        fields = {key: torch.cat([part[key] for part in parts]) for key in parts[0]}
+        selected = {key: value[inverse] for key, value in fields.items()}
+        mean = selected["mean"] + (selected["slope"] * observation["offset"][indices, None, None]).sum(-1)
+        standardized = (observation["log_distance"][indices, None, None] - mean) / selected["scale"]
+        # Student-t(df=3) is a return-depth density, not a first-return hazard model.
+        log_prob = (-math.log(math.pi * math.sqrt(3) / 2) - selected["scale"].log()
+                    - 2 * torch.log1p(standardized.square() / 3))
+        return dict(log_prob=log_prob, weight=selected["weight"], belief=selected["belief"],
+                    supported=selected["supported"], group=observation["group"][indices],
+                    scale=selected["scale"], mean=mean)
+
+
+def verify_hypotheses(prediction, normal_support):
+    """Other observed returns update each shared surface before scoring this point."""
+    _, group = prediction["group"].unique(sorted=True, return_inverse=True)
+    evidence = normal_support.detach()[..., None] * prediction["log_prob"]
+    total = evidence.new_zeros((int(group.max()) + 1, 19, 3)).index_add(0, group, evidence)
+    # Leave the scored return out of its own surface posterior. The same class must
+    # explain its local appearance and the jointly verified normal surface.
+    other = total[group] - evidence
+    posterior = (prediction["weight"] + other).log_softmax(-1)
+    return -torch.logsumexp(posterior + prediction["log_prob"], -1)
+
+
+def hypothesis_loss(prediction, allowed):
+    """A shared class/surface explains all equally labelled rays in one blind cell."""
+    valid = allowed.any(1)
+    allowed = allowed[valid]
+    bits = (allowed.long() * (2 ** torch.arange(19, device=allowed.device))).sum(1)
+    keys = torch.stack((prediction["group"][valid], bits), -1)
+    _, inverse = keys.unique(dim=0, return_inverse=True)
+    count = torch.bincount(inverse).float()
+    probability = prediction["log_prob"][valid]
+    total = probability.new_zeros((len(count), 19, 3)).index_add(0, inverse, probability)
+    # Prior and mode weights occur once per hypothesis, not once per target ray.
+    # This likelihood's prior remains target blind. The shared prototypes couple
+    # appearance and geometry without feeding the measured target into its prior.
+    prior = prediction["belief"][valid].log_softmax(-1)[..., None] + prediction["weight"][valid]
+    prior = prior.new_zeros(total.shape).index_add(0, inverse, prior) / count[:, None, None]
+    admitted = allowed.new_zeros((len(count), 19)).index_copy(0, inverse, allowed)
+    nll = -torch.logsumexp((total + prior).masked_fill(~admitted[..., None], -torch.inf).flatten(1), 1) / count
+    context_ce = -torch.logsumexp(prediction["belief"][valid].log_softmax(-1).masked_fill(~allowed, -torch.inf), -1)
+    return nll.mean(), context_ce.mean()
+
+
 class NormalField(nn.Module):
     """One four-hypothesis field per block, inferred exclusively from 24 neighbors."""
 

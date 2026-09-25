@@ -1467,7 +1467,303 @@ def preflight(args, train, val, device, config, resources, method="field"):
                      ("mixed_batch_seconds", "peak_vram_bytes", "parameter_updates", "scans")}))
 
 
+@torch.no_grad()
+def normal_development(model, records, indices, device, workers, *, queries=4096):
+    from .data import NormalScans
+    model.eval()
+    data = NormalScans(records, queries=queries)
+    loader = DataLoader(data, batch_size=None, sampler=indices, num_workers=workers,
+                        pin_memory=True, prefetch_factor=1 if workers else None)
+    totals, confusion, count = defaultdict(float), np.zeros((19, 19), np.int64), 0
+    start = time.monotonic()
+    for sample in loader:
+        sample = to_device(sample, device)
+        loss, detail = model.loss(sample)
+        if not bool(torch.isfinite(loss)):
+            raise FloatingPointError("nonfinite normal development loss")
+        totals["objective"] += float(loss)
+        for key, value in detail.items():
+            totals[key] += float(value)
+        # The second semantic pass is omitted: loss records predictions only in eval.
+        prediction = model.development_prediction
+        allowed = sample["allowed"]
+        single = allowed.sum(1) == 1
+        truth = allowed[single].long().argmax(-1)
+        confusion += torch.bincount(truth * 19 + prediction[single], minlength=361).reshape(19, 19).cpu().numpy()
+        valid = allowed.any(1)
+        totals["set_correct"] += float(allowed[valid].gather(1, prediction[valid, None]).sum())
+        totals["set_points"] += int(valid.sum())
+        count += 1
+    union = confusion.sum(0) + confusion.sum(1) - np.diag(confusion)
+    measured = {key: value / count for key, value in totals.items() if key not in ("set_correct", "set_points")}
+    return dict(**measured, set_accuracy=totals["set_correct"] / max(1, totals["set_points"]),
+                iou=[float(confusion[c, c] / union[c]) if union[c] else None for c in range(19)],
+                mean_iou_present=float(np.mean(np.diag(confusion)[union > 0] / union[union > 0])),
+                confusion=confusion.tolist(), scans=count, seconds=time.monotonic() - start)
+
+
+def normal_optimizer(model, stage):
+    groups = []
+    for backbone in (True, False):
+        rate = ((1e-4, 8e-4) if stage == "source" else (3e-5, 2e-4))[int(not backbone)]
+        parameters = [p for name, p in model.named_parameters() if name.startswith("backbone.") == backbone]
+        groups.append(dict(params=parameters, lr=rate, peak_lr=rate))
+    return torch.optim.AdamW(groups, weight_decay=.005, eps=1e-6)
+
+
+@torch.no_grad()
+def normal_calibration(model, source, target, training_reference, device, workers, output):
+    from .data import NormalScans
+    from .model import CALIBRATION_PROBABILITIES, SCORE_VERSION
+    # Bounded samples per frame/class avoid storing tens of millions of features.
+    reservoirs = {name: [[[] for _ in range(2)] for _ in range(19)] for name in ("source", "target", "training_reference")}
+    counts = {name: np.zeros(19, np.int64) for name in reservoirs}
+    global_reference = []
+    model.eval()
+    start = time.monotonic()
+    for domain, records in (("source", source), ("target", target), ("training_reference", training_reference)):
+        loader = DataLoader(NormalScans(records, queries=16384), batch_size=None, num_workers=workers,
+                            pin_memory=True, prefetch_factor=1 if workers else None)
+        for frame, sample in enumerate(loader):
+            sample = to_device(sample, device)
+            chosen = sample["queries"]
+            logits, distance, surprise, prediction = model.components(sample, chosen)
+            allowed = sample["allowed"][chosen]
+            rng = np.random.default_rng(frame + (10000 if domain == "target" else 0))
+            if domain == "target":
+                normal_distance = (-.2 * logits.amax(-1))[sample["allowed"].any(1)]
+                selected = rng.choice(len(normal_distance), min(len(normal_distance), 2048), replace=False)
+                global_reference.append(normal_distance[torch.as_tensor(selected, device=device)].cpu().numpy())
+            for c in range(19):
+                selected = (allowed[:, c] & prediction["supported"]).nonzero().flatten()
+                counts[domain][c] += len(selected)
+                if not len(selected):
+                    continue
+                selected = selected[torch.as_tensor(rng.choice(len(selected), min(len(selected), 512), replace=False), device=device)]
+                for k, values in enumerate((distance, surprise)):
+                    reservoirs[domain][c][k].append(values[selected, c].cpu().numpy())
+            if (frame + 1) % 50 == 0:
+                print(f"calibration {domain} {frame + 1}/{len(records)} elapsed={(time.monotonic()-start)/60:.1f}min", flush=True)
+    details = []
+    semantic_quantiles = np.quantile(np.concatenate(global_reference), CALIBRATION_PROBABILITIES).astype(np.float32)
+    for c in range(19):
+        # Prefer independent, exact target semantics. Missing categories are explicitly
+        # identified rather than presenting training/source references as held-out truth.
+        domain = next((name for name in ("target", "training_reference", "source") if counts[name][c] >= 32), None)
+        if domain is None:
+            raise ValueError(f"normal class {c} has no calibration support; cannot silently invent its rejection boundary")
+        channels = [np.concatenate(values) for values in reservoirs[domain][c]]
+        quantiles = np.stack([np.quantile(values, CALIBRATION_PROBABILITIES) for values in channels]).astype(np.float32)
+        # All prototypes share one distance scale. A remote, weakly trained class
+        # must never become an easy normal explanation by widening its own radius.
+        quantiles[0] = semantic_quantiles
+        model.calibration[c].copy_(torch.from_numpy(quantiles).to(device))
+        details.append(dict(category=c, reference=domain, observed=int(counts[domain][c]),
+                            independent_exact_target=(domain == "target"),
+                            retained=len(channels[0]), quantiles=quantiles.tolist()))
+    model.calibrated.fill_(True)
+    result = dict(classes=details, source_scans=len(source), target_scans=len(target),
+                  score_version=SCORE_VERSION, probabilities=CALIBRATION_PROBABILITIES.tolist(),
+                  seconds=time.monotonic() - start, anomaly_labels_used=False,
+                  semantic_reference="201 nearest-prototype distances; shared across all normal hypotheses",
+                  semantic_reference_points=sum(map(len, global_reference)),
+                  meaning="class-conditional normal reference quantiles; no anomaly-performance estimate")
+    write_json(output / "calibration.json", result)
+    return result
+
+
+def normal_main():
+    from .data import NormalScans, normal_records, NORMAL_CLASSES, STU_NORMAL_SEMANTICS, NUSCENES_NORMAL_SETS
+    from .model import NormalHypothesis, SCORE_VERSION
+    parser = argparse.ArgumentParser(description="Real-normal semantic hypothesis training; stop before STU val19")
+    parser.add_argument("--normal", action="store_true")
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--source-epochs", type=int, default=1)
+    parser.add_argument("--target-epochs", type=int, default=8)
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--threads", type=int, default=2)
+    parser.add_argument("--batch", type=int, default=2)
+    parser.add_argument("--seed", type=int, default=206)
+    parser.add_argument("--eval-every", type=int, default=2000)
+    parser.add_argument("--deadline", type=float, required=True, help="UTC Unix deadline; reserve target training and final normal calibration")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--calibration-only", action="store_true", help="refit normal references for the selected target weights without training")
+    args = parser.parse_args()
+    if args.resume and args.calibration_only:
+        parser.error("resume and calibration-only are separate operations")
+    torch.set_num_threads(args.threads)
+    torch.set_num_interop_threads(1)
+    seed_all(args.seed)
+    device = torch.device("cuda")
+    resources = runtime_snapshot()
+    disk_check(3_000_000_000)
+    args.output.mkdir(parents=True, exist_ok=True)
+    source = normal_records("nuscenes")
+    source_val = normal_records("nuscenes", development=True)
+    target = normal_records("206")
+    target_val = normal_records("201", development=True)
+    scenes = defaultdict(list)
+    for i, row in enumerate(source_val):
+        scenes[row["scene"]].append(i)
+    source_indices = [indices[len(indices) // 2] for indices in scenes.values()]
+    target_indices = np.linspace(0, len(target_val) - 1, 68, dtype=int).tolist()
+    config = dict(version="AJAE-normal-hypothesis", architecture="shared48_quadratic", classes=NORMAL_CLASSES, source_mapping=NUSCENES_NORMAL_SETS,
+        target_mapping=STU_NORMAL_SEMANTICS, source_frames=len(source), target_frames=len(target),
+        development_frames=len(target_val), source_validation_indices=source_indices, target_validation_indices=target_indices,
+        source_epochs=args.source_epochs, target_epochs=args.target_epochs, batch=args.batch, seed=args.seed,
+        initial="assets/nuscenes.pth", initial_sha256=WEIGHTS_SHA256,
+        synthetic_anomalies=False, final_val19_evaluated=False, queries=4096, source_replay_fraction=.2,
+        loss=dict(semantic=1., compact=.1, geometry=.2, context=.2, correspondence=.1),
+        verification="same-class shared surface posterior; leave the scored return out; full observed cell",
+        normal_state="19 shared 48-dimensional prototypes; both observation and geometry losses update them",
+        normal_surface="three unconstrained quadratic log-distance surfaces per class; Student-t df=3, scale floor=.001",
+        semantic_calibration="one common nearest-prototype normal-distance reference; no per-class radius inflation",
+        score_version=SCORE_VERSION,
+        selection="minimum fixed normal development objective within each stage; no anomaly labels",
+        deadline=args.deadline, code=code_record())
+    if not args.calibration_only:
+        write_json(args.output / "config.json", config)
+        write_json(args.output / "resources.json", resources)
+    model = NormalHypothesis().to(device)
+    full = None
+    if args.calibration_only:
+        selected = torch.load(args.output / "target_best.pt", map_location="cpu", weights_only=False)
+        config = dict(selected["config"], score_version=SCORE_VERSION, scoring_code=code_record())
+        model.load_state_dict(selected["model"], strict=True)
+        previous_path = args.output / "frozen.pt"
+        if previous_path.exists():
+            previous = torch.load(previous_path, map_location="cpu", weights_only=False)
+            # Development used the unchanged loss, not the anomaly scoring rule.
+            # Reuse it only when every selected network parameter is identical.
+            same = all(torch.equal(value, previous["model"][name])
+                       for name, value in selected["model"].items() if name not in ("calibration", "calibrated"))
+            if same:
+                full = previous["normal201"]
+            del previous
+        del selected
+    else:
+        model.load_pretrained("assets/nuscenes.pth")
+    initial = torch.load(args.output / "last.pt", map_location="cpu", weights_only=False) if args.resume else None
+    if not (args.resume or args.calibration_only) and (args.output / "last.pt").exists():
+        raise ValueError("existing run requires explicit resume; no checkpoint overwrite")
+    log = (args.output / "log.jsonl").open("a", buffering=1)
+    stage_results = (json.loads((args.output / "stages.json").read_text())
+                     if (args.resume or args.calibration_only) and (args.output / "stages.json").exists() else {})
+    stages = () if args.calibration_only else (("source", args.source_epochs), ("target", args.target_epochs))
+    for stage, epochs in stages:
+        if initial and initial["stage"] == "target" and stage == "source":
+            continue
+        records = source if stage == "source" else target + source
+        dataset = NormalScans(records, paired=True, queries=4096)
+        order = []
+        for epoch in range(epochs):
+            rng = np.random.default_rng(np.random.SeedSequence([args.seed, int(stage == "target"), epoch]))
+            ids = rng.permutation(len(source) if stage == "source" else len(target))
+            for visit, index in enumerate(ids):
+                order.append((epoch, int(index)))
+                if stage == "target" and visit % 4 == 3:
+                    order.append((epoch, len(target) + int(rng.integers(len(source)))))
+        optimizer = normal_optimizer(model, stage)
+        first, best = 0, float("inf")
+        if initial and initial["stage"] == stage:
+            model.load_state_dict(initial["model"], strict=True)
+            optimizer.load_state_dict(initial["optimizer"])
+            first, best = initial["visit"], initial["best"]
+            restore_rng(initial["rng"], device)
+            log.write(json.dumps(dict(event="resume", stage=stage, saved_visit=first,
+                                     saved_update=initial["update"], training_objective_changed=False)) + "\n")
+            initial = None
+        loader = DataLoader(dataset, batch_size=None, sampler=order[first:], num_workers=args.workers,
+                            pin_memory=True, prefetch_factor=1 if args.workers else None,
+                            generator=torch.Generator().manual_seed(args.seed))
+        validation, indices = (source_val, source_indices[::3]) if stage == "source" else (target_val, target_indices)
+        total_steps = math.ceil(len(order) / args.batch)
+        optimizer.zero_grad(set_to_none=True)
+        model.train()
+        started, recent = time.monotonic(), defaultdict(float)
+        visits, steps = first, math.ceil(first / args.batch)
+        print(f"stage={stage} frames={len(order)} updates={total_steps} resume={first}", flush=True)
+        for sample in loader:
+            sample = to_device(sample, device)
+            loss, details = model.loss(sample)
+            if not bool(torch.isfinite(loss)):
+                raise FloatingPointError(f"nonfinite loss at {stage} frame {visits}")
+            size = min(args.batch, len(order) - (visits // args.batch) * args.batch)
+            (loss / size).backward()
+            visits += 1
+            recent["loss"] += float(loss.detach())
+            for key, value in details.items():
+                recent[key] += float(value)
+            recent["frames"] += 1
+            if visits % args.batch and visits != len(order):
+                continue
+            gradient = torch.nn.utils.clip_grad_norm_(model.parameters(), 1., error_if_nonfinite=True)
+            fraction = steps / max(1, total_steps)
+            factor = min(1., (steps + 1) / max(1, .03 * total_steps)) * (.05 + .95 * .5 * (1 + math.cos(math.pi * fraction)))
+            for group in optimizer.param_groups:
+                group["lr"] = group["peak_lr"] * factor
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            steps += 1
+            if steps % 20 == 0:
+                row = dict(stage=stage, update=steps, visits=visits, total=len(order),
+                           seconds=time.monotonic() - started, gradient=float(gradient),
+                           **{k: v / recent["frames"] for k, v in recent.items() if k != "frames"})
+                log.write(json.dumps(row) + "\n")
+                print(f"{stage} {visits}/{len(order)} loss={row['loss']:.3f} sem={row['semantic']:.3f} "
+                      f"geo={row['geometry']:.3f} elapsed={row['seconds']/60:.1f}min "
+                      f"ETA={(row['seconds']/max(1,visits-first)*(len(order)-visits))/60:.1f}min", flush=True)
+                recent.clear()
+            # The source stage reserves time for target adaptation and the final checks.
+            reserve = 3.25 * 3600 if stage == "source" else 90 * 60
+            ending = visits == len(order) or time.time() > args.deadline - reserve
+            interval = args.eval_every if stage == "source" else min(args.eval_every, 225)
+            validate = steps % interval == 0 or ending
+            if validate:
+                measured = normal_development(model, validation, indices, device, args.workers)
+                improved = measured["objective"] < best
+                best = min(best, measured["objective"])
+                print(f"development {stage} update={steps} objective={measured['objective']:.4f} "
+                      f"normal_accuracy={measured['set_accuracy']:.4f} mIoU={measured['mean_iou_present']:.4f} best={improved}", flush=True)
+                log.write(json.dumps(dict(stage=stage, update=steps, development=measured)) + "\n")
+                write_json(args.output / f"{stage}_development.json", dict(update=steps, best=best, latest=measured))
+                if improved:
+                    atomic_save(args.output / f"{stage}_best.pt", dict(version=config["version"], mode=model.mode,
+                        model=model.state_dict(), stage=stage, visit=visits, update=steps, development=measured, config=config))
+                model.train()
+            if steps % 500 == 0 or validate:
+                disk_check(1_000_000_000)
+                atomic_save(args.output / "last.pt", dict(version=config["version"], mode=model.mode, model=model.state_dict(),
+                    optimizer=optimizer.state_dict(), stage=stage, visit=visits, update=steps, best=best,
+                    config=config, rng=rng_state(device)))
+            if ending:
+                break
+        selected = torch.load(args.output / f"{stage}_best.pt", map_location="cpu", weights_only=False)
+        model.load_state_dict(selected["model"], strict=True)
+        stage_results[stage] = dict(trained_frames=visits, selected_update=selected["update"], development=selected["development"])
+        write_json(args.output / "stages.json", stage_results)
+        del optimizer, loader, dataset, selected
+        gc.collect()
+        torch.cuda.empty_cache()
+    if full is None:
+        full = normal_development(model, target_val, list(range(len(target_val))), device, args.workers, queries=8192)
+    write_json(args.output / "normal201.json", full)
+    calibration = normal_calibration(model, [source_val[i] for i in source_indices], target_val,
+                                     target[::4], device, args.workers, args.output)
+    final = dict(version=config["version"], mode=model.mode, model=model.state_dict(), config=config,
+                 normal201=full, stages=stage_results, frozen=True, final_val19_evaluated=False)
+    atomic_save(args.output / "frozen.pt", final)
+    write_json(args.output / "config.json", config)
+    write_json(args.output / "result.json", dict(stages=stage_results, normal201=full, frozen="frozen.pt",
+        calibration_seconds=calibration["seconds"], final_val19_evaluated=False, finished=time.time()))
+    print("FROZEN: normal-only model selected and calibrated; STU val19 has NOT been evaluated.", flush=True)
+    log.close()
+
+
 def main():
+    if "--normal" in sys.argv:
+        normal_main()
+        return
     parser = argparse.ArgumentParser(description="Train the complete observation-constrained normal-field segmentor.")
     parser.add_argument("--train-manifest", type=Path, required=True, help="training data for this run")
     parser.add_argument("--val-manifest", type=Path, required=True, help="development data used for model selection")

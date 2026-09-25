@@ -19,6 +19,104 @@ from src.model import Segmentor, balanced_loss, ranking_loss, to_device
 from src.train import cached_backward, seed_all, rng_state, restore_rng
 
 
+def test_semantic_hypotheses_exclude_target_values_before_mixing():
+    from src.normal import hypothesis_observation, SemanticHypotheses
+    xyzi, _ = angular_scan()
+    observation = hypothesis_observation(xyzi)
+    model = SemanticHypotheses().eval()
+    group = observation["group"][len(xyzi) // 2].reshape(1)
+    first = model.propose(observation, model.encode(observation), group)
+    second_observation = deepcopy(observation)
+    target = observation["group"] == group.item()
+    second_observation["features"][target, :4] *= 3
+    second_observation["log_distance"][target] += 1
+    second = model.propose(second_observation, model.encode(second_observation), group)
+    for name in first:
+        torch.testing.assert_close(first[name], second[name], atol=0, rtol=0)
+    observation["features"].requires_grad_()
+    proposed = model.propose(observation, model.encode(observation), group)
+    proposed["mean"].sum().backward()
+    assert torch.equal(observation["features"].grad[target], torch.zeros_like(observation["features"].grad[target]))
+    assert bool(observation["features"].grad[~target].abs().sum() > 0)
+
+
+def test_normal_label_sets_do_not_invent_fine_source_labels():
+    from src.data import NUSCENES_NORMAL_SETS, STU_NORMAL_SEMANTICS
+    assert NUSCENES_NORMAL_SETS[24] == (8, 9)
+    assert NUSCENES_NORMAL_SETS[30] == (14, 15)
+    assert NUSCENES_NORMAL_SETS[14] == (1, 6)
+    assert not ({0, 1, 9, 10, 11, 12, 25, 28, 29, 31} & NUSCENES_NORMAL_SETS.keys())
+    assert not ({0, 1, 2, 52, 99} & STU_NORMAL_SEMANTICS.keys())
+
+
+def test_joint_hypothesis_requires_one_surface_for_all_rays():
+    from src.normal import hypothesis_loss
+    allowed = torch.zeros(2, 19, dtype=torch.bool)
+    allowed[:, 0] = True
+    prediction = dict(log_prob=torch.full((2, 19, 3), -10.),
+                      weight=torch.full((2, 19, 3), -math.log(3)),
+                      belief=torch.zeros(2, 19), group=torch.zeros(2, dtype=torch.long))
+    prediction["log_prob"][0, 0, 0] = 0
+    prediction["log_prob"][1, 0, 1] = 0
+    conflicting, _ = hypothesis_loss(prediction, allowed)
+    prediction["log_prob"][1, 0, 0] = 0
+    compatible, _ = hypothesis_loss(prediction, allowed)
+    assert conflicting > compatible + 3
+
+
+def test_verification_does_not_choose_a_different_surface_for_each_point():
+    from src.normal import verify_hypotheses
+    probability = torch.zeros(2, 19)
+    probability[:, 0] = 1
+    prediction = dict(log_prob=torch.full((2, 19, 3), -10.),
+                      weight=torch.full((2, 19, 3), -math.log(3)), group=torch.zeros(2, dtype=torch.long))
+    prediction["log_prob"][0, 0, 0] = 0
+    prediction["log_prob"][1, 0, 1] = 0
+    incompatible = verify_hypotheses(prediction, probability)[:, 0]
+    prediction["log_prob"][1, 0, 0] = 0
+    compatible = verify_hypotheses(prediction, probability)[:, 0]
+    assert torch.all(incompatible > compatible + 5)
+
+
+def test_one_normal_class_must_explain_both_observations():
+    from src.model import NormalHypothesis, CALIBRATION_PROBABILITIES, CALIBRATION_LEVELS
+    model = NormalHypothesis().eval()
+    model.calibrated.fill_(True)
+    model.calibration.copy_(torch.tensor(CALIBRATION_PROBABILITIES).expand(19, 2, -1))
+    distance, geometry = torch.full((1, 19), 2.), torch.full((1, 19), 2.)
+    low, high = CALIBRATION_PROBABILITIES[[4, 32]]
+    distance[0, :2], geometry[0, :2] = torch.tensor([low, high]), torch.tensor([high, low])
+    joint = model.calibrate_components(distance, geometry, torch.tensor([True]))
+    semantic = model.calibrate_components(distance, geometry, torch.tensor([False]))
+    torch.testing.assert_close(joint, torch.tensor([CALIBRATION_LEVELS[32]], dtype=torch.float32))
+    torch.testing.assert_close(semantic, torch.tensor([CALIBRATION_LEVELS[4]], dtype=torch.float32))
+    assert bool((joint >= semantic).all())
+
+
+def test_absent_normal_support_cannot_change_another_points_surface():
+    from src.normal import verify_hypotheses
+    prediction = dict(log_prob=torch.zeros(2, 19, 3),
+                      weight=torch.full((2, 19, 3), -math.log(3)), group=torch.zeros(2, dtype=torch.long))
+    prediction["log_prob"][0, :, 1:] = -8
+    support = torch.ones(2, 19)
+    support[1] = math.exp(-100)
+    before = verify_hypotheses(prediction, support)[0]
+    prediction["log_prob"][1, :, 0] = -1000
+    after = verify_hypotheses(prediction, support)[0]
+    torch.testing.assert_close(before, after, atol=1e-6, rtol=0)
+
+
+def test_distant_ground_requires_unbounded_and_curved_angular_prediction():
+    # A flat road at 43--49 m already exceeds the retired slope cap of 20.
+    elevation = np.deg2rad(np.linspace(-2., -1.75, 100))
+    distance = 1.5 / -np.sin(elevation)
+    target = np.log(distance)
+    assert (target[-1] - target[0]) / (elevation[-1] - elevation[0]) > 20
+    position = (elevation - elevation.mean()) / np.deg2rad(.25)
+    predicted = np.polyval(np.polyfit(position, target, 2), position)
+    assert np.max(np.abs(predicted - target)) < 1e-4
+
+
 def angular_scan():
     az, el = np.meshgrid(np.arange(-9.7, 10., .7), np.arange(-8.3, 3., .8))
     az, el = np.deg2rad(az.ravel()), np.deg2rad(el.ravel())

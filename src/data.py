@@ -1257,6 +1257,146 @@ def make_ndp_manifest(data_root, output):
     return result
 
 
+NORMAL_CLASSES = ("car", "bicycle", "motorcycle", "truck", "other-vehicle", "person",
+                  "bicyclist", "motorcyclist", "road", "parking", "sidewalk", "other-ground",
+                  "building", "fence", "vegetation", "trunk", "terrain", "pole", "traffic-sign")
+STU_NORMAL_SEMANTICS = {
+    10: 0, 252: 0, 11: 1, 15: 2, 18: 3, 258: 3,
+    13: 4, 16: 4, 20: 4, 256: 4, 257: 4, 259: 4,
+    30: 5, 254: 5, 31: 6, 253: 6, 32: 7, 255: 7,
+    40: 8, 60: 8, 44: 9, 48: 10, 49: 11, 50: 12, 51: 13,
+    70: 14, 71: 15, 72: 16, 80: 17, 81: 18,
+}
+# Coarse source labels supervise sets, never invented fine target annotations.
+NUSCENES_NORMAL_SETS = {
+    2: (5,), 3: (5,), 4: (5,), 6: (5,), 14: (1, 6), 15: (4,), 16: (4,),
+    17: (0,), 18: (4,), 19: (0, 3, 4), 20: (0, 2, 4, 7), 21: (2, 7),
+    22: (4,), 23: (3,), 24: (8, 9), 26: (10,), 27: (16,), 30: (14, 15),
+}
+
+
+def normal_records(source, *, development=False):
+    """Only original source scans or the explicitly allowed normal STU sequences."""
+    if source == "nuscenes":
+        path = Path("results/data/background") / ("val.json" if development else "train.json")
+        records = json.loads(path.read_text())["records"]
+        if any(row.get("delta") or row.get("anomaly", 0) for row in records):
+            raise ValueError("normal-only training cannot consume inserted foregrounds")
+        return records
+    if source not in ("206", "201") or development != (source == "201"):
+        raise ValueError("normal protocol permits 206 training and 201 development only")
+    directory = DATA_ROOT / "train" / source
+    calibration = {}
+    for line in (directory / "calib.txt").read_text().splitlines():
+        if line.strip():
+            key, value = line.split(":", 1)
+            matrix = np.eye(4)
+            matrix[:3] = np.fromstring(value, sep=" ").reshape(3, 4)
+            calibration[key] = matrix
+    camera = np.loadtxt(directory / "poses.txt").reshape(-1, 3, 4)
+    poses = np.broadcast_to(np.eye(4), (len(camera), 4, 4)).copy()
+    poses[:, :3] = camera
+    transform = calibration["Tr"]
+    poses = np.linalg.inv(transform) @ poses @ transform
+    scans = sorted((directory / "velodyne").glob("*.bin"))
+    if len(scans) != len(poses):
+        raise ValueError("normal sequence poses and scans differ")
+    return [dict(source="normal_stu", scene=source, frame=int(scan.stem), scan=str(scan),
+                 label=str(directory / "labels" / (scan.stem + ".label")), pose=poses[i].tolist())
+            for i, scan in enumerate(scans)]
+
+
+def read_normal_record(record):
+    source = record["source"] == "nuscenes"
+    raw = np.fromfile(record["scan"], dtype="<f4").reshape(-1, 5 if source else 4)
+    label = np.fromfile(record["label"], dtype=np.uint8 if source else "<u4")
+    if len(raw) != len(label) or not np.isfinite(raw).all():
+        raise ValueError("normal scan and point labels do not correspond")
+    label = label.astype(np.int64) & 65535
+    if not source and np.any(label == 2):
+        raise ValueError("anomaly label entered normal-only training/development")
+    actual = np.any(raw[:, :3] != 0, axis=1)
+    xyzi = raw[actual, :4].copy()
+    if source:
+        xyzi[:, 3] /= 255.
+    label = label[actual]
+    allowed = np.zeros((len(label), 19), dtype=bool)
+    mapping = NUSCENES_NORMAL_SETS if source else {k: (v,) for k, v in STU_NORMAL_SEMANTICS.items()}
+    for key, values in mapping.items():
+        allowed[np.ix_(label == key, values)] = True
+    distance = np.linalg.norm(xyzi[:, :3], axis=1)
+    allowed[(distance < 2.5) | (distance > 50)] = False
+    return dict(xyzi=xyzi, allowed=allowed, slots=np.flatnonzero(actual), slot_count=len(raw),
+                pose=np.asarray(record["pose"], dtype=np.float64))
+
+
+class NormalScans:
+    """Real-only semantic targets and optional verified static cross-view matches."""
+
+    def __init__(self, records, *, paired=False, queries=4096):
+        self.records, self.paired, self.queries = records, paired, queries
+        self.next = {}
+        scenes = {}
+        for i, record in enumerate(records):
+            scenes.setdefault(record["scene"], []).append(i)
+        for indices in scenes.values():
+            indices.sort(key=lambda i: records[i].get("timestamp", records[i]["frame"]))
+            for a, b in zip(indices[:-1], indices[1:]):
+                self.next[a] = b
+
+    def __len__(self):
+        return len(self.records)
+
+    def __getitem__(self, index):
+        import torch
+        from scipy.spatial import cKDTree
+        from .model import voxelize
+        from .normal import hypothesis_observation
+        epoch, index = index if isinstance(index, tuple) else (0, index)
+        raw = read_normal_record(self.records[index])
+        if self.paired:
+            angle = np.random.default_rng(np.random.SeedSequence([index, epoch, 613])).uniform(-np.pi, np.pi)
+            rotation = np.array([[np.cos(angle), -np.sin(angle), 0],
+                                 [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+            raw["xyzi"][:, :3] = raw["xyzi"][:, :3] @ rotation.T
+            transform = np.eye(4)
+            transform[:3, :3] = rotation.T
+            raw["pose"] = raw["pose"] @ transform
+        result = voxelize(raw["xyzi"])
+        result.update(allowed=torch.from_numpy(raw["allowed"]), slots=torch.from_numpy(raw["slots"]),
+                      slot_count=raw["slot_count"], index=index,
+                      observation=hypothesis_observation(raw["xyzi"]))
+        valid = np.flatnonzero(raw["allowed"].any(1))
+        # Fixed class-balanced query inclusion; the backbone still sees every return.
+        rng = np.random.default_rng(np.random.SeedSequence([index, epoch, 7291]))
+        chosen = []
+        for category in range(19):
+            candidates = np.flatnonzero(raw["allowed"][:, category])
+            if len(candidates):
+                chosen.extend(rng.choice(candidates, min(len(candidates), self.queries // 19), replace=False))
+        chosen = np.unique(chosen)
+        remaining = np.setdiff1d(valid, chosen, assume_unique=True)
+        chosen = np.r_[chosen, rng.choice(remaining, min(len(remaining), max(0, self.queries - len(chosen))), replace=False)]
+        result["queries"] = torch.from_numpy(np.sort(chosen).astype(np.int64))
+        if self.paired and index in self.next:
+            other = read_normal_record(self.records[self.next[index]])
+            first_xyz = raw["xyzi"][:, :3].astype(np.float64)
+            second_xyz = other["xyzi"][:, :3].astype(np.float64)
+            transform = np.linalg.inv(raw["pose"]) @ other["pose"]
+            transformed = second_xyz @ transform[:3, :3].T + transform[:3, 3]
+            candidates = chosen[raw["allowed"][chosen, 8:].any(1)]
+            if len(candidates):
+                distance, nearest = cKDTree(transformed).query(first_xyz[candidates], workers=1)
+                _, reverse = cKDTree(first_xyz).query(transformed[nearest], workers=1)
+                same_class = (raw["allowed"][candidates] & other["allowed"][nearest]).any(1)
+                accepted = (distance < .10) & (reverse == candidates) & same_class
+                first, second = candidates[accepted][:512], nearest[accepted][:512]
+                if len(first):
+                    result["pair"] = dict(observation=hypothesis_observation(other["xyzi"]),
+                                          first=torch.from_numpy(first), second=torch.from_numpy(second))
+        return result
+
+
 class Scans:
     """Fixed manifest reader. Metadata and truth never enter model features."""
 
