@@ -16,6 +16,7 @@ import numpy as np
 
 OUT = Path(__file__).resolve().parent
 INK, BLUE, TEAL, PURPLE, RED = "#263747", "#377EAB", "#20867A", "#8065A8", "#B95245"
+OBSERVED = "#F00000"
 
 
 def scene(root):
@@ -202,12 +203,13 @@ def main():
         p=sum(w/scale*(1+((t-mean)/scale)**2/3)**-2
               for mean,scale,w in [(mu-.16,.07,.20),(mu,.12,.65),(mu+.14,.05,.15)])
         ax.plot(9.62+1.14*t,3.04+.09*p,color=col,lw=.65)
-    ax.plot([10.31,10.31],[3.01,3.94],color=RED,lw=.75)
+    ax.plot([10.31,10.31],[3.01,3.94],color=OBSERVED,lw=1.15,zorder=5)
+    label(10.58,3.98,r"$z_i$",7.8,color=OBSERVED)
     ax.plot([9.62,10.76],[3.02,3.02],color=INK,lw=.45)
     label(10.21,4.28,"Evaluate density",5.8)
     label(10.85,2.55,r"$p_{ic}$",8.0)
-    wire([(.84,4.52),(.84,1.52),(10.31,1.52),(10.31,2.99)],color=RED)
-    label(4.10,1.51,r"Measured log range $z_i$",6.8,color=RED,
+    wire([(.84,4.52),(.84,1.52),(10.31,1.52),(10.31,2.73)],color=OBSERVED)
+    label(4.10,1.51,r"Measured log range $z_i$",6.8,color=OBSERVED,
           bbox={"fc":"white","ec":"none","pad":1.5})
 
     # Evidence combines within a class before any class is selected.
