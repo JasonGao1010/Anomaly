@@ -109,6 +109,128 @@ def evaluate_normal(model, manifest, device, workers=2):
                 manifest_sha256=manifest["sha256"], role="normal prediction diagnostic; not anomaly detection accuracy")
 
 
+@torch.no_grad()
+def evaluate_cross_normal(scorer, saved, device):
+    """Test observed-detail contributions on every cached odd-block normal 201 point."""
+    from .data import NORMAL_CLASSES
+    from .normal import CROSS_VERSION
+
+    if saved.get("version") != CROSS_VERSION:
+        raise ValueError("class-evidence diagnostics require the current checkpoint version")
+    directory = Path(saved["config"]["features"])
+    metadata_path = directory / "development_features.json"
+    cache = json.loads(metadata_path.read_text())
+    count, capacity = cache["count"], cache["capacity"]
+    if (cache.get("labels") != "normal_candidate_sets_v1" or not 0 < count <= capacity
+            or count != saved["config"]["development_points"]):
+        raise ValueError("normal development cache identity or actual count disagrees with the checkpoint")
+    shapes = dict(features=(252,), conditions=(2,), allowed=(19,), semantic=(), source=(), frame=(), slot=())
+    arrays = {name: np.load(cache["paths"][name], mmap_mode="r", allow_pickle=False) for name in shapes}
+    for name, shape in shapes.items():
+        if arrays[name].shape != (capacity, *shape):
+            raise ValueError(f"normal cache {name} shape does not match its recorded capacity")
+    if (arrays["allowed"].dtype != np.bool_
+            or any(not np.issubdtype(arrays[name].dtype, np.integer)
+                   for name in ("semantic", "source", "frame", "slot"))):
+        raise ValueError("normal cache labels and point identities have invalid types")
+    # Check every recorded span, including unselected source/even-block spans,
+    # so unused capacity or an incorrect source code cannot enter the population.
+    spans, cursor = [], 0
+    for index, row in enumerate(cache["frames"]):
+        begin, end = row["begin"], row["end"]
+        if row["index"] != index or begin != cursor or not begin <= end <= count:
+            raise ValueError("normal cache frame spans do not cover exactly its actual point count")
+        if row["source"] not in ("normal_stu", "nuscenes"):
+            raise ValueError("normal mechanism diagnostics cannot consume anomaly or augmented sources")
+        target = row["source"] == "normal_stu"
+        if target and str(row["scene"]) != "201":
+            raise ValueError("normal target development must identify sequence 201")
+        if (not np.all(arrays["source"][begin:end] == int(target))
+                or not np.all(arrays["frame"][begin:end] == index)
+                or len(np.unique(arrays["slot"][begin:end])) != end - begin):
+            raise ValueError("normal cache source/frame/return-slot identities disagree")
+        if target and index // 64 % 2 == 1:
+            spans.append((begin, end))
+        cursor = end
+    if cursor != count or not spans or not sum(end - begin for begin, end in spans):
+        raise ValueError("normal cache lacks a complete nonempty odd-block 201 population")
+
+    scorer = scorer.to(device).eval()
+    totals = torch.zeros(3, 19, 11, dtype=torch.float64, device=device)
+    started = time.perf_counter()
+    for begin, end in spans:
+        for start in range(begin, end, 1024):
+            stop = min(start + 1024, end)
+            allowed = np.asarray(arrays["allowed"][start:stop])
+            labels = np.asarray(arrays["semantic"][start:stop])
+            if not np.all(allowed.sum(1) == 1) or not np.array_equal(labels, allowed.argmax(1)):
+                raise ValueError("every selected normal 201 point must retain its actual singleton label set")
+            f = torch.tensor(arrays["features"][start:stop], dtype=torch.float32, device=device)
+            g = torch.tensor(arrays["conditions"][start:stop], dtype=torch.float32, device=device)
+            y = torch.tensor(labels, dtype=torch.long, device=device)
+            if not bool(torch.isfinite(f).all() and torch.isfinite(g).all()):
+                raise ValueError("normal cache contains nonfinite observed features or geometry")
+            predicted = scorer.predict(f)
+            deep = scorer.deep_class_energy(f)
+            actual = deep + scorer.negative_log_likelihood(predicted, scorer.observations(f, g))
+            # One common observation is predicted solely from D. Each candidate
+            # class must explain that same input, not its own preferred mean.
+            mixture = (-deep).softmax(-1)[..., None] * predicted["log_weights"].exp()
+            replacement = (mixture[..., None] * predicted["means"]).sum((1, 2))
+            replaced = deep + scorer.negative_log_likelihood(predicted, replacement)
+            energies = torch.stack((deep, actual, replaced), -1)
+            if not bool(torch.isfinite(energies[:, scorer.deep_present]).all()):
+                raise ValueError("nonfinite class evidence in the normal mechanism diagnostic")
+            classes = energies.argmin(1)
+            correct = classes == y[:, None]
+            actual_posterior, replaced_posterior = (-actual).softmax(-1), (-replaced).softmax(-1)
+            posterior_difference = (actual_posterior - replaced_posterior).abs()
+            values = torch.stack((torch.ones_like(y), correct[:, 0], correct[:, 1], correct[:, 2],
+                correct[:, 1] & ~correct[:, 0], ~correct[:, 1] & correct[:, 0],
+                classes[:, 1] != classes[:, 2], correct[:, 1] & ~correct[:, 2],
+                ~correct[:, 1] & correct[:, 2], posterior_difference.amax(1) > 1e-6,
+                posterior_difference.sum(1)), -1).double()
+            far = g[:, 0] >= np.log(35.)
+            for group, mask in enumerate((torch.ones_like(far), ~far, far)):
+                totals[group].index_add_(0, y[mask], values[mask])
+    totals = totals.cpu().numpy()
+    if int(totals[0, :, 0].sum()) != sum(end - begin for begin, end in spans):
+        raise ValueError("normal diagnostic did not cover every selected cached point")
+
+    def summarize_counts(row):
+        names = ("count", "deep_correct", "actual_correct", "replacement_correct",
+                 "actual_corrected_deep_errors", "actual_spoiled_deep_correct",
+                 "actual_replacement_class_disagreement", "actual_corrected_replacement_errors",
+                 "actual_spoiled_replacement_correct", "actual_replacement_posterior_changed")
+        result = {name: int(value) for name, value in zip(names, row)}
+        n = result["count"]
+        result["accuracy"] = {name: float(row[i] / n) if n else None
+                              for i, name in enumerate(("deep", "actual", "replacement"), 1)}
+        result["actual_net_corrected_deep"] = int(row[4] - row[5])
+        result["actual_net_corrected_replacement"] = int(row[7] - row[8])
+        result["actual_replacement_class_disagreement_rate"] = float(row[6] / n) if n else None
+        result["actual_replacement_posterior_changed_rate"] = float(row[9] / n) if n else None
+        result["actual_replacement_mean_posterior_l1"] = float(row[10] / n) if n else None
+        return result
+
+    groups = {}
+    for name, values in zip(("all", "near", "far"), totals):
+        present = values[:, 0] > 0
+        groups[name] = dict(**summarize_counts(values.sum(0)),
+            class_balanced_accuracy={method: float(np.mean(values[present, i] / values[present, 0]))
+                                     if present.any() else None
+                                     for i, method in enumerate(("deep", "actual", "replacement"), 1)},
+            classes=[dict(category=c, name=NORMAL_CLASSES[c], **summarize_counts(row))
+                     for c, row in enumerate(values)])
+    return dict(version=CROSS_VERSION, points=groups["all"]["count"], scans=len(spans), groups=groups,
+        seconds=time.perf_counter() - started, cache=str(metadata_path.resolve()), cache_actual_count=count,
+        population="all cached singleton normal 201 points in odd contiguous 64-frame blocks; no subsampling or source supplementation",
+        methods=dict(deep="argmin_c negative log p(c,D)", actual="argmin_c negative log p(c,D,O)",
+                     replacement="same conditional distributions evaluated at E[O|D] = sum_c p(c|D) sum_k p(k|D,c) mu(c,k)"),
+        ranges=dict(near="range < 35 m", far="range >= 35 m"), posterior_changed_absolute_tolerance=1e-6,
+        role="normal observation-mechanism diagnostic only; feature replacement is not an anomaly, training example, model-selection criterion, or anomaly-detection result")
+
+
 def precision(device):
     if device.type == "cuda":
         return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
@@ -828,7 +950,8 @@ def main():
         if name == "mine":
             command.add_argument("--manifest", type=Path, default=Path("results/data/train.json"))
         if name == "normal":
-            command.add_argument("--manifest", type=Path, required=True)
+            command.add_argument("--manifest", type=Path,
+                help="required for earlier field models; class evidence uses its recorded normal cache and rejects this option")
         if name == "test":
             command.add_argument("--data", type=Path, required=True)
         if name in ("validate", "test"):
@@ -880,10 +1003,17 @@ def main():
     normal_run = saved.get("version") in (NORMAL_VERSION, SUPPORT_VERSION, CROSS_VERSION)
     if args.action == "infer" and args.semantic_output and not normal_run:
         parser.error("--semantic-output requires a joint normal-evidence checkpoint")
-    if normal_run and args.action in ("normal", "mine"):
+    if normal_run and (args.action == "mine" or (args.action == "normal" and saved.get("version") != CROSS_VERSION)):
         parser.error("this action belongs to the earlier supervised field; normal-only development is recorded by src.train --normal")
     if args.action == "normal":
-        result = evaluate_normal(model, load_manifest(args.manifest, "train"), device, args.workers)
+        if saved.get("version") == CROSS_VERSION:
+            if args.manifest is not None:
+                parser.error("class-evidence normal diagnostics use the checkpoint's normal cache; do not supply --manifest")
+            result = evaluate_cross_normal(model.scorer, saved, device)
+        else:
+            if args.manifest is None:
+                parser.error("earlier normal-field diagnostics require --manifest")
+            result = evaluate_normal(model, load_manifest(args.manifest, "train"), device, args.workers)
         write_json(args.output, dict(checkpoint=str(args.checkpoint.resolve()), **result))
     elif args.action == "mine":
         mine(model, load_manifest(args.manifest, "train"), args.checkpoint, args.output, device, args.workers)
