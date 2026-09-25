@@ -373,291 +373,183 @@ def test_support_conditions_preserves_raw_query_identity_and_repeated_indices():
     np.testing.assert_array_equal(support_conditions(xyzi[order], np.argsort(order)[indices]), actual[indices])
     coincident = support_conditions(np.repeat(xyzi[:1], 9, axis=0))
     np.testing.assert_allclose(coincident[:, 1], np.float32(np.log(.001)), rtol=0, atol=0)
-    with pytest.raises(ValueError, match="nine finite"):
+    with pytest.raises(ValueError, match="too few or nonfinite"):
         support_conditions(xyzi[:8])
 
 
-def test_cross_evidence_predictions_exclude_observed_targets_and_labels():
-    from src.normal import CrossEvidence
+def test_instance_support_matches_independent_full_feature_nearest_neighbors():
+    from src.normal import InstanceSupport
 
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(206)
-        model = CrossEvidence(modes=2)
-    sample = dict(features=torch.zeros(3, 252), conditions=torch.zeros(3, 2),
-                  labels=torch.tensor([0, 1, 2]))
-    predicted = model.predict(sample["features"])
-    assert set(predicted) == {"means", "log_scale", "log_weights", "deep_energy"}
-    assert predicted["means"].shape == (3, 19, 2, 182)
-    assert predicted["log_weights"].shape == (3, 19, 2)
-    assert predicted["log_scale"].shape == (3, 182)
-    assert predicted["deep_energy"].shape == (3, 19)
-    assert not hasattr(model, "class_head")
-    score = model.raw_score(sample["features"], sample["conditions"])
-    sample["labels"] = torch.tensor([18, 17, 16])
-    sample["conditions"] += 4
-    changed = model.predict(sample["features"])
-    for name in predicted:
-        torch.testing.assert_close(changed[name], predicted[name], rtol=0, atol=0)
-    assert (model.raw_score(sample["features"], sample["conditions"]) > score).all()
-    # Early/middle targets are excluded too; only the last 72 values feed the heads.
-    sample["features"][:, :180] += 3
-    changed = model.predict(sample["features"])
-    for name in predicted:
-        torch.testing.assert_close(changed[name], predicted[name], rtol=0, atol=0)
-    with torch.autocast("cpu", dtype=torch.bfloat16):
-        mixed = model(sample["features"], sample["conditions"])
-        mixed_prediction = model.predict(sample["features"])
-    assert mixed.dtype == torch.float32
-    assert all(value.dtype == torch.float32 for value in mixed_prediction.values())
-    torch.testing.assert_close(mixed, model.raw_score(sample["features"], sample["conditions"]), rtol=0, atol=0)
-    assert sum(parameter.numel() for parameter in model.parameters()) < 300_000
-
-
-def test_cross_evidence_matches_independent_gaussian_mixture_and_inverse_transform():
-    from scipy.special import logsumexp, softmax
-    from scipy.stats import multivariate_normal
-    from src.normal import CrossEvidence
-
-    rng = np.random.default_rng(43)
-    model = CrossEvidence(modes=2, hidden=2, latent=2)
-    features = rng.normal(size=(3, 252)).astype(np.float32)
-    conditions = rng.normal(size=(3, 2)).astype(np.float32)
-    location = rng.normal(scale=.2, size=252).astype(np.float32)
-    scale = rng.uniform(.7, 1.5, size=252).astype(np.float32)
-    geo_location = np.array([2.4, -.8], np.float32)
-    geo_scale = np.array([.9, .6], np.float32)
-    linear = rng.normal(scale=.015, size=(73, 182)).astype(np.float32)
-    whitener = np.eye(182, dtype=np.float32) + np.triu(
-        rng.normal(scale=.01, size=(182, 182)).astype(np.float32), 1)
-    means = rng.normal(scale=.2, size=(2, 182)).astype(np.float32)
-    mean_offsets = rng.normal(scale=.15, size=(2, 182)).astype(np.float32)
-    embedding = np.linspace(-1, 1, 19, dtype=np.float32)
-    raw_scale = np.linspace(-.8, .5, 182, dtype=np.float32)
-    raw_weights = np.array([-.7, .3], np.float32)
-    weight_offsets = np.array([.4, -.2], np.float32)
-    prior_logits = np.linspace(-.6, .8, 19, dtype=np.float32)
-    prior_logits[1] = 100  # An absent class must stay excluded despite its logit.
-    centers = np.zeros((19, 72), np.float32)
-    centers[:, 0] = np.linspace(-1.5, 1.5, 19)
-    present = [0, 7, 18]
+    # Artificial numerical fixture; no anomaly-detection performance is inferred.
+    rng = np.random.default_rng(206)
+    model = InstanceSupport(memory_size=6)
+    memory = rng.normal(scale=.3, size=(6, 252)).astype(np.float32)
+    features = rng.normal(scale=.3, size=(5, 252)).astype(np.float32)
+    location = rng.normal(scale=.1, size=252).astype(np.float32)
+    whitener = np.eye(252, dtype=np.float32) + np.triu(
+        rng.normal(scale=.005, size=(252, 252)).astype(np.float32), 1)
+    transform = np.eye(252, dtype=np.float32) + rng.normal(scale=.002, size=(252, 252)).astype(np.float32)
     with torch.no_grad():
-        for name, value in (("feat_location", location), ("feat_scale", scale),
-                            ("geo_location", geo_location), ("geo_scale", geo_scale),
-                            ("linear", linear), ("whitener", whitener)):
+        for name, value in (("memory", memory), ("location", location),
+                            ("whitener", whitener), ("transform", transform)):
             getattr(model, name).copy_(torch.from_numpy(value))
-        # A tiny deterministic head makes class-dependent parameters independently
-        # reproducible; this artificial fixture verifies implementation only.
-        for parameter in model.parameters():
-            parameter.zero_()
-        model.class_embedding.weight[:, 0].copy_(torch.from_numpy(embedding))
-        model.density_head[0].weight[0, 0] = 1
-        model.density_head[-1].weight[:, 0].copy_(torch.from_numpy(
-            np.concatenate((mean_offsets.ravel(), weight_offsets))))
-        model.density_head[-1].bias.copy_(torch.from_numpy(np.concatenate((means.ravel(), raw_weights))))
-        model.scale_head.bias.copy_(torch.from_numpy(raw_scale))
-        model.prior_head.bias.copy_(torch.from_numpy(prior_logits))
-        model.deep_centers.copy_(torch.from_numpy(centers))
-        model.deep_present.zero_()
-        model.deep_present[present] = True
-    values = (features.astype(np.float64) - location) / scale
-    geometry = (conditions.astype(np.float64) - geo_location) / geo_scale
-    base = np.column_stack((np.ones(3), values[:, 180:])) @ linear.astype(np.float64)
-    observed = (np.column_stack((values[:, :180], geometry)) - base) @ whitener.astype(np.float64)
-    log_scale = 3 * np.tanh(raw_scale.astype(np.float64) / 3)
-    covariance = np.diag(np.exp(2 * log_scale))
-    activation = embedding.astype(np.float64) / (1 + np.exp(-embedding.astype(np.float64)))
-    class_means = means.astype(np.float64)[None] + activation[:, None, None] * mean_offsets
-    class_weights = raw_weights.astype(np.float64)[None] + activation[:, None] * weight_offsets
-    log_weights = class_weights - logsumexp(class_weights, axis=1, keepdims=True)
-    # SciPy evaluates the full normalized density, including its scale-dependent volume.
-    components = np.stack([np.column_stack([
-        multivariate_normal.logpdf(observed, mean=mean, cov=covariance) for mean in class_mean])
-        for class_mean in class_means], axis=1)
-    expected_conditional = -logsumexp(components + log_weights[None], axis=2)
-    expected_base = np.full((len(features), 19), np.inf)
-    for category in present:
-        expected_base[:, category] = -multivariate_normal.logpdf(
-            values[:, 180:], mean=centers[category], cov=np.eye(72)) + np.log(len(present))
-    # The Gaussian mixture supplies only p0(D). Learned rho(c|D) independently
-    # partitions that fixed marginal; it is not the Gaussian class posterior.
-    log_rho = np.full(19, -np.inf)
-    log_rho[present] = prior_logits[present].astype(np.float64)
-    log_rho -= logsumexp(log_rho)
-    expected_deep = -logsumexp(-expected_base, axis=1)[:, None] - log_rho[None]
-    expected_joint = expected_deep + expected_conditional
-    tensor_features = torch.from_numpy(features)
-    tensor_conditions = torch.from_numpy(conditions)
-    predicted_parameters = model.predict(tensor_features)
-    np.testing.assert_allclose(predicted_parameters["deep_energy"].detach().numpy(),
-                               expected_deep, rtol=2e-6, atol=2e-5)
-    conditional = model.negative_log_likelihood(predicted_parameters,
-                                                model.observations(tensor_features, tensor_conditions))
-    np.testing.assert_allclose(conditional.detach().numpy(), expected_conditional, rtol=2e-6, atol=2e-5)
-    joint = model.class_energy(tensor_features, tensor_conditions, predicted_parameters)
-    np.testing.assert_allclose(joint.detach().numpy(), expected_joint, rtol=2e-6, atol=3e-5)
-    expected_score = -logsumexp(-expected_joint, axis=1)
-    np.testing.assert_allclose(model.raw_score(tensor_features, tensor_conditions).detach().numpy(),
-                               expected_score, rtol=2e-6, atol=3e-5)
-    mean_by_class = (softmax(class_weights, axis=1)[..., None] * class_means).sum(1)
-    mean = softmax(-expected_deep, axis=1) @ mean_by_class
-    expected = base + np.linalg.solve(whitener.astype(np.float64).T, mean.T).T
-    predicted = model.prediction(tensor_features)
-    np.testing.assert_allclose(predicted["features"].detach().numpy(),
-                               expected[:, :180] * scale[:180] + location[:180], rtol=3e-6, atol=2e-6)
-    np.testing.assert_allclose(predicted["conditions"].detach().numpy(),
-                               expected[:, 180:] * geo_scale + geo_location, rtol=3e-6, atol=2e-6)
-    model.point_chunk = 1
-    np.testing.assert_allclose(model.raw_score(tensor_features, tensor_conditions).detach().numpy(),
-                               expected_score, rtol=2e-6, atol=3e-5)
-    for name, value in model.prediction(tensor_features).items():
-        torch.testing.assert_close(value, predicted[name], rtol=3e-6, atol=2e-6)
+        model.memory_allowed[[0, 1], 0] = True
+        model.memory_allowed[2, 7] = True
+        model.memory_allowed[3, 18] = True
+        model.memory_allowed[4, [0, 7]] = True
+        model.temperature.fill_(7.)
+    encoded = (features.astype(float) - location) @ whitener.astype(float) @ transform.astype(float)
+    bank = (memory.astype(float) - location) @ whitener.astype(float) @ transform.astype(float)
+    distance = np.square(encoded[:, None] - bank[None]).sum(-1)
+    expected = np.full((len(features), 19), np.inf)
+    for category, indices in ((0, [0, 1]), (7, [2]), (18, [3])):
+        expected[:, category] = distance[:, indices].min(1)
+    f, g = torch.from_numpy(features), torch.zeros(len(features), 2)
+    model.eval()
+    with torch.no_grad(), torch.autocast("cpu", dtype=torch.bfloat16):
+        actual = model.class_energy(f, g)
+        score = model(f, g)
+        torch.testing.assert_close(model.raw_score(f, g + 100), score, rtol=0, atol=0)
+    assert actual.dtype == score.dtype == torch.float32
+    np.testing.assert_allclose(actual.numpy(), expected, rtol=2e-6, atol=2e-5)
+    np.testing.assert_allclose(score.numpy(), distance[:, :5].min(1), rtol=2e-6, atol=2e-5)
+    with pytest.raises(ValueError, match="shape"):
+        model.class_energy(f[:, :-1])
+    with pytest.raises(ValueError, match="same points"):
+        model.raw_score(f, g[:1])
 
 
-def test_cross_evidence_deep_support_matches_shared_covariance_class_mixture():
-    from scipy.special import logsumexp
-    from scipy.stats import multivariate_normal
-    from src.normal import CrossEvidence
+def test_instance_support_requires_one_whole_instance_and_preserves_coarse_labels():
+    from src.normal import InstanceSupport
+
+    model = InstanceSupport(memory_size=4)
+    with torch.no_grad():
+        model.memory[0, 36] = 10
+        model.memory[1, [0, 180]] = 10
+        model.memory_allowed[:2, 0] = True
+    query = torch.zeros(1, 252)
+    # Layerwise nearest anchors could invent an exact hybrid match; no complete
+    # normal instance matches all three levels, so the real minimum is 100.
+    torch.testing.assert_close(model.raw_score(query), torch.tensor([100.]), rtol=0, atol=0)
+    assert model.class_energy(query)[0, 0] == 100
+    with torch.no_grad():
+        model.memory_allowed[2, [0, 7]] = True
+    assert model.raw_score(query).item() == 0
+    energy = model.class_energy(query)
+    assert energy[0, 0] == 100 and torch.isinf(energy[0, 7])
+    with torch.no_grad():
+        model.memory_allowed[:2] = False
+    assert torch.isinf(model.class_energy(query)).all()
+    assert model.raw_score(query).item() == 0
+    model.memory_allowed.zero_()
+    with pytest.raises(ValueError, match="trusted normal"):
+        model.raw_score(query)
+
+
+def test_instance_support_excludes_same_scene_or_near_target_frames_only():
+    from src.normal import InstanceSupport
+
+    model = InstanceSupport(memory_size=5, temporal_window=16)
+    with torch.no_grad():
+        model.memory[:, 0] = torch.arange(5)
+        model.memory_allowed[:2, 0] = True
+        model.memory_allowed[2:, 7] = True
+        model.memory_source.copy_(torch.tensor([0, 1, 1, 1, 0]))
+        model.memory_frame.copy_(torch.tensor([5, 5, 20, 21, 6]))
+    query = torch.zeros(4, 252)
+    source, frame = torch.tensor([0, 1, 0, 1]), torch.tensor([5, 5, 6, 6])
+    energy = model.class_energy(query, source=source, frame=frame)
+    # source 0 uses scene equality; source 1 excludes |frame difference| < 16,
+    # including points across a 16-frame block edge. Other sources stay eligible.
+    torch.testing.assert_close(energy[:, 0], torch.tensor([1., 0., 0., 0.]), rtol=0, atol=0)
+    torch.testing.assert_close(energy[:, 7], torch.tensor([4., 9., 4., 16.]), rtol=0, atol=0)
+    torch.testing.assert_close(model.raw_score(query, source=source, frame=frame),
+                               energy.amin(1), rtol=0, atol=0)
+    # Development supplies no training identities: equal integer IDs in distinct
+    # caches must not be interpreted as the same actual scan.
+    assert model.raw_score(query).eq(0).all()
+    with pytest.raises(ValueError, match="together"):
+        model.class_energy(query, source=source)
+    with torch.no_grad():
+        model.memory_source.fill_(1)
+        model.memory_frame.fill_(5)
+    assert torch.isinf(model.raw_score(query[:1], source=torch.tensor([1]), frame=torch.tensor([5]))).all()
+
+
+def test_instance_support_spectral_projection_preserves_all_whitened_directions():
+    from src.normal import InstanceSupport
+
+    rng = np.random.default_rng(84)
+    left = np.linalg.qr(rng.normal(size=(252, 252)))[0]
+    right = np.linalg.qr(rng.normal(size=(252, 252)))[0]
+    matrix = ((left * np.linspace(.1, 3., 252)) @ right.T).astype(np.float32)
+    model = InstanceSupport(memory_size=1)
+    with torch.no_grad():
+        model.transform.copy_(torch.from_numpy(matrix))
+    assert model.project_metric() is model
+    u, singular, vh = np.linalg.svd(matrix.astype(float), full_matrices=False)
+    expected = (u * singular.clip(.5, 2)) @ vh
+    actual = model.transform.detach().numpy()
+    np.testing.assert_allclose(actual, expected, rtol=0, atol=6e-6)
+    projected = np.linalg.svd(actual.astype(float), compute_uv=False)
+    assert projected.min() >= .5 - 1e-5 and projected.max() <= 2 + 1e-5
+    delta = rng.normal(size=(32, 252))
+    ratio = np.square(delta @ actual).sum(1) / np.square(delta).sum(1)
+    assert np.all((ratio >= .25 - 1e-5) & (ratio <= 4 + 1e-5))
+
+
+def test_instance_support_training_cache_reload_and_chunks_preserve_the_same_metric():
+    from src.normal import InstanceSupport
 
     rng = np.random.default_rng(827)
-    model = CrossEvidence(modes=1)
-    features = rng.normal(size=(7, 252)).astype(np.float32)
-    location = rng.normal(scale=.3, size=252).astype(np.float32)
-    scale = rng.uniform(.5, 2., size=252).astype(np.float32)
-    factor = np.tril(rng.normal(scale=.02, size=(72, 72)))
-    np.fill_diagonal(factor, np.linspace(.7, 1.3, 72))
-    covariance = factor @ factor.T
-    centers = rng.normal(scale=.4, size=(3, 72)).astype(np.float32)
+    model = InstanceSupport(memory_size=6)
     with torch.no_grad():
-        model.feat_location.copy_(torch.from_numpy(location))
-        model.feat_scale.copy_(torch.from_numpy(scale))
-        model.deep_present.zero_()
-        model.deep_present[[0, 7, 18]] = True
-        model.deep_centers[[0, 7, 18]] = torch.from_numpy(centers)
-        # Absent centers must never enter the likelihood or its prior normalization.
-        model.deep_centers[1].fill_(100.)
-        model.deep_whitener.copy_(torch.from_numpy(np.linalg.inv(factor).T))
-        model.deep_log_volume.fill_(np.log(np.diag(factor)).sum())
-    deep = ((features.astype(np.float64) - location) / scale)[:, 180:]
-    components = np.stack([multivariate_normal.logpdf(deep, mean=center, cov=covariance)
-                           for center in centers], axis=1)
-    expected_classes = np.full((len(features), 19), np.inf)
-    expected_classes[:, [0, 7, 18]] = -components + np.log(len(centers))
-    actual = model.base_class_energy(torch.from_numpy(features))
-    np.testing.assert_allclose(actual.numpy(), expected_classes, rtol=2e-6, atol=2e-5)
-    np.testing.assert_allclose(model.deep_energy(torch.from_numpy(features)).numpy(),
-                               -logsumexp(-expected_classes, axis=1), rtol=2e-6, atol=2e-5)
-    with torch.autocast("cpu", dtype=torch.bfloat16):
-        torch.testing.assert_close(model.base_class_energy(torch.from_numpy(features)), actual, rtol=0, atol=0)
-    model.deep_present.zero_()
-    with pytest.raises(ValueError, match="observed normal class"):
-        model.base_class_energy(torch.from_numpy(features))
-
-
-def test_cross_evidence_learned_class_prior_preserves_fixed_deep_marginal():
-    from scipy.special import logsumexp
-    from src.normal import CrossEvidence
-
-    rng = np.random.default_rng(746)
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(206)
-        model = CrossEvidence(hidden=4, latent=2)
-    features = torch.from_numpy(rng.normal(size=(5, 252)).astype(np.float32))
-    present = [0, 7, 18]
+        model.memory.copy_(torch.from_numpy(rng.normal(scale=.1, size=(6, 252)).astype(np.float32)))
+        model.memory_allowed[:3, 0] = True
+        model.memory_allowed[3:, 7] = True
+    query = torch.from_numpy(rng.normal(scale=.1, size=(7, 252)).astype(np.float32))
+    model.eval().freeze_metric()
     with torch.no_grad():
-        model.deep_present.zero_()
-        model.deep_present[present] = True
-        model.deep_centers[7, 0] = 3
-        model.deep_centers[18, 1] = -2
-    base = model.base_class_energy(features)
-    marginal = model.deep_energy(features)
-    initial = model.predict(features)["deep_energy"]
-    assert torch.count_nonzero(model.prior_head.weight) == torch.count_nonzero(model.prior_head.bias) == 0
-    torch.testing.assert_close(initial[:, present], marginal[:, None].expand(-1, 3) + np.log(3),
-                               rtol=0, atol=1e-5)
-    assert torch.isinf(initial[:, ~model.deep_present]).all()
-    assert not torch.allclose((-base).softmax(-1)[:, present], torch.full((5, 3), 1 / 3))
-
-    weight = rng.normal(scale=1.7, size=(19, 2)).astype(np.float32)
-    bias = rng.normal(scale=.7, size=19).astype(np.float32)
-    bias[1] = 1000
-    with torch.no_grad():
-        model.prior_head.weight.copy_(torch.from_numpy(weight))
-        model.prior_head.bias.copy_(torch.from_numpy(bias))
-    latent = model.encoder(model._features(features)[:, 180:]).detach().numpy().astype(np.float64)
-    logits = latent @ weight.astype(np.float64).T + bias.astype(np.float64)
-    logits[:, ~model.deep_present.numpy()] = -np.inf
-    log_rho = logits - logsumexp(logits, axis=1, keepdims=True)
-    learned = model.deep_class_energy(features)
-    np.testing.assert_allclose(learned.detach().numpy(), marginal[:, None].numpy() - log_rho,
-                               rtol=2e-6, atol=2e-5)
-    np.testing.assert_allclose((-learned).softmax(-1).detach().numpy(), np.exp(log_rho), rtol=2e-5, atol=2e-6)
-    np.testing.assert_allclose(np.exp(log_rho).sum(1), np.ones(5), rtol=0, atol=1e-14)
-    torch.testing.assert_close(model.predict(features)["deep_energy"], learned, rtol=0, atol=0)
-    torch.testing.assert_close(model.base_class_energy(features), base, rtol=0, atol=0)
-    torch.testing.assert_close(model.deep_energy(features), marginal, rtol=0, atol=0)
-    # Marginalize the learned joint in log space to avoid underflow in 72D.
-    torch.testing.assert_close(-torch.logsumexp(-learned, -1), marginal, rtol=0, atol=2e-5)
-    assert not torch.allclose(learned[:, present], initial[:, present])
-    with torch.autocast("cpu", dtype=torch.bfloat16):
-        torch.testing.assert_close(model.deep_class_energy(features), learned, rtol=0, atol=0)
-
-
-def test_cross_evidence_observations_change_joint_class_support_and_partial_label_gradients():
-    from src.normal import CrossEvidence
-
-    # Artificial mechanism fixture: identical deep input, distinct observed detail.
-    # Other normal classes are alternative explanations, never anomaly labels.
-    model = CrossEvidence(modes=1, hidden=4, latent=2)
-    with torch.no_grad():
-        for parameter in model.parameters():
-            parameter.zero_()
-        model.deep_present.zero_()
-        model.deep_present[:2] = True
-        model.class_embedding.weight[0, 0] = 1
-        model.class_embedding.weight[1, 0] = 3
-        model.encoder[2].bias[0] = .5
-        model.density_head[0].weight[0, 0] = 1
-        model.density_head[-1].weight[0, 0] = 1
-        model.density_head[-1].weight[180, 0] = 1
-    features = torch.zeros(2, 252)
-    conditions = torch.zeros(2, 2)
-    parameters = model.predict(features)
-    means = parameters["means"][0, :2, 0].detach()
-    features[:, :180] = means[:, :180]
-    conditions[:] = means[:, 180:]
-    for name, value in model.predict(features).items():
-        torch.testing.assert_close(value, parameters[name], rtol=0, atol=0)
-        torch.testing.assert_close(value[0], value[1], rtol=0, atol=0)
-    deep = model.deep_class_energy(features)
-    torch.testing.assert_close(deep[0], deep[1], rtol=0, atol=0)
-    energy = model.class_energy(features, conditions)
-    assert energy.argmin(1).tolist() == [0, 1]
-    assert energy[0, 0] < energy[0, 1] and energy[1, 1] < energy[1, 0]
-    torch.testing.assert_close(model.raw_score(features, conditions),
-                               -torch.logsumexp(-energy, -1), rtol=0, atol=0)
-    allowed = torch.zeros(2, 19, dtype=torch.bool)
-    allowed[0, 0], allowed[1, 1] = True, True
-    logits = -energy
-    normalizer = torch.logsumexp(logits, -1)
-    supported = torch.logsumexp(logits.masked_fill(~allowed, -torch.inf), -1)
-    partial_ce = normalizer - supported
-    torch.testing.assert_close(partial_ce, -torch.log(logits.softmax(-1)[allowed]), rtol=1e-4, atol=1e-5)
-    # Admitting both normal explanations makes their summed posterior one; no
-    # separate binary rejection target is assigned to either class.
-    allowed[:, :2] = True
-    coarse_ce = normalizer - torch.logsumexp(logits.masked_fill(~allowed, -torch.inf), -1)
-    torch.testing.assert_close(coarse_ce, torch.zeros_like(coarse_ce), rtol=0, atol=0)
-    assert (coarse_ce <= partial_ce).all()
-    # One shared joint likelihood supplies both observation and prior gradients;
-    # unequal fixture weights prevent exact cancellation between the two classes.
-    loss = ((-supported / model.dimensions + .1 * partial_ce) * torch.tensor([.25, .75])).sum()
+        before = model.raw_score(query).clone()
+    model.train()
+    optimizer = torch.optim.SGD(model.parameters(), lr=.05)
+    energy = model.class_energy(query)[:, [0, 7]]
+    target = torch.arange(len(query)) % 2
+    loss = (torch.nn.functional.cross_entropy(-energy / model.temperature, target)
+            + .01 * energy.gather(1, target[:, None]).mean())
+    optimizer.zero_grad(set_to_none=True)
     loss.backward()
-    assert model.class_embedding.weight.grad[:2].abs().sum() > 0
-    for layer in (model.density_head[0], model.density_head[-1]):
-        assert torch.isfinite(layer.weight.grad).all() and layer.weight.grad.abs().sum() > 0
-    for parameter in model.prior_head.parameters():
-        assert torch.isfinite(parameter.grad).all() and parameter.grad.abs().sum() > 0
-        assert torch.count_nonzero(parameter.grad[~model.deep_present]) == 0
+    assert torch.isfinite(model.transform.grad).all() and model.transform.grad.abs().sum() > 0
+    assert not model.memory.requires_grad
+    optimizer.step()
+    model.project_metric().eval().freeze_metric()
+    with torch.no_grad():
+        fitted = model.raw_score(query)
+        assert not torch.allclose(fitted, before)
+        full = model.class_energy(query)
+        for chunk in (1, 3, 4096):
+            model.point_chunk = chunk
+            torch.testing.assert_close(model.raw_score(query), fitted, rtol=2e-5, atol=2e-5)
+            torch.testing.assert_close(model.class_energy(query), full, rtol=2e-5, atol=2e-5)
+        order = torch.arange(len(query) - 1, -1, -1)
+        torch.testing.assert_close(model.raw_score(query[order]), fitted[order], rtol=2e-5, atol=2e-5)
+    state = deepcopy(model.state_dict())
+    assert [name for name, value in state.items() if value.shape == (6, 252)] == ["memory"]
+    restored = InstanceSupport(memory_size=6).eval()
+    restored.load_state_dict(state, strict=True)
+    with torch.no_grad():
+        torch.testing.assert_close(restored.raw_score(query), fitted, rtol=2e-5, atol=2e-5)
+    # Reload into an already cached model must not keep transformed old memory.
+    state["transform"] *= 1.2
+    restored.load_state_dict(state, strict=True)
+    with torch.no_grad():
+        torch.testing.assert_close(restored.raw_score(query), fitted * 1.2 ** 2, rtol=2e-5, atol=2e-5)
+        restored.memory[0].add_(.25)
+        white = (query.double() - restored.location.double()) @ restored.whitener.double()
+        bank = (restored.memory.double() - restored.location.double()) @ restored.whitener.double()
+        matrix = restored.transform.double()
+        expected = ((white @ matrix)[:, None] - (bank @ matrix)[None]).square().sum(-1).amin(1)
+        torch.testing.assert_close(restored.raw_score(query).double(), expected, rtol=2e-5, atol=2e-5)
 
 
 def test_score_calibration_uses_frozen_groups_and_preserves_unbounded_tail_order():
@@ -843,27 +735,21 @@ def test_range_calibration_atoms_keep_class_cdf_and_local_atoms_fall_back():
                                calibration(probes, torch.ones(3, dtype=torch.long), context), rtol=0, atol=0)
 
 
-def test_cross_evidence_calibrates_one_raw_score_using_supplied_official_prediction():
-    from src.normal import CrossEvidence
+def test_instance_support_calibrates_only_the_score_using_supplied_official_prediction():
+    from src.normal import InstanceSupport
 
-    model = CrossEvidence()
+    model = InstanceSupport(memory_size=1)
+    model.memory_allowed[0, 18] = True
     features, conditions = torch.zeros(3, 252), torch.zeros(3, 2)
-    with torch.no_grad():
-        model.deep_present.zero_()
-        model.deep_present[18] = True
-    predicted = model.predict(features)
-    energy = model.class_energy(features, conditions)
-    raw = model.raw_score(features, conditions)
-    torch.testing.assert_close(model.negative_log_likelihood(
-        predicted, model.observations(features, conditions)) + predicted["deep_energy"],
-        energy, rtol=0, atol=0)
-    torch.testing.assert_close(-torch.logsumexp(-energy, -1), raw, rtol=0, atol=0)
+    features[:, 0] = 10
+    energy = model.class_energy(features)
+    raw = model.raw_score(features)
+    torch.testing.assert_close(energy.amin(-1), raw, rtol=0, atol=0)
     scores = torch.cat((torch.linspace(0, 200, 2048), torch.linspace(300, 500, 2048)))
     official_classes = torch.cat((torch.zeros(2048), torch.ones(2048))).long()
     model.calibration.fit(scores, official_classes, torch.zeros(len(scores), 2))
     model.calibration.enabled.fill_(True)
-    # The learned 19-class explanation cannot replace the supplied official
-    # 16-class prediction that selects a frozen calibration group.
+    # A 19-class nearest explanation cannot choose an official 16-class group.
     assert (energy.argmin(1) == 18).all()
     with pytest.raises(ValueError, match="16-class"):
         model(features, conditions)
@@ -919,58 +805,3 @@ def test_support_queries_and_cache_preserve_coarse_normal_candidate_sets(monkeyp
     np.testing.assert_array_equal(np.load(info["paths"]["features"])[:info["count"], 0], expected)
     with pytest.raises(ValueError, match="will not overwrite"):
         support_cache(model, records, tmp_path, torch.device("cpu"), workers=0)
-
-
-def test_partial_label_normal_em_matches_independent_penalized_likelihood(tmp_path):
-    from scipy.special import logsumexp
-    from scipy.stats import multivariate_normal
-    from src.normal import CrossEvidence
-    from src.train import cross_initialize
-
-    # Artificial implementation fixture, not measured scientific training data.
-    rng = np.random.default_rng(206)
-    latent = np.r_[np.zeros(60), np.ones(60), np.arange(120) % 2].astype(int)
-    features = rng.normal(size=(240, 252)).astype(np.float32)
-    features[:, 180:188] += (latent[:, None] * 2 - 1) * .45
-    semantic = np.r_[np.full(60, 3), np.full(60, 8), np.full(120, -1)].astype(np.int16)
-    allowed = np.zeros((240, 19), dtype=bool)
-    allowed[:60, 3], allowed[60:120, 8] = True, True
-    allowed[120:, [3, 8, 14]] = True  # Class 14 has no singleton anchor.
-    values = dict(features=features, conditions=rng.normal(size=(240, 2)).astype(np.float32),
-                  semantic=semantic, allowed=allowed)
-    paths = {key: str(tmp_path / (key + ".npy")) for key in values}
-    for key, value in values.items():
-        np.save(paths[key], value)
-    indices = [np.flatnonzero(semantic == category) for category in range(19)]
-    indices.append(np.flatnonzero(semantic == -1))
-    model = CrossEvidence()
-    report = cross_initialize(model, dict(paths=paths, count=240), indices)
-    assert report["singleton_points"] == report["coarse_points"] == 120
-    assert 1 <= report["deep_em_iterations"] <= 20
-    assert np.all(np.diff(report["deep_penalized_objectives"]) >= -1e-6)
-    np.testing.assert_array_equal(model.deep_present.nonzero().flatten().numpy(), [3, 8])
-
-    # Reconstruct the covariance from saved FP32 parameters; SciPy evaluates the
-    # class densities independently of the implementation's whitened-distance E-step.
-    deep = ((features.astype(float) - model.feat_location.numpy())
-            / model.feat_scale.numpy())[:, 180:]
-    inverse = np.linalg.inv(model.deep_whitener.numpy().astype(float))
-    covariance = inverse.T @ inverse
-    component = np.column_stack([multivariate_normal.logpdf(
-        deep, mean=model.deep_centers[category].numpy(), cov=covariance) for category in (3, 8)]) - np.log(2)
-    unrestricted = logsumexp(component, axis=1).sum()
-    admitted = allowed[:, [3, 8]]
-    component[~admitted] = -np.inf
-    marginal = logsumexp(component, axis=1)
-    responsibility = np.exp(component - marginal[:, None])
-    assert np.all(responsibility[~admitted] == 0)
-    np.testing.assert_array_equal(responsibility[:120], np.eye(2)[latent[:120]])
-    assert unrestricted - marginal.sum() > .01  # The label constraint changes this fixture.
-    objective = marginal.sum() - .5 * len(deep) * .01 * np.trace(np.linalg.inv(covariance))
-    assert abs(objective - report["deep_penalized_objective"]) / len(deep) < 2e-5
-    assert abs(marginal.sum() - report["deep_partial_log_likelihood"]) / len(deep) < 2e-5
-
-    semantic[120] = allowed[120].argmax()
-    np.save(paths["semantic"], semantic)
-    with pytest.raises(ValueError, match="singleton identities disagree"):
-        cross_initialize(CrossEvidence(), dict(paths=paths, count=240), indices)

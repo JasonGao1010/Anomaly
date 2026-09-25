@@ -11,19 +11,21 @@ from torch_scatter import segment_csr
 
 
 SUPPORT_VERSION = "AJAE-frozen-support"
-CROSS_VERSION = "AJAE-observation-evidence"
+INSTANCE_VERSION = "AJAE-instance-support"
 
 
-def support_conditions(xyzi, indices=None):
-    """Measured range and eighth-neighbor spacing, using actual returns only."""
-    from scipy.spatial import cKDTree
+def support_conditions(xyzi, indices=None, *, range_only=False):
+    """Measured range, with spacing computed only for models that consume it."""
     xyz = np.asarray(xyzi[:, :3], dtype=np.float64)
     selected = xyz if indices is None else xyz[np.asarray(indices)]
-    if len(xyz) < 9 or not np.isfinite(xyz).all():
-        raise ValueError("normal support requires at least nine finite returns")
+    if len(xyz) < (1 if range_only else 9) or not np.isfinite(xyz).all():
+        raise ValueError("normal support has too few or nonfinite returns")
     distance = np.linalg.norm(selected, axis=1)
     if np.any(distance <= 0):
         raise ValueError("range must be positive at actual returns")
+    if range_only:
+        return np.column_stack((np.log(distance), np.zeros_like(distance))).astype(np.float32)
+    from scipy.spatial import cKDTree
     spacing = cKDTree(xyz).query(selected, k=[9], workers=1)[0][:, 0]
     # A millimetre floor handles coincident returns without an infinite logarithm.
     return np.column_stack((np.log(distance), np.log(np.maximum(spacing, .001)))).astype(np.float32)
@@ -237,163 +239,159 @@ class ScoreCalibration(nn.Module):
         return low_y + (scores - low_x) * ((high_y - low_y) / (high_x - low_x))
 
 
-class CrossEvidence(nn.Module):
-    """Class-conditional normal support for deep features and observed detail.
+class InstanceSupport(nn.Module):
+    """One observed normal instance jointly supports all frozen feature levels."""
 
-    Deep features already observe the target point: this is cross-level consistency,
-    not a blind-spot model or a guarantee that an unknown object is unpredictable.
-    """
-
-    dimensions = 182
+    dimensions = 252
     classes = 19
-    point_chunk = 1024
+    point_chunk = 4096
 
-    def __init__(self, modes=1, hidden=128, latent=64):
+    def __init__(self, memory_size=16384, temporal_window=16):
         super().__init__()
-        if min(modes, hidden, latent) < 1:
-            raise ValueError("cross evidence dimensions must be positive")
-        self.modes = modes
-        self.register_buffer("feat_location", torch.zeros(252))
-        self.register_buffer("feat_scale", torch.ones(252))
-        self.register_buffer("geo_location", torch.zeros(2))
-        self.register_buffer("geo_scale", torch.ones(2))
-        self.register_buffer("linear", torch.zeros(73, self.dimensions))
+        if memory_size < 1:
+            raise ValueError("normal instance memory must be nonempty")
+        if temporal_window < 1:
+            raise ValueError("normal temporal exclusion window must be positive")
+        self.temporal_window = temporal_window
+        self.register_buffer("location", torch.zeros(self.dimensions))
         self.register_buffer("whitener", torch.eye(self.dimensions))
-        self.register_buffer("deep_centers", torch.zeros(19, 72))
-        self.register_buffer("deep_whitener", torch.eye(72))
-        self.register_buffer("deep_log_volume", torch.tensor(0.))
-        self.register_buffer("deep_present", torch.ones(19, dtype=torch.bool))
+        self.register_buffer("memory", torch.zeros(memory_size, self.dimensions))
+        self.register_buffer("memory_allowed", torch.zeros(memory_size, self.classes, dtype=torch.bool))
+        self.register_buffer("memory_source", torch.full((memory_size,), -1, dtype=torch.long))
+        self.register_buffer("memory_frame", torch.full((memory_size,), -1, dtype=torch.long))
+        self.register_buffer("temperature", torch.tensor(1.))
+        self.transform = nn.Parameter(torch.eye(self.dimensions))
         self.calibration = ScoreCalibration()
-        self.encoder = nn.Sequential(nn.Linear(72, hidden), nn.SiLU(),
-                                     nn.Linear(hidden, latent), nn.SiLU())
-        self.prior_head = nn.Linear(latent, self.classes)
-        nn.init.zeros_(self.prior_head.weight)
-        nn.init.zeros_(self.prior_head.bias)
-        self.class_embedding = nn.Embedding(self.classes, latent)
-        nn.init.normal_(self.class_embedding.weight, std=.02)
-        self.density_head = nn.Sequential(nn.Linear(latent, hidden), nn.SiLU(),
-            nn.Linear(hidden, modes * self.dimensions + modes))
-        self.scale_head = nn.Linear(latent, self.dimensions)
-        nn.init.zeros_(self.scale_head.weight)
-        nn.init.zeros_(self.scale_head.bias)
-        output = self.density_head[-1]
-        nn.init.normal_(output.weight, std=.001)
-        nn.init.zeros_(output.bias)
-        # Distinct component means break the exact symmetry of a mixture at startup.
-        with torch.no_grad():
-            output.bias[:modes * self.dimensions].normal_(std=.01)
+        self.register_buffer("_encoded_memory", torch.empty(0, self.dimensions), persistent=False)
+        self.register_buffer("_memory_norm", torch.empty(0), persistent=False)
+        self._cache_key = None
+        self._label_key = None
+        self._class_indices = None
 
-    def _features(self, features):
+    def _invalidate_cache(self):
+        self._cache_key = None
+
+    def train(self, mode=True):
+        if mode:
+            self._invalidate_cache()
+        return super().train(mode)
+
+    def _load_from_state_dict(self, *args, **kwargs):
+        self._invalidate_cache()
+        self._label_key = None
+        return super()._load_from_state_dict(*args, **kwargs)
+
+    def encode(self, features):
+        if features.ndim != 2 or features.shape[1] != self.dimensions:
+            raise ValueError("normal instance features must have shape [N, 252]")
+        with torch.autocast(features.device.type, enabled=False):
+            return (features.float() - self.location) @ (self.whitener @ self.transform)
+
+    @torch.no_grad()
+    def project_metric(self):
+        # Keep every whitened direction: squared distances remain between
+        # 0.25 and 4 times their untrained values, with no learned support radius.
+        with torch.autocast(self.transform.device.type, enabled=False):
+            left, singular, right = torch.linalg.svd(self.transform.float(), full_matrices=False)
+            self.transform.copy_((left * singular.clamp(.5, 2)[None]) @ right)
+        self._invalidate_cache()
+        return self
+
+    def _state_key(self):
+        return (self.memory.device, self.memory.dtype,
+                self.location._version, self.whitener._version,
+                self.transform._version, self.memory._version)
+
+    @torch.no_grad()
+    def freeze_metric(self):
+        self._encoded_memory = self.encode(self.memory).detach()
+        self._memory_norm = self._encoded_memory.square().sum(-1)
+        if not bool(torch.isfinite(self._memory_norm).all()):
+            raise ValueError("normal memory has nonfinite transformed features")
+        self._cache_key = self._state_key()
+        return self
+
+    def _bank(self):
+        if self.training or torch.is_grad_enabled():
+            # Query and reference transformations both differentiate through T.
+            values = self.encode(self.memory)
+            return values, values.square().sum(-1)
+        if self._cache_key != self._state_key():
+            self.freeze_metric()
+        return self._encoded_memory, self._memory_norm
+
+    def _members(self):
+        key = (self.memory_allowed.device, self.memory_allowed._version)
+        if self._label_key != key:
+            counts = self.memory_allowed.sum(-1)
+            self._class_indices = [((counts == 1) & self.memory_allowed[:, category]).nonzero().flatten()
+                                   for category in range(self.classes)]
+            self._label_key = key
+        return self._class_indices
+
+    @staticmethod
+    def _validate_identity(features, conditions, source, frame):
         if features.ndim != 2 or features.shape[1] != 252:
-            raise ValueError("cross evidence requires point features with shape [N, 252]")
-        return (features.float() - self.feat_location) / self.feat_scale
+            raise ValueError("normal instance features must have shape [N, 252]")
+        if conditions is not None and conditions.shape != (len(features), 2):
+            raise ValueError("normal support conditions must identify the same points")
+        if (source is None) != (frame is None):
+            raise ValueError("source and frame identities must be supplied together")
+        if source is not None:
+            if source.shape != (len(features),) or frame.shape != (len(features),):
+                raise ValueError("source and frame identities must identify the same points")
+            if source.dtype not in (torch.int32, torch.int64) or frame.dtype not in (torch.int32, torch.int64):
+                raise ValueError("source and frame identities must be integer tensors")
 
-    def predict(self, features):
+    def _distance(self, encoded, bank, norm, source=None, frame=None):
+        distance = (encoded.square().sum(-1, keepdim=True) + norm[None]
+                    - 2 * encoded @ bank.T).clamp_min(0)
+        if source is not None:
+            # Source frames carry nuScenes scene IDs; target frames carry the
+            # original 206 indices. Exclude adjacent target frames across blocks.
+            nearby = torch.where(source[:, None] == 1,
+                (frame[:, None] - self.memory_frame[None]).abs() < self.temporal_window,
+                frame[:, None] == self.memory_frame[None])
+            excluded = (source[:, None] == self.memory_source[None]) & nearby
+            distance = distance.masked_fill(excluded, torch.inf)
+        return distance
+
+    def class_energy(self, features, conditions=None, source=None, frame=None):
+        """Fine-class distances; coarse labels never create false fine anchors."""
+        self._validate_identity(features, conditions, source, frame)
         with torch.autocast(features.device.type, enabled=False):
-            deep = self._features(features)[:, 180:]
-            latent = self.encoder(deep)
-            raw = self.density_head(latent[:, None] + self.class_embedding.weight[None])
-            means, weights = raw.split((self.modes * self.dimensions, self.modes), -1)
-            log_prior = self.prior_head(latent).masked_fill(~self.deep_present[None], -torch.inf).log_softmax(-1)
-            # Shared uncertainty prevents classes from competing through arbitrary
-            # covariance volumes; means and mode weights provide class differences.
-            return dict(means=means.reshape(-1, self.classes, self.modes, self.dimensions),
-                        log_scale=3 * torch.tanh(self.scale_head(latent) / 3),
-                        log_weights=weights.log_softmax(-1),
-                        deep_energy=self.deep_energy(features)[:, None] - log_prior)
-
-    def observations(self, features, conditions):
-        if conditions.shape != (len(features), 2):
-            raise ValueError("cross evidence conditions must identify the same points")
-        with torch.autocast(features.device.type, enabled=False):
-            values = self._features(features)
-            geometry = (conditions.float() - self.geo_location) / self.geo_scale
-            observed = torch.cat((values[:, :180], geometry), -1)
-            base = F.pad(values[:, 180:], (1, 0), value=1) @ self.linear
-            return (observed - base) @ self.whitener
-
-    def base_class_energy(self, features):
-        """Fixed Gaussian class support used only to retain absolute p0(D)."""
-        with torch.autocast(features.device.type, enabled=False):
-            if not bool(self.deep_present.any()):
-                raise ValueError("deep support requires at least one observed normal class")
-            deep = self._features(features)[:, 180:] @ self.deep_whitener
-            centers = self.deep_centers @ self.deep_whitener
-            square = (deep.square().sum(-1, keepdim=True) + centers.square().sum(-1)[None]
-                      - 2 * deep @ centers.T).clamp_min(0)
-            energy = (.5 * square + self.deep_log_volume + 36 * math.log(2 * math.pi)
-                      + self.deep_present.sum().to(deep.dtype).log())
-            return energy.masked_fill(~self.deep_present[None], torch.inf)
-
-    def deep_energy(self, features):
-        return -torch.logsumexp(-self.base_class_energy(features), -1)
-
-    def deep_class_energy(self, features):
-        """Learn rho(c|D) while its class sum remains the fixed normal p0(D)."""
-        with torch.autocast(features.device.type, enabled=False):
-            latent = self.encoder(self._features(features)[:, 180:])
-            log_prior = self.prior_head(latent).masked_fill(~self.deep_present[None], -torch.inf).log_softmax(-1)
-            return self.deep_energy(features)[:, None] - log_prior
-
-    def class_energy(self, features, conditions, predicted=None):
-        if features.ndim != 2 or features.shape[1] != 252 or conditions.shape != (len(features), 2):
-            raise ValueError("class evidence features and observations must identify the same points")
-        with torch.autocast(features.device.type, enabled=False):
-            if predicted is not None:
-                # The observation likelihood updates the class posterior itself:
-                # p(c,D,O) = p0(D) rho(c|D) p(O|D,c), with a normalized class prior.
-                if predicted["deep_energy"].shape != (len(features), self.classes):
-                    raise ValueError("predicted class support must identify the same points and classes")
-                return (predicted["deep_energy"]
-                        + self.negative_log_likelihood(predicted, self.observations(features, conditions)))
+            bank, norm = self._bank()
+            members = self._members()
             chunks = []
             for start in range(0, len(features), self.point_chunk):
                 stop = start + self.point_chunk
-                f, g = features[start:stop], conditions[start:stop]
-                chunks.append(self.class_energy(f, g, self.predict(f)))
+                distance = self._distance(self.encode(features[start:stop]), bank, norm,
+                    None if source is None else source[start:stop],
+                    None if frame is None else frame[start:stop])
+                chunks.append(torch.stack([distance[:, index].amin(-1) if len(index)
+                    else distance.new_full((len(distance),), torch.inf) for index in members], -1))
             return torch.cat(chunks) if chunks else features.new_empty((0, self.classes), dtype=torch.float32)
 
-    def raw_score(self, features, conditions):
+    def raw_score(self, features, conditions=None, source=None, frame=None):
+        self._validate_identity(features, conditions, source, frame)
         with torch.autocast(features.device.type, enabled=False):
-            # Class prediction and normal rejection use the same joint evidence.
-            return -torch.logsumexp(-self.class_energy(features, conditions), -1)
-
-    def negative_log_likelihood(self, predicted, observed):
-        if (observed.ndim != 2 or observed.shape[1] != self.dimensions
-                or predicted["means"].shape != (len(observed), self.classes, self.modes, self.dimensions)
-                or predicted["log_weights"].shape != (len(observed), self.classes, self.modes)
-                or predicted["log_scale"].shape != observed.shape):
-            raise ValueError("class-conditional predictions and observations have incompatible shapes")
-        with torch.autocast(observed.device.type, enabled=False):
-            residual = ((observed[:, None, None] - predicted["means"])
-                        * torch.exp(-predicted["log_scale"][:, None, None]))
-            component = predicted["log_weights"] - .5 * residual.square().sum(-1)
-            # Include covariance volume; inflating predicted uncertainty is not free.
-            return (.5 * self.dimensions * math.log(2 * math.pi)
-                    + predicted["log_scale"].sum(-1)[:, None] - torch.logsumexp(component, -1))
-
-    def prediction(self, features):
-        with torch.autocast(features.device.type, enabled=False):
-            if features.ndim != 2 or features.shape[1] != 252:
-                raise ValueError("cross evidence requires point features with shape [N, 252]")
-            inverse = torch.linalg.inv(self.whitener)
+            valid = self.memory_allowed.any(-1)
+            if not bool(valid.any()):
+                raise ValueError("normal instance memory has no trusted normal points")
+            bank, norm = self._bank()
             chunks = []
             for start in range(0, len(features), self.point_chunk):
-                f = features[start:start+self.point_chunk]
-                predicted = self.predict(f)
-                conditional_mean = (predicted["log_weights"].exp()[..., None] * predicted["means"]).sum(2)
-                # Use p(c|D), not p(c|D,O): this prediction must not read its target.
-                class_probability = (-predicted["deep_energy"]).softmax(-1)
-                mean = (class_probability[..., None] * conditional_mean).sum(1)
-                base = F.pad(self._features(f)[:, 180:], (1, 0), value=1) @ self.linear
-                chunks.append(base + mean @ inverse)
-            expected = torch.cat(chunks) if chunks else features.new_empty((0, self.dimensions), dtype=torch.float32)
-            return dict(features=expected[:, :180] * self.feat_scale[:180] + self.feat_location[:180],
-                        conditions=expected[:, 180:] * self.geo_scale + self.geo_location)
+                stop = start + self.point_chunk
+                distance = self._distance(self.encode(features[start:stop]), bank, norm,
+                    None if source is None else source[start:stop],
+                    None if frame is None else frame[start:stop])
+                # All trusted normal instances support rejection, including
+                # coarse labels. One identical reference supplies all 252 values.
+                chunks.append(distance.masked_fill(~valid[None], torch.inf).amin(-1))
+            return torch.cat(chunks) if chunks else features.new_empty(0, dtype=torch.float32)
 
     def forward(self, features, conditions, predicted=None):
-        score = self.raw_score(features, conditions)
-        return self.calibration(score, predicted, conditions)
+        return self.calibration(self.raw_score(features, conditions), predicted, conditions)
 
 
 NORMAL_MODES = ("field",)

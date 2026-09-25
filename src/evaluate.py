@@ -28,13 +28,14 @@ def normal_record(record):
 
 class PreparedScans(Scans):
     def __init__(self, manifest, *, relations=False, normal=False, voxel=True, normal_reference=True, hypotheses=False,
-                 frozen=False):
+                 frozen=False, range_only=False):
         super().__init__(manifest)
         self.relations = relations
         self.normal, self.voxel = normal, voxel
         self.normal_reference = normal_reference
         self.hypotheses = hypotheses
         self.frozen = frozen
+        self.range_only = range_only
 
     def __getitem__(self, index):
         sample = super().__getitem__(index)
@@ -43,7 +44,7 @@ class PreparedScans(Scans):
                    for key, value in sample.items()})
         if self.frozen:
             from .normal import support_conditions
-            result["conditions"] = torch.from_numpy(support_conditions(sample["xyzi"]))
+            result["conditions"] = torch.from_numpy(support_conditions(sample["xyzi"], range_only=self.range_only))
         if self.hypotheses:
             from .normal import hypothesis_observation
             result["observation"] = hypothesis_observation(sample["xyzi"])
@@ -110,126 +111,68 @@ def evaluate_normal(model, manifest, device, workers=2):
 
 
 @torch.no_grad()
-def evaluate_cross_normal(scorer, saved, device):
-    """Test observed-detail contributions on every cached odd-block normal 201 point."""
-    from .data import NORMAL_CLASSES
-    from .normal import CROSS_VERSION
+def evaluate_instance_normal(scorer, saved, device):
+    """Compare learned and identity metrics on the same normal 201 points and bank."""
+    from .normal import InstanceSupport, INSTANCE_VERSION
+    from .train import normal_cache, instance_development
 
-    if saved.get("version") != CROSS_VERSION:
-        raise ValueError("class-evidence diagnostics require the current checkpoint version")
-    directory = Path(saved["config"]["features"])
-    metadata_path = directory / "development_features.json"
+    if saved.get("version") != INSTANCE_VERSION:
+        raise ValueError("instance-support diagnostics require the current checkpoint version")
+    metadata_path = Path(saved["config"]["features"]) / "development_features.json"
     cache = json.loads(metadata_path.read_text())
-    count, capacity = cache["count"], cache["capacity"]
-    if (cache.get("labels") != "normal_candidate_sets_v1" or not 0 < count <= capacity
-            or count != saved["config"]["development_points"]):
-        raise ValueError("normal development cache identity or actual count disagrees with the checkpoint")
-    shapes = dict(features=(252,), conditions=(2,), allowed=(19,), semantic=(), source=(), frame=(), slot=())
-    arrays = {name: np.load(cache["paths"][name], mmap_mode="r", allow_pickle=False) for name in shapes}
-    for name, shape in shapes.items():
-        if arrays[name].shape != (capacity, *shape):
-            raise ValueError(f"normal cache {name} shape does not match its recorded capacity")
-    if (arrays["allowed"].dtype != np.bool_
-            or any(not np.issubdtype(arrays[name].dtype, np.integer)
-                   for name in ("semantic", "source", "frame", "slot"))):
-        raise ValueError("normal cache labels and point identities have invalid types")
-    # Check every recorded span, including unselected source/even-block spans,
-    # so unused capacity or an incorrect source code cannot enter the population.
-    spans, cursor = [], 0
+    if (cache.get("labels") != "normal_candidate_sets_v1"
+            or not 0 < cache["count"] <= cache["capacity"]
+            or cache["count"] != saved["config"]["development_points"]):
+        raise ValueError("normal development cache disagrees with the checkpoint")
+    # Confirm the source population before loading feature tensors: normal 201
+    # supplies the diagnostic; normal nuScenes supplementation is excluded.
+    cursor = 0
+    expected = 0
+    selected_frames = []
     for index, row in enumerate(cache["frames"]):
-        begin, end = row["begin"], row["end"]
-        if row["index"] != index or begin != cursor or not begin <= end <= count:
-            raise ValueError("normal cache frame spans do not cover exactly its actual point count")
-        if row["source"] not in ("normal_stu", "nuscenes"):
-            raise ValueError("normal mechanism diagnostics cannot consume anomaly or augmented sources")
-        target = row["source"] == "normal_stu"
-        if target and str(row["scene"]) != "201":
-            raise ValueError("normal target development must identify sequence 201")
-        if (not np.all(arrays["source"][begin:end] == int(target))
-                or not np.all(arrays["frame"][begin:end] == index)
-                or len(np.unique(arrays["slot"][begin:end])) != end - begin):
-            raise ValueError("normal cache source/frame/return-slot identities disagree")
-        if target and index // 64 % 2 == 1:
-            spans.append((begin, end))
-        cursor = end
-    if cursor != count or not spans or not sum(end - begin for begin, end in spans):
-        raise ValueError("normal cache lacks a complete nonempty odd-block 201 population")
-
+        if (row["index"] != index or row["begin"] != cursor
+                or not cursor <= row["end"] <= cache["count"]
+                or row["source"] not in ("normal_stu", "nuscenes")):
+            raise ValueError("normal cache frame identities do not cover its actual population")
+        if row["source"] == "normal_stu":
+            if str(row["scene"]) != "201":
+                raise ValueError("normal target development must identify sequence 201")
+            if index // 64 % 2 == 1:
+                expected += row["end"] - row["begin"]
+                selected_frames.append(index)
+        cursor = row["end"]
+    if cursor != cache["count"] or not expected:
+        raise ValueError("normal cache lacks a complete odd-block 201 population")
+    data = normal_cache(cache, device)
+    selected = (data["source"] == 1) & ((data["frame"] // 64) % 2 == 1)
+    indices = selected.nonzero().flatten()
+    allowed, labels = data["allowed"][indices], data["semantic"][indices]
+    if (len(indices) != expected or not bool((allowed.sum(1) == 1).all())
+            or not torch.equal(labels, allowed.long().argmax(1))
+            or data["frame"][indices].unique().cpu().tolist() != selected_frames):
+        raise ValueError("normal 201 points must preserve their frame and singleton class identities")
     scorer = scorer.to(device).eval()
-    totals = torch.zeros(3, 19, 11, dtype=torch.float64, device=device)
     started = time.perf_counter()
-    for begin, end in spans:
-        for start in range(begin, end, 1024):
-            stop = min(start + 1024, end)
-            allowed = np.asarray(arrays["allowed"][start:stop])
-            labels = np.asarray(arrays["semantic"][start:stop])
-            if not np.all(allowed.sum(1) == 1) or not np.array_equal(labels, allowed.argmax(1)):
-                raise ValueError("every selected normal 201 point must retain its actual singleton label set")
-            f = torch.tensor(arrays["features"][start:stop], dtype=torch.float32, device=device)
-            g = torch.tensor(arrays["conditions"][start:stop], dtype=torch.float32, device=device)
-            y = torch.tensor(labels, dtype=torch.long, device=device)
-            if not bool(torch.isfinite(f).all() and torch.isfinite(g).all()):
-                raise ValueError("normal cache contains nonfinite observed features or geometry")
-            predicted = scorer.predict(f)
-            deep = predicted["deep_energy"]
-            actual = deep + scorer.negative_log_likelihood(predicted, scorer.observations(f, g))
-            # One common observation is predicted solely from D. Each candidate
-            # class must explain that same input, not its own preferred mean.
-            mixture = (-deep).softmax(-1)[..., None] * predicted["log_weights"].exp()
-            replacement = (mixture[..., None] * predicted["means"]).sum((1, 2))
-            replaced = deep + scorer.negative_log_likelihood(predicted, replacement)
-            energies = torch.stack((deep, actual, replaced), -1)
-            if not bool(torch.isfinite(energies[:, scorer.deep_present]).all()):
-                raise ValueError("nonfinite class evidence in the normal mechanism diagnostic")
-            classes = energies.argmin(1)
-            correct = classes == y[:, None]
-            actual_posterior, replaced_posterior = (-actual).softmax(-1), (-replaced).softmax(-1)
-            posterior_difference = (actual_posterior - replaced_posterior).abs()
-            values = torch.stack((torch.ones_like(y), correct[:, 0], correct[:, 1], correct[:, 2],
-                correct[:, 1] & ~correct[:, 0], ~correct[:, 1] & correct[:, 0],
-                classes[:, 1] != classes[:, 2], correct[:, 1] & ~correct[:, 2],
-                ~correct[:, 1] & correct[:, 2], posterior_difference.amax(1) > 1e-6,
-                posterior_difference.sum(1)), -1).double()
-            far = g[:, 0] >= np.log(35.)
-            for group, mask in enumerate((torch.ones_like(far), ~far, far)):
-                totals[group].index_add_(0, y[mask], values[mask])
-    totals = totals.cpu().numpy()
-    if int(totals[0, :, 0].sum()) != sum(end - begin for begin, end in spans):
-        raise ValueError("normal diagnostic did not cover every selected cached point")
-
-    def summarize_counts(row):
-        names = ("count", "deep_correct", "actual_correct", "replacement_correct",
-                 "actual_corrected_deep_errors", "actual_spoiled_deep_correct",
-                 "actual_replacement_class_disagreement", "actual_corrected_replacement_errors",
-                 "actual_spoiled_replacement_correct", "actual_replacement_posterior_changed")
-        result = {name: int(value) for name, value in zip(names, row)}
-        n = result["count"]
-        result["accuracy"] = {name: float(row[i] / n) if n else None
-                              for i, name in enumerate(("deep", "actual", "replacement"), 1)}
-        result["actual_net_corrected_deep"] = int(row[4] - row[5])
-        result["actual_net_corrected_replacement"] = int(row[7] - row[8])
-        result["actual_replacement_class_disagreement_rate"] = float(row[6] / n) if n else None
-        result["actual_replacement_posterior_changed_rate"] = float(row[9] / n) if n else None
-        result["actual_replacement_mean_posterior_l1"] = float(row[10] / n) if n else None
-        return result
-
-    groups = {}
-    for name, values in zip(("all", "near", "far"), totals):
-        present = values[:, 0] > 0
-        groups[name] = dict(**summarize_counts(values.sum(0)),
-            class_balanced_accuracy={method: float(np.mean(values[present, i] / values[present, 0]))
-                                     if present.any() else None
-                                     for i, method in enumerate(("deep", "actual", "replacement"), 1)},
-            classes=[dict(category=c, name=NORMAL_CLASSES[c], **summarize_counts(row))
-                     for c, row in enumerate(values)])
-    return dict(version=CROSS_VERSION, points=groups["all"]["count"], scans=len(spans), groups=groups,
-        seconds=time.perf_counter() - started, cache=str(metadata_path.resolve()), cache_actual_count=count,
+    learned = instance_development(scorer, data, indices, retain=False)
+    # A fresh module avoids stale projected-bank caches and leaves the actual
+    # scorer untouched. Its sole changed parameter is the metric transform.
+    identity = InstanceSupport(memory_size=saved["config"]["memory_size"]).to(device)
+    identity.load_state_dict(scorer.state_dict(), strict=True)
+    identity.transform.copy_(torch.eye(252, device=device, dtype=identity.transform.dtype))
+    identity.eval()
+    baseline = instance_development(identity, data, indices, retain=False)
+    gain = {}
+    for key, sign in (("class_recall", 1), ("far_class_recall", 1), ("class_ce", -1)):
+        if learned.get(key) is not None and baseline.get(key) is not None:
+            gain[key] = sign * (learned[key] - baseline[key])
+    return dict(version=INSTANCE_VERSION, points=len(indices), scans=len(selected_frames),
+        learned=learned, identity=baseline, metric_gain=gain,
+        seconds=time.perf_counter() - started, cache=str(metadata_path.resolve()),
+        cache_actual_count=cache["count"],
         population="all cached singleton normal 201 points in odd contiguous 64-frame blocks; no subsampling or source supplementation",
-        methods=dict(deep="argmax_c learned normalized prior rho(c|D); fixed p0(D) is common",
-                     actual="argmin_c negative log p0(D) rho(c|D) q(O|D,c)",
-                     replacement="same conditional distributions evaluated at E[O|D] = sum_c p(c|D) sum_k p(k|D,c) mu(c,k)"),
-        ranges=dict(near="range < 35 m", far="range >= 35 m"), posterior_changed_absolute_tolerance=1e-6,
-        role="normal observation-mechanism diagnostic only; feature replacement is not an anomaly, training example, model-selection criterion, or anomaly-detection result")
+        comparison="identical normal memory, preprocessing and queries; identity baseline changes only the 252-dimensional metric transform",
+        metric_gain_definition="learned minus identity for recall; identity minus learned for cross-entropy",
+        role="normal semantic and support diagnostic; not anomaly-detection accuracy")
 
 
 def precision(device):
@@ -278,10 +221,12 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
     required = 64 * count + 1_000_000_000
     if memory_available() < required:
         raise RuntimeError(f"official metrics require about {required / 1e9:.1f} GB free RAM")
+    from .normal import InstanceSupport
     dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
                             normal=getattr(model, "normal", None) is not None, normal_reference=False,
                             hypotheses=getattr(model, "mode", None) == "normal_hypothesis",
-                            frozen=getattr(model, "mode", None) == "frozen_support")
+                            frozen=getattr(model, "mode", None) == "frozen_support",
+                            range_only=isinstance(getattr(model, "scorer", None), InstanceSupport))
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),
@@ -369,20 +314,22 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    historical={"AJAE-cross-evidence":"6ad0371", "AJAE-class-evidence":"5d6fbbf"}
+    historical={"AJAE-cross-evidence":"6ad0371", "AJAE-class-evidence":"5d6fbbf",
+                "AJAE-observation-evidence":"e9f81f3"}
     if saved.get("version") in historical:
         raise ValueError("historical evidence checkpoints require their recorded code revision ("
                          +historical[saved["version"]]+")")
     from .model import NormalHypothesis, NORMAL_VERSION
-    from .normal import FeatureSupport, CrossEvidence, ScoreCalibration, SUPPORT_VERSION, CROSS_VERSION
-    if saved.get("version") in (SUPPORT_VERSION, CROSS_VERSION):
+    from .normal import FeatureSupport, InstanceSupport, ScoreCalibration, SUPPORT_VERSION, INSTANCE_VERSION
+    if saved.get("version") in (SUPPORT_VERSION, INSTANCE_VERSION):
         from .model import FrozenSupport
         if (not saved.get("frozen") or not saved.get("complete") or not saved.get("selected")
                 or saved["config"]["initial_sha256"] != "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"):
             raise ValueError("frozen support requires completed normal-only model selection")
-        scorer_type = CrossEvidence if saved["version"] == CROSS_VERSION else FeatureSupport
-        model = FrozenSupport(scorer=scorer_type(modes=saved["config"]["modes"]))
-        if saved["version"] == CROSS_VERSION:
+        scorer = (InstanceSupport(memory_size=saved["config"]["memory_size"])
+                  if saved["version"] == INSTANCE_VERSION else FeatureSupport(modes=saved["config"]["modes"]))
+        model = FrozenSupport(scorer=scorer)
+        if saved["version"] == INSTANCE_VERSION:
             model.scorer.calibration = ScoreCalibration(
                 range_bandwidth=saved["config"].get("calibration_bandwidth", 0.))
         model.load_state_dict(saved["model"], strict=True)
@@ -781,16 +728,17 @@ def infer(model, scan, device, *, return_semantics=False):
             from .normal import hypothesis_observation
             sample["observation"] = hypothesis_observation(xyzi)
         elif model.mode == "frozen_support":
-            from .normal import support_conditions
-            sample["conditions"] = torch.from_numpy(support_conditions(xyzi))
+            from .normal import InstanceSupport, support_conditions
+            sample["conditions"] = torch.from_numpy(support_conditions(
+                xyzi, range_only=isinstance(model.scorer, InstanceSupport)))
         sample = to_device(sample, device)
         with autocast(device):
             if return_semantics:
                 if model.mode == "frozen_support":
-                    from .normal import CrossEvidence
+                    from .normal import InstanceSupport
                     encoded = model.perception.encode(sample)
                     classes, count = encoded["logits"].argmax(-1), 16
-                    options = dict(predicted=classes) if isinstance(model.scorer, CrossEvidence) else {}
+                    options = dict(predicted=classes) if isinstance(model.scorer, InstanceSupport) else {}
                     prediction = model.scorer(encoded["features"], sample["conditions"], **options)
                 else:
                     outputs = model.predict(sample)
@@ -1000,19 +948,19 @@ def main():
         return
     model, saved = load_model(args.checkpoint, device)
     from .model import NORMAL_VERSION
-    from .normal import SUPPORT_VERSION, CROSS_VERSION
-    if saved.get("version") in (SUPPORT_VERSION, CROSS_VERSION):
+    from .normal import SUPPORT_VERSION, INSTANCE_VERSION
+    if saved.get("version") in (SUPPORT_VERSION, INSTANCE_VERSION):
         torch.backends.cuda.matmul.allow_tf32 = False
-    normal_run = saved.get("version") in (NORMAL_VERSION, SUPPORT_VERSION, CROSS_VERSION)
+    normal_run = saved.get("version") in (NORMAL_VERSION, SUPPORT_VERSION, INSTANCE_VERSION)
     if args.action == "infer" and args.semantic_output and not normal_run:
         parser.error("--semantic-output requires a joint normal-evidence checkpoint")
-    if normal_run and (args.action == "mine" or (args.action == "normal" and saved.get("version") != CROSS_VERSION)):
+    if normal_run and (args.action == "mine" or (args.action == "normal" and saved.get("version") != INSTANCE_VERSION)):
         parser.error("this action belongs to the earlier supervised field; normal-only development is recorded by src.train --normal")
     if args.action == "normal":
-        if saved.get("version") == CROSS_VERSION:
+        if saved.get("version") == INSTANCE_VERSION:
             if args.manifest is not None:
-                parser.error("class-evidence normal diagnostics use the checkpoint's normal cache; do not supply --manifest")
-            result = evaluate_cross_normal(model.scorer, saved, device)
+                parser.error("instance-support normal diagnostics use the checkpoint's normal cache; do not supply --manifest")
+            result = evaluate_instance_normal(model.scorer, saved, device)
         else:
             if args.manifest is None:
                 parser.error("earlier normal-field diagnostics require --manifest")
