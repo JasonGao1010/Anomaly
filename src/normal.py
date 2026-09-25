@@ -11,7 +11,7 @@ from torch_scatter import segment_csr
 
 
 SUPPORT_VERSION = "AJAE-frozen-support"
-CROSS_VERSION = "AJAE-class-evidence"
+CROSS_VERSION = "AJAE-observation-evidence"
 
 
 def support_conditions(xyzi, indices=None):
@@ -266,6 +266,9 @@ class CrossEvidence(nn.Module):
         self.calibration = ScoreCalibration()
         self.encoder = nn.Sequential(nn.Linear(72, hidden), nn.SiLU(),
                                      nn.Linear(hidden, latent), nn.SiLU())
+        self.prior_head = nn.Linear(latent, self.classes)
+        nn.init.zeros_(self.prior_head.weight)
+        nn.init.zeros_(self.prior_head.bias)
         self.class_embedding = nn.Embedding(self.classes, latent)
         nn.init.normal_(self.class_embedding.weight, std=.02)
         self.density_head = nn.Sequential(nn.Linear(latent, hidden), nn.SiLU(),
@@ -291,11 +294,13 @@ class CrossEvidence(nn.Module):
             latent = self.encoder(deep)
             raw = self.density_head(latent[:, None] + self.class_embedding.weight[None])
             means, weights = raw.split((self.modes * self.dimensions, self.modes), -1)
+            log_prior = self.prior_head(latent).masked_fill(~self.deep_present[None], -torch.inf).log_softmax(-1)
             # Shared uncertainty prevents classes from competing through arbitrary
             # covariance volumes; means and mode weights provide class differences.
             return dict(means=means.reshape(-1, self.classes, self.modes, self.dimensions),
                         log_scale=3 * torch.tanh(self.scale_head(latent) / 3),
-                        log_weights=weights.log_softmax(-1))
+                        log_weights=weights.log_softmax(-1),
+                        deep_energy=self.deep_energy(features)[:, None] - log_prior)
 
     def observations(self, features, conditions):
         if conditions.shape != (len(features), 2):
@@ -307,8 +312,8 @@ class CrossEvidence(nn.Module):
             base = F.pad(values[:, 180:], (1, 0), value=1) @ self.linear
             return (observed - base) @ self.whitener
 
-    def deep_class_energy(self, features):
-        """Negative log p(c, D), with equal priors over singleton-anchored classes."""
+    def base_class_energy(self, features):
+        """Fixed Gaussian class support used only to retain absolute p0(D)."""
         with torch.autocast(features.device.type, enabled=False):
             if not bool(self.deep_present.any()):
                 raise ValueError("deep support requires at least one observed normal class")
@@ -321,7 +326,14 @@ class CrossEvidence(nn.Module):
             return energy.masked_fill(~self.deep_present[None], torch.inf)
 
     def deep_energy(self, features):
-        return -torch.logsumexp(-self.deep_class_energy(features), -1)
+        return -torch.logsumexp(-self.base_class_energy(features), -1)
+
+    def deep_class_energy(self, features):
+        """Learn rho(c|D) while its class sum remains the fixed normal p0(D)."""
+        with torch.autocast(features.device.type, enabled=False):
+            latent = self.encoder(self._features(features)[:, 180:])
+            log_prior = self.prior_head(latent).masked_fill(~self.deep_present[None], -torch.inf).log_softmax(-1)
+            return self.deep_energy(features)[:, None] - log_prior
 
     def class_energy(self, features, conditions, predicted=None):
         if features.ndim != 2 or features.shape[1] != 252 or conditions.shape != (len(features), 2):
@@ -329,8 +341,10 @@ class CrossEvidence(nn.Module):
         with torch.autocast(features.device.type, enabled=False):
             if predicted is not None:
                 # The observation likelihood updates the class posterior itself:
-                # p(c,D,O) = p(c,D) p(O|D,c), rather than a class-shared multiplier.
-                return (self.deep_class_energy(features)
+                # p(c,D,O) = p0(D) rho(c|D) p(O|D,c), with a normalized class prior.
+                if predicted["deep_energy"].shape != (len(features), self.classes):
+                    raise ValueError("predicted class support must identify the same points and classes")
+                return (predicted["deep_energy"]
                         + self.negative_log_likelihood(predicted, self.observations(features, conditions)))
             chunks = []
             for start in range(0, len(features), self.point_chunk):
@@ -369,7 +383,7 @@ class CrossEvidence(nn.Module):
                 predicted = self.predict(f)
                 conditional_mean = (predicted["log_weights"].exp()[..., None] * predicted["means"]).sum(2)
                 # Use p(c|D), not p(c|D,O): this prediction must not read its target.
-                class_probability = (-self.deep_class_energy(f)).softmax(-1)
+                class_probability = (-predicted["deep_energy"]).softmax(-1)
                 mean = (class_probability[..., None] * conditional_mean).sum(1)
                 base = F.pad(self._features(f)[:, 180:], (1, 0), value=1) @ self.linear
                 chunks.append(base + mean @ inverse)

@@ -386,10 +386,11 @@ def test_cross_evidence_predictions_exclude_observed_targets_and_labels():
     sample = dict(features=torch.zeros(3, 252), conditions=torch.zeros(3, 2),
                   labels=torch.tensor([0, 1, 2]))
     predicted = model.predict(sample["features"])
-    assert set(predicted) == {"means", "log_scale", "log_weights"}
+    assert set(predicted) == {"means", "log_scale", "log_weights", "deep_energy"}
     assert predicted["means"].shape == (3, 19, 2, 182)
     assert predicted["log_weights"].shape == (3, 19, 2)
     assert predicted["log_scale"].shape == (3, 182)
+    assert predicted["deep_energy"].shape == (3, 19)
     assert not hasattr(model, "class_head")
     score = model.raw_score(sample["features"], sample["conditions"])
     sample["labels"] = torch.tensor([18, 17, 16])
@@ -434,6 +435,8 @@ def test_cross_evidence_matches_independent_gaussian_mixture_and_inverse_transfo
     raw_scale = np.linspace(-.8, .5, 182, dtype=np.float32)
     raw_weights = np.array([-.7, .3], np.float32)
     weight_offsets = np.array([.4, -.2], np.float32)
+    prior_logits = np.linspace(-.6, .8, 19, dtype=np.float32)
+    prior_logits[1] = 100  # An absent class must stay excluded despite its logit.
     centers = np.zeros((19, 72), np.float32)
     centers[:, 0] = np.linspace(-1.5, 1.5, 19)
     present = [0, 7, 18]
@@ -452,6 +455,7 @@ def test_cross_evidence_matches_independent_gaussian_mixture_and_inverse_transfo
             np.concatenate((mean_offsets.ravel(), weight_offsets))))
         model.density_head[-1].bias.copy_(torch.from_numpy(np.concatenate((means.ravel(), raw_weights))))
         model.scale_head.bias.copy_(torch.from_numpy(raw_scale))
+        model.prior_head.bias.copy_(torch.from_numpy(prior_logits))
         model.deep_centers.copy_(torch.from_numpy(centers))
         model.deep_present.zero_()
         model.deep_present[present] = True
@@ -470,14 +474,22 @@ def test_cross_evidence_matches_independent_gaussian_mixture_and_inverse_transfo
         multivariate_normal.logpdf(observed, mean=mean, cov=covariance) for mean in class_mean])
         for class_mean in class_means], axis=1)
     expected_conditional = -logsumexp(components + log_weights[None], axis=2)
-    expected_deep = np.full((len(features), 19), np.inf)
+    expected_base = np.full((len(features), 19), np.inf)
     for category in present:
-        expected_deep[:, category] = -multivariate_normal.logpdf(
+        expected_base[:, category] = -multivariate_normal.logpdf(
             values[:, 180:], mean=centers[category], cov=np.eye(72)) + np.log(len(present))
+    # The Gaussian mixture supplies only p0(D). Learned rho(c|D) independently
+    # partitions that fixed marginal; it is not the Gaussian class posterior.
+    log_rho = np.full(19, -np.inf)
+    log_rho[present] = prior_logits[present].astype(np.float64)
+    log_rho -= logsumexp(log_rho)
+    expected_deep = -logsumexp(-expected_base, axis=1)[:, None] - log_rho[None]
     expected_joint = expected_deep + expected_conditional
     tensor_features = torch.from_numpy(features)
     tensor_conditions = torch.from_numpy(conditions)
     predicted_parameters = model.predict(tensor_features)
+    np.testing.assert_allclose(predicted_parameters["deep_energy"].detach().numpy(),
+                               expected_deep, rtol=2e-6, atol=2e-5)
     conditional = model.negative_log_likelihood(predicted_parameters,
                                                 model.observations(tensor_features, tensor_conditions))
     np.testing.assert_allclose(conditional.detach().numpy(), expected_conditional, rtol=2e-6, atol=2e-5)
@@ -530,15 +542,64 @@ def test_cross_evidence_deep_support_matches_shared_covariance_class_mixture():
                            for center in centers], axis=1)
     expected_classes = np.full((len(features), 19), np.inf)
     expected_classes[:, [0, 7, 18]] = -components + np.log(len(centers))
-    actual = model.deep_class_energy(torch.from_numpy(features))
+    actual = model.base_class_energy(torch.from_numpy(features))
     np.testing.assert_allclose(actual.numpy(), expected_classes, rtol=2e-6, atol=2e-5)
     np.testing.assert_allclose(model.deep_energy(torch.from_numpy(features)).numpy(),
                                -logsumexp(-expected_classes, axis=1), rtol=2e-6, atol=2e-5)
     with torch.autocast("cpu", dtype=torch.bfloat16):
-        torch.testing.assert_close(model.deep_class_energy(torch.from_numpy(features)), actual, rtol=0, atol=0)
+        torch.testing.assert_close(model.base_class_energy(torch.from_numpy(features)), actual, rtol=0, atol=0)
     model.deep_present.zero_()
     with pytest.raises(ValueError, match="observed normal class"):
-        model.deep_class_energy(torch.from_numpy(features))
+        model.base_class_energy(torch.from_numpy(features))
+
+
+def test_cross_evidence_learned_class_prior_preserves_fixed_deep_marginal():
+    from scipy.special import logsumexp
+    from src.normal import CrossEvidence
+
+    rng = np.random.default_rng(746)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(206)
+        model = CrossEvidence(hidden=4, latent=2)
+    features = torch.from_numpy(rng.normal(size=(5, 252)).astype(np.float32))
+    present = [0, 7, 18]
+    with torch.no_grad():
+        model.deep_present.zero_()
+        model.deep_present[present] = True
+        model.deep_centers[7, 0] = 3
+        model.deep_centers[18, 1] = -2
+    base = model.base_class_energy(features)
+    marginal = model.deep_energy(features)
+    initial = model.predict(features)["deep_energy"]
+    assert torch.count_nonzero(model.prior_head.weight) == torch.count_nonzero(model.prior_head.bias) == 0
+    torch.testing.assert_close(initial[:, present], marginal[:, None].expand(-1, 3) + np.log(3),
+                               rtol=0, atol=1e-5)
+    assert torch.isinf(initial[:, ~model.deep_present]).all()
+    assert not torch.allclose((-base).softmax(-1)[:, present], torch.full((5, 3), 1 / 3))
+
+    weight = rng.normal(scale=1.7, size=(19, 2)).astype(np.float32)
+    bias = rng.normal(scale=.7, size=19).astype(np.float32)
+    bias[1] = 1000
+    with torch.no_grad():
+        model.prior_head.weight.copy_(torch.from_numpy(weight))
+        model.prior_head.bias.copy_(torch.from_numpy(bias))
+    latent = model.encoder(model._features(features)[:, 180:]).detach().numpy().astype(np.float64)
+    logits = latent @ weight.astype(np.float64).T + bias.astype(np.float64)
+    logits[:, ~model.deep_present.numpy()] = -np.inf
+    log_rho = logits - logsumexp(logits, axis=1, keepdims=True)
+    learned = model.deep_class_energy(features)
+    np.testing.assert_allclose(learned.detach().numpy(), marginal[:, None].numpy() - log_rho,
+                               rtol=2e-6, atol=2e-5)
+    np.testing.assert_allclose((-learned).softmax(-1).detach().numpy(), np.exp(log_rho), rtol=2e-5, atol=2e-6)
+    np.testing.assert_allclose(np.exp(log_rho).sum(1), np.ones(5), rtol=0, atol=1e-14)
+    torch.testing.assert_close(model.predict(features)["deep_energy"], learned, rtol=0, atol=0)
+    torch.testing.assert_close(model.base_class_energy(features), base, rtol=0, atol=0)
+    torch.testing.assert_close(model.deep_energy(features), marginal, rtol=0, atol=0)
+    # Marginalize the learned joint in log space to avoid underflow in 72D.
+    torch.testing.assert_close(-torch.logsumexp(-learned, -1), marginal, rtol=0, atol=2e-5)
+    assert not torch.allclose(learned[:, present], initial[:, present])
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        torch.testing.assert_close(model.deep_class_energy(features), learned, rtol=0, atol=0)
 
 
 def test_cross_evidence_observations_change_joint_class_support_and_partial_label_gradients():
@@ -554,6 +615,7 @@ def test_cross_evidence_observations_change_joint_class_support_and_partial_labe
         model.deep_present[:2] = True
         model.class_embedding.weight[0, 0] = 1
         model.class_embedding.weight[1, 0] = 3
+        model.encoder[2].bias[0] = .5
         model.density_head[0].weight[0, 0] = 1
         model.density_head[-1].weight[0, 0] = 1
         model.density_head[-1].weight[180, 0] = 1
@@ -577,7 +639,8 @@ def test_cross_evidence_observations_change_joint_class_support_and_partial_labe
     allowed[0, 0], allowed[1, 1] = True, True
     logits = -energy
     normalizer = torch.logsumexp(logits, -1)
-    partial_ce = normalizer - torch.logsumexp(logits.masked_fill(~allowed, -torch.inf), -1)
+    supported = torch.logsumexp(logits.masked_fill(~allowed, -torch.inf), -1)
+    partial_ce = normalizer - supported
     torch.testing.assert_close(partial_ce, -torch.log(logits.softmax(-1)[allowed]), rtol=1e-4, atol=1e-5)
     # Admitting both normal explanations makes their summed posterior one; no
     # separate binary rejection target is assigned to either class.
@@ -585,10 +648,16 @@ def test_cross_evidence_observations_change_joint_class_support_and_partial_labe
     coarse_ce = normalizer - torch.logsumexp(logits.masked_fill(~allowed, -torch.inf), -1)
     torch.testing.assert_close(coarse_ce, torch.zeros_like(coarse_ce), rtol=0, atol=0)
     assert (coarse_ce <= partial_ce).all()
-    partial_ce.mean().backward()
+    # One shared joint likelihood supplies both observation and prior gradients;
+    # unequal fixture weights prevent exact cancellation between the two classes.
+    loss = ((-supported / model.dimensions + .1 * partial_ce) * torch.tensor([.25, .75])).sum()
+    loss.backward()
     assert model.class_embedding.weight.grad[:2].abs().sum() > 0
     for layer in (model.density_head[0], model.density_head[-1]):
         assert torch.isfinite(layer.weight.grad).all() and layer.weight.grad.abs().sum() > 0
+    for parameter in model.prior_head.parameters():
+        assert torch.isfinite(parameter.grad).all() and parameter.grad.abs().sum() > 0
+        assert torch.count_nonzero(parameter.grad[~model.deep_present]) == 0
 
 
 def test_score_calibration_uses_frozen_groups_and_preserves_unbounded_tail_order():
@@ -786,7 +855,7 @@ def test_cross_evidence_calibrates_one_raw_score_using_supplied_official_predict
     energy = model.class_energy(features, conditions)
     raw = model.raw_score(features, conditions)
     torch.testing.assert_close(model.negative_log_likelihood(
-        predicted, model.observations(features, conditions)) + model.deep_class_energy(features),
+        predicted, model.observations(features, conditions)) + predicted["deep_energy"],
         energy, rtol=0, atol=0)
     torch.testing.assert_close(-torch.logsumexp(-energy, -1), raw, rtol=0, atol=0)
     scores = torch.cat((torch.linspace(0, 200, 2048), torch.linspace(300, 500, 2048)))

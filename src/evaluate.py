@@ -171,7 +171,7 @@ def evaluate_cross_normal(scorer, saved, device):
             if not bool(torch.isfinite(f).all() and torch.isfinite(g).all()):
                 raise ValueError("normal cache contains nonfinite observed features or geometry")
             predicted = scorer.predict(f)
-            deep = scorer.deep_class_energy(f)
+            deep = predicted["deep_energy"]
             actual = deep + scorer.negative_log_likelihood(predicted, scorer.observations(f, g))
             # One common observation is predicted solely from D. Each candidate
             # class must explain that same input, not its own preferred mean.
@@ -225,7 +225,8 @@ def evaluate_cross_normal(scorer, saved, device):
     return dict(version=CROSS_VERSION, points=groups["all"]["count"], scans=len(spans), groups=groups,
         seconds=time.perf_counter() - started, cache=str(metadata_path.resolve()), cache_actual_count=count,
         population="all cached singleton normal 201 points in odd contiguous 64-frame blocks; no subsampling or source supplementation",
-        methods=dict(deep="argmin_c negative log p(c,D)", actual="argmin_c negative log p(c,D,O)",
+        methods=dict(deep="argmax_c learned normalized prior rho(c|D); fixed p0(D) is common",
+                     actual="argmin_c negative log p0(D) rho(c|D) q(O|D,c)",
                      replacement="same conditional distributions evaluated at E[O|D] = sum_c p(c|D) sum_k p(k|D,c) mu(c,k)"),
         ranges=dict(near="range < 35 m", far="range >= 35 m"), posterior_changed_absolute_tolerance=1e-6,
         role="normal observation-mechanism diagnostic only; feature replacement is not an anomaly, training example, model-selection criterion, or anomaly-detection result")
@@ -368,8 +369,10 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
-    if saved.get("version") == "AJAE-cross-evidence":
-        raise ValueError("class-independent evidence checkpoints require their recorded code revision (6ad0371)")
+    historical={"AJAE-cross-evidence":"6ad0371", "AJAE-class-evidence":"5d6fbbf"}
+    if saved.get("version") in historical:
+        raise ValueError("historical evidence checkpoints require their recorded code revision ("
+                         +historical[saved["version"]]+")")
     from .model import NormalHypothesis, NORMAL_VERSION
     from .normal import FeatureSupport, CrossEvidence, ScoreCalibration, SUPPORT_VERSION, CROSS_VERSION
     if saved.get("version") in (SUPPORT_VERSION, CROSS_VERSION):
