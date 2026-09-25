@@ -37,7 +37,7 @@ The spatial structure of LiDAR observations makes this prediction possible. Neig
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{figures/motivation.pdf}
-\caption{A normal explanation requires support for the same class. Both illustrative cases share identical appearance support. When appearance and return evidence favor the same class, its joint support is strong. When they favor different classes, both joint supports are weak and the unknown score rises. Return support is the predictive density at the observed range divided by a common bound $M$. Class probabilities follow by normalizing the joint supports.}
+\caption{A geometric departure can have a normal explanation. Left: a real scan contains a car above the road; colors indicate annotated classes and red marks one measured return. Right: extending the surrounding road along the same ray gives a farther intersection, while the car provides a surface at the observed range. The dashed road is a local plane fitted for this geometric illustration. SERVE learns to check every known class against both appearance and measured range, assessing unknown evidence through the strongest joint explanation.}
 \label{fig:motivation}
 \end{figure}
 

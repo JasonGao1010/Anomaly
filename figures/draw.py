@@ -19,55 +19,102 @@ INK, BLUE, TEAL, PURPLE, RED = "#263747", "#377EAB", "#20867A", "#8065A8", "#B95
 OBSERVED = "#F00000"
 
 
-def motivation():
-    # Illustrative bounded class supports, independent of scans and model outputs.
-    appearance = np.array([.9, .1])
-    cases = [((.9, .1), "(a) A shared class explanation", BLUE, "#F5F9FC"),
-             ((.1, .9), "(b) Conflicting class explanations", RED, "#FCF6F3")]
-    fig = plt.figure(figsize=(5.5, 2.35))
-    ax = fig.add_axes([.008, .012, .984, .976])
-    ax.set(xlim=(0, 16), ylim=(0, 6.4))
-    ax.set_axis_off()
+def motivation(root):
+    # A labeled normal car motivates class-specific, rather than ground-only, checks.
+    source = root / "train/206"
+    xyz = np.fromfile(source / "velodyne/000128.bin", "<f4").reshape(-1, 4)[:, :3]
+    packed = np.fromfile(source / "labels/000128.label", "<u4")
+    if len(xyz) != len(packed) or not np.isfinite(xyz).all():
+        raise ValueError("invalid motivation scan or labels")
+    semantic = packed & 65535
+    car = packed == ((64 << 16) | 10)
+    points = xyz[car]
+    center = np.median(points, axis=0)
+    center[2] = np.quantile(points[:, 2], .65)
+    target_id = np.flatnonzero(car)[np.argmin(np.sum((points-center)**2, axis=1))]
+    target = xyz[target_id].astype(float)
+    horizontal = np.linalg.norm(xyz[:, :2], axis=1)
+    h_target = np.linalg.norm(target[:2])
+    azimuth = np.arctan2(xyz[:, 1], xyz[:, 0])
+    az_target = np.arctan2(target[1], target[0])
+    angle = np.arctan2(np.sin(azimuth-az_target), np.cos(azimuth-az_target))
 
-    def label(x, y, value, size=8, **kw):
-        ax.text(x, y, value, ha=kw.pop("ha", "center"), va="center",
-                fontsize=size, **kw)
+    # This plane is a geometric illustration from road labels, not a model prediction.
+    road = (semantic == 40) & (horizontal > 3) & (horizontal < 20) & (abs(angle) < .55)
+    design = np.column_stack((xyz[road, :2], np.ones(road.sum())))
+    plane = np.linalg.lstsq(design, xyz[road, 2], rcond=None)[0]
+    slope = plane[:2] @ (target[:2]/h_target)
+    h_road = plane[2] / (target[2]/h_target-slope)
+    if not h_road > h_target > 0:
+        raise ValueError("selected ray does not meet the road beyond the normal car")
 
-    for k, (measurement, title, edge, fill) in enumerate(cases):
-        x = .10 + 8.08*k
-        joint = appearance * np.asarray(measurement)
-        best = joint.max()
-        ax.add_patch(FancyBboxPatch((x, .86), 7.72, 5.34,
-                     boxstyle="round,pad=0.02,rounding_size=0.14",
-                     ec=edge, fc=fill, lw=.7))
-        label(x+3.86, 5.82, title, 8, weight="bold")
-        columns = (2.54, 4.53, 6.52)
-        for col, name, symbol in zip(columns, ("Appearance", "Return", "Joint"),
-                                     (r"$a_c$", r"$b_c=p_c/M$", r"$a_cb_c$")):
-            label(x+col, 5.03, name, 7.5)
-            label(x+col, 4.58, symbol, 8)
-        for j, (name, color) in enumerate((("Car", BLUE), ("Road", TEAL))):
-            y = 3.83 - .99*j
-            label(x+.37, y, name, 8, ha="left", color=color, weight="bold")
-            for col, value in zip(columns, (appearance[j], measurement[j], joint[j])):
-                label(x+col, y, f"{value:.2f}", 8.5, color=color)
-                # Every track spans the same [0, 1] support scale.
-                ax.add_patch(Rectangle((x+col-.64, y-.36), 1.28, .12,
-                                      ec="none", fc="#DEE5E8"))
-                ax.add_patch(Rectangle((x+col-.64, y-.36), 1.28*value, .12,
-                                      ec="none", fc=color))
-            label(x+3.535, y, r"$\times$", 9)
-            label(x+5.525, y, r"$=$", 9)
-        ax.plot([x+.25, x+7.47], [2.20, 2.20], color=edge, alpha=.45, lw=.5)
-        label(x+3.86, 1.83, rf"Best joint support: $\max_c a_cb_c={best:.2f}$", 8)
-        label(x+3.86, 1.26, rf"Unknown score: $-\log({best:.2f})\approx{-np.log(best):.2f}$",
-              8, color=edge)
-    label(8, .36, "Illustrative bounded supports; bars share a 0–1 scale.", 7.5)
-    fig.savefig(OUT / "motivation.pdf", metadata={
-        "Title": "Same class evidence in SERVE: illustrative supports",
+    fig = plt.figure(figsize=(5.5, 2.65))
+    fig.text(.025, .94, "(a) A normal car above the road", fontsize=8, weight="bold")
+    fig.text(.515, .94, "(b) Two explanations of one return", fontsize=8, weight="bold")
+    view = fig.add_axes([.015, .23, .46, .66])
+    crop = ((xyz[:, 0] > -2.5) & (xyz[:, 0] < 6) &
+            (xyz[:, 1] > 3.5) & (xyz[:, 1] < 13) &
+            (xyz[:, 2] > -3.5) & (xyz[:, 2] < 1.5))
+    # Orthographic view of the original points, colored with dataset annotations.
+    az, el = np.deg2rad([-72, 24])
+    eye = np.array([np.cos(az)*np.cos(el), np.sin(az)*np.cos(el), np.sin(el)])
+    right = np.cross(-eye, [0., 0., 1.]); right /= np.linalg.norm(right)
+    up = np.cross(right, -eye)
+    projection = np.stack((right, up), axis=1)
+    ids = np.flatnonzero(crop)
+    ids = ids[np.argsort(xyz[ids] @ eye, kind="stable")]
+    colors = np.full(len(xyz), "#BCC5CB", dtype="<U7")
+    colors[semantic == 40], colors[car] = TEAL, BLUE
+    view.scatter(*(xyz[ids] @ projection).T, c=colors[ids], s=.8,
+                 linewidths=0, rasterized=True)
+    observed = target @ projection
+    view.scatter(*observed, s=19, c=OBSERVED, ec="white", lw=.6, zorder=5)
+    view.annotate("Observed return", observed, xytext=(.02, .88),
+                  textcoords="axes fraction", fontsize=7.5, color=OBSERVED,
+                  arrowprops={"arrowstyle":"-", "color":OBSERVED, "lw":.65})
+    view.set_aspect("equal"); view.set_axis_off()
+    for x, name, color in ((.05, "Car", BLUE), (.19, "Road", TEAL), (.34, "Other", "#8E9BA5")):
+        fig.text(x, .22, "● "+name, color=color, fontsize=7.5)
+    fig.text(.25, .15, "Real scan · colors from annotations", ha="center", fontsize=7)
+
+    # Both side views use the identical measured ray and normal car, with no learned scores.
+    xlim = (-.3, h_road+1.3)
+    ground_x = np.linspace(2, xlim[1], 80)
+    ground_z = slope*ground_x+plane[2]
+    near_car = car & (abs(angle) < .10)
+    for row, (bottom, title) in enumerate(((.55, "Road continuation"), (.25, "Car surface"))):
+        ax = fig.add_axes([.52, bottom, .465, .255])
+        ax.set(xlim=xlim, ylim=(-3.6, .5)); ax.set_axis_off()
+        ax.text(0, 1.02, title, transform=ax.transAxes, fontsize=7.7,
+                color=TEAL if row == 0 else BLUE, weight="bold")
+        ax.plot(ground_x, ground_z, color=TEAL, ls="--", lw=.85)
+        ax.scatter(0, 0, marker="s", s=17, c=INK)
+        ax.text(.3, .03, "LiDAR", fontsize=6.8)
+        if row == 1:
+            ax.scatter(horizontal[near_car], xyz[near_car, 2], s=1.5, c=BLUE,
+                       linewidths=0, rasterized=True)
+        ax.plot([0, h_target], [0, target[2]], color=OBSERVED, lw=.9)
+        ax.scatter(h_target, target[2], s=18, c=OBSERVED, ec="white", lw=.5, zorder=5)
+        if row == 0:
+            z_road = h_road*target[2]/h_target
+            ax.plot([h_target, h_road], [target[2], z_road], color=INK, ls=":", lw=.7)
+            ax.scatter(h_road, z_road, s=23, facecolors="white", ec=TEAL, lw=.85, zorder=4)
+            ax.annotate("Farther return", (h_road, z_road), xytext=(h_road-.3, -.48),
+                        ha="center", fontsize=7, color=TEAL,
+                        arrowprops={"arrowstyle":"-", "color":TEAL, "lw":.6})
+        else:
+            ax.annotate("Earlier return", (h_target, target[2]), xytext=(h_target+2.5, -.43),
+                        ha="center", fontsize=7, color=BLUE,
+                        arrowprops={"arrowstyle":"-", "color":BLUE, "lw":.6})
+    fig.text(.75, .15, "Geometric illustration of class hypotheses", ha="center", fontsize=7)
+    fig.text(.5, .055, "Which known class explains both the shape and the measured return?",
+             ha="center", fontsize=8, weight="bold")
+    fig.savefig(OUT / "motivation.pdf", dpi=600, metadata={
+        "Title": "Normal class explanations for a real LiDAR return",
         "Author": "Anonymous authors"})
     plt.close(fig)
-    print(OUT / "motivation.pdf")
+    print(f"Motivation: 206/000128, car 64, point {target_id}; "
+          f"horizontal range {h_target:.3f} m, road intersection {h_road:.3f} m")
 
 
 def scene(root):
@@ -111,7 +158,7 @@ def main():
                          "mathtext.fontset": "cm", "pdf.fonttype": 42,
                          "ps.fonttype": 42, "svg.fonttype": "none",
                          "text.color": INK, "axes.unicode_minus": False})
-    motivation()
+    motivation(args.stu_root)
     uv, height, cmap, norm = scene(args.stu_root)
     colors = cmap(norm(height))
     # Export a readable standalone view as well as the compact architecture inset.

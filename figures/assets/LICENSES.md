@@ -10,9 +10,11 @@ height, without label filtering, interpolation, or model inference. Colors
 represent height. `scene.png` provides a standalone view of the same points.
 Density curves remain schematic.
 
-The motivation diagram is an original mathematical illustration drawn by the
-same script. Its bounded support values illustrate the paper's classwise
-product and unknown score; they are independent of scans and model outputs.
+The motivation diagram uses `train/206/velodyne/000128.bin` and its annotations,
+with normal car instance 64 and original point 108857. The left view projects
+the original points; the right views use the same return and ray. A plane fitted
+to nearby annotated road points illustrates the alternative road intersection.
+This geometric illustration uses neither learned predictions nor anomaly scores.
 
 Reference: https://github.com/dair-ai/ml-visuals
 Transformer example: https://github.com/dair-ai/ml-visuals/blob/master/2.png
