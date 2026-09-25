@@ -75,7 +75,7 @@ The label identifies the best-supported class. The unknown score measures the we
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=\linewidth]{figures/method.pdf}
-\caption{SERVE architecture. The full-scan branch combines voxel features with point details and projects them to a 48-dimensional embedding. Shared class vectors organize appearance centers and query independently encoded surrounding cells. Within the prediction branch, target exclusion precedes cross-cell attention; the actual target range enters only the subsequent density evaluation. Evidence combines within each class before semantic labeling and unknown scoring. Dashed paths show the joint classification and predictive likelihood objectives; auxiliary losses are specified in Equation~\eqref{eq:loss}. Point-cloud and density glyphs are schematic.}
+\caption{SERVE architecture. The full-scan branch combines voxel features with point details and projects them to a 48-dimensional embedding. Shared class vectors organize appearance centers and query independently encoded surrounding cells. Within the prediction branch, target exclusion precedes cross-cell attention; the actual target range enters only the subsequent density evaluation. Evidence combines within each class before semantic labeling and unknown scoring. Dashed paths show the joint classification and predictive likelihood objectives; auxiliary losses are specified in Equation~\eqref{eq:loss}. The input is a real LiDAR scan, colored by height and cropped to $2.5$--$35$\,m range and $-3$--$8$\,m height. Density curves are schematic.}
 \label{fig:method}
 \end{figure}
 

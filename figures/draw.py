@@ -1,14 +1,16 @@
 """Draw the current normal-only network: python figures/draw.py.
 
 Layer stacks and attention blocks follow ML Visuals conventions; see
-assets/LICENSES.md. Point and density glyphs are schematic, not model outputs.
+assets/LICENSES.md. The input is a real STU training scan; density curves are schematic.
 """
+import argparse
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
+from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Rectangle
 import numpy as np
 
@@ -16,7 +18,37 @@ OUT = Path(__file__).resolve().parent
 INK, BLUE, TEAL, PURPLE, RED = "#263747", "#377EAB", "#20867A", "#8065A8", "#B95245"
 
 
+def scene(root):
+    # Fix the middle training frame independently of labels or model predictions.
+    path = root / "train/206/velodyne/000224.bin"
+    xyzi = np.fromfile(path, dtype="<f4").reshape(-1, 4)
+    if not len(xyzi) or not np.isfinite(xyzi).all():
+        raise ValueError(f"invalid original STU scan: {path}")
+    xyz = xyzi[:, :3]
+    distance = np.linalg.norm(xyz, axis=1)
+    actual = np.any(xyz != 0, axis=1)
+    # A display crop only: preserve every measured point inside these bounds.
+    visible = actual & (distance >= 2.5) & (distance <= 35) & (xyz[:, 2] >= -3) & (xyz[:, 2] <= 8)
+    xyz = xyz[visible]
+    azimuth, elevation = np.deg2rad([180, 30])
+    eye = np.array([np.cos(azimuth)*np.cos(elevation),
+                    np.sin(azimuth)*np.cos(elevation), np.sin(elevation)])
+    right = np.cross(-eye, [0., 0., 1.])
+    right /= np.linalg.norm(right)
+    up = np.cross(right, -eye)
+    # Orthographic projection with far-to-near drawing preserves scene geometry.
+    xyz = xyz[np.argsort(xyz @ eye, kind="stable")]
+    uv = np.column_stack((xyz @ right, xyz @ up))
+    cmap = LinearSegmentedColormap.from_list("height", ["#345c9b", "#1884a8", "#49a487", "#bea240", "#bd653a"])
+    norm = Normalize(-2.1, 5, clip=True)
+    print(f"STU 206/000224: {actual.sum():,} actual returns; {len(xyz):,} in display crop")
+    return uv, xyz[:, 2], cmap, norm
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--stu-root", type=Path, default=Path("/home/jasongao/Data/STU"))
+    args = parser.parse_args()
     # Use the actual requested font; never substitute Comic Neue silently.
     windows = Path("/mnt/c/Windows/Fonts")
     if (windows / "comic.ttf").is_file():
@@ -27,6 +59,27 @@ def main():
                          "mathtext.fontset": "cm", "pdf.fonttype": 42,
                          "ps.fonttype": 42, "svg.fonttype": "none",
                          "text.color": INK, "axes.unicode_minus": False})
+    uv, height, cmap, norm = scene(args.stu_root)
+    colors = cmap(norm(height))
+    # Export a readable standalone view as well as the compact architecture inset.
+    view = plt.figure(figsize=(5.5, 4.5))
+    view_ax = view.add_axes([.025, .15, .95, .72])
+    view_ax.scatter(*uv.T, s=.38, c=colors, linewidths=0)
+    view_ax.set_aspect("equal")
+    view_ax.set_axis_off()
+    view.suptitle("A real LiDAR scan", y=.96, fontsize=11)
+    view.text(.5, .91, f"2.5–35 m range; -3–8 m height; {len(uv):,} returns",
+              ha="center", fontsize=7)
+    color_ax = view.add_axes([.31, .10, .38, .025])
+    bar = view.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap),
+                       cax=color_ax, orientation="horizontal", extend="both")
+    bar.set_label("Height in the LiDAR frame (m)", fontsize=8)
+    bar.set_ticks([-2, 0, 2, 5])
+    bar.ax.tick_params(labelsize=7, length=2)
+    view.savefig(OUT / "scene.png", dpi=320,
+                 metadata={"Source":"STU/train/206/velodyne/000224.bin",
+                           "Description":"Original returns; display range 2.5–35 m, height -3–8 m; no model output."})
+    plt.close(view)
     fig = plt.figure(figsize=(5.5, 3.42))
     ax = fig.add_axes([.008, .008, .984, .984])
     ax.set(xlim=(0, 16), ylim=(0, 10))
@@ -70,16 +123,13 @@ def main():
     label(2.23, 9.16, "(a) Appearance evidence", 7.8, ha="left", weight="bold")
     label(2.23, 4.69, "(b) Return evidence", 7.8, ha="left", weight="bold")
 
-    # A schematic point cloud is an input icon, not a measured or inferred scene.
-    gx, gy = np.meshgrid(np.linspace(-.65, .65, 11), np.linspace(-.48, .48, 8))
-    ax.scatter(.83 + gx + .30*gy, 5.65 + .33*gy - .14*gx, s=.65, c="#8195A3", lw=0)
-    for level in np.linspace(0, .66, 6):
-        a = np.linspace(0, 2*np.pi, 13)
-        ax.scatter(.95 + .30*np.cos(a), 5.65 + .13*np.sin(a) + level,
-                   s=.8, c=BLUE, lw=0)
-    label(.88, 6.83, "Single scan", 7.2, weight="bold")
-    label(.88, 5.04, r"$X$", 9)
-    wire([(1.57, 5.75), (1.85, 5.75), (1.85, 7.80), (2.32, 7.80)])
+    center = (uv.min(0) + uv.max(0)) / 2
+    scale = min(1.68 / np.ptp(uv[:, 0]), 1.77 / np.ptp(uv[:, 1]))
+    inset = (uv - center) * scale + [.87, 5.76]
+    ax.scatter(*inset.T, s=.016, c=colors, linewidths=0, rasterized=True)
+    label(.88, 6.93, "Single scan", 7.2, weight="bold")
+    label(.88, 4.76, r"$X$", 9)
+    wire([(1.73, 5.75), (1.85, 5.75), (1.85, 7.80), (2.32, 7.80)])
     wire([(1.85, 5.75), (1.85, 3.40), (2.27, 3.40)])
 
     # The backbone is shown as a conventional encoder/decoder layer stack.
@@ -156,7 +206,7 @@ def main():
     ax.plot([9.62,10.76],[3.02,3.02],color=INK,lw=.45)
     label(10.21,4.28,"Evaluate density",5.8)
     label(10.85,2.55,r"$p_{ic}$",8.0)
-    wire([(.84,4.77),(.84,1.52),(10.31,1.52),(10.31,2.99)],color=RED)
+    wire([(.84,4.52),(.84,1.52),(10.31,1.52),(10.31,2.99)],color=RED)
     label(4.10,1.51,r"Measured log range $z_i$",6.8,color=RED,
           bbox={"fc":"white","ec":"none","pad":1.5})
 
@@ -185,7 +235,7 @@ def main():
     # Parameters of both branches receive the joint classification gradient.
     label(12.80,1.98,"Joint loss trains\nboth evidence branches",5.8,color=RED)
 
-    fig.savefig(OUT / "method.pdf", metadata={"Title":"Class-conditional return evidence network",
+    fig.savefig(OUT / "method.pdf", dpi=900, metadata={"Title":"SERVE network with a real STU input scan",
                                              "Author":"Anonymous authors"})
     plt.close(fig)
     print(OUT / "method.pdf")

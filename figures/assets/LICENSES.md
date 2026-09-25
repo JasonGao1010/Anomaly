@@ -3,7 +3,12 @@
 The network diagram is drawn in Python in `../draw.py`. Layer stacks, tensor
 grids and attention blocks follow the conventions illustrated by ML Visuals.
 The layout and network connections are specific to the current model.
-Point-cloud and density glyphs are schematic, not experimental outputs.
+The input point cloud is the original STU training scan
+`train/206/velodyne/000224.bin`, the middle frame of the 449-scan sequence.
+The display retains all measured points within 2.5–35 m range and -3–8 m
+height, without label filtering, interpolation, or model inference. Colors
+represent height. `scene.png` provides a standalone view of the same points.
+Density curves remain schematic.
 
 Reference: https://github.com/dair-ai/ml-visuals
 Transformer example: https://github.com/dair-ai/ml-visuals/blob/master/2.png
