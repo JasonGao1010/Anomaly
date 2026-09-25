@@ -698,6 +698,9 @@ def main():
             command.add_argument("--manifest", type=Path, required=True)
         if name == "test":
             command.add_argument("--data", type=Path, required=True)
+        if name in ("validate", "test"):
+            command.add_argument("--record-points", action="store_true",
+                help="retain exact metric and full-return scores with original point identities")
         if name in ("validate", "test", "mine", "normal"):
             command.add_argument("--workers", type=int, default=4)
         else:
@@ -757,7 +760,16 @@ def main():
                 raise ValueError("the validation set cannot be presented as final test data")
         else:
             manifest = load_manifest(args.manifest, "val")
-        result = evaluate(model, manifest, device, args.workers)
+        score_path = None
+        if args.record_points:
+            from .train import disk_check
+            rows = [manifest["records"][i] for i in evaluation_indices(manifest)]
+            disk_check(sum(4*(row["normal"]+row["anomaly"])+9*row["points"] for row in rows)
+                       + 10_000_000)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            score_path = args.output.with_suffix(".npy")
+        result = evaluate(model, manifest, device, args.workers,
+                          score_path=score_path, record_points=args.record_points)
         metadata = (dict(version=saved["version"], complete=saved.get("frozen", False),
                          seed=saved["config"]["seed"], mode=saved["mode"], method=saved["mode"],
                          architecture=saved["config"]["architecture"], score_version=saved["config"]["score_version"],

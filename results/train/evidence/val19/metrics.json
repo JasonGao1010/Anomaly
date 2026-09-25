@@ -1,0 +1,22 @@
+{
+  "version": "AJAE-normal-evidence",
+  "complete": true,
+  "seed": 206,
+  "mode": "normal_hypothesis",
+  "method": "normal_hypothesis",
+  "architecture": "multimode48_blind_density",
+  "score_version": "joint_density_logtail",
+  "checkpoint_update": 1800,
+  "checkpoint": "/home/jasongao/Study/AJAE-v4/results/train/evidence/frozen.pt",
+  "metrics": {
+    "AP": 0.2586201508219,
+    "FPR95": 28.62895962882356,
+    "AUROC": 89.24245261869916,
+    "threshold": 0.9111767411231995
+  },
+  "scans": 1960,
+  "points": 193879969,
+  "seconds": 575.8500771599938,
+  "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "official_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
+}
