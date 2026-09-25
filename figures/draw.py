@@ -1,183 +1,194 @@
-"""Draw the paper's architecture and source observations without running a model.
+"""Draw the current normal-only network: python figures/draw.py.
 
-Run from the repository root: python figures/draw.py
-The fixed training example was selected without model scores: both insertion
-roles have at least ten valid returns at median range 20--30 m, followed by
-lexicographic scene/frame/variant/instance ordering. Placements are independent.
+Layer stacks and attention blocks follow ML Visuals conventions; see
+assets/LICENSES.md. Point and density glyphs are schematic, not model outputs.
 """
-
 from pathlib import Path
-import subprocess
-import sys
-import tempfile
 
-import ijson
 import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib import font_manager
+from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Rectangle
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from src.data import point_targets, read_nuscenes
-
-TOKEN = "955bce79c1aa4f7d80e8060d5c255a49"
-FILES = (None, f"{TOKEN}_anomaly_r3.npz", f"{TOKEN}_control.npz")
-GRAY, ORANGE, TEAL = "#90999F", "#D55E00", "#008877"
-
-
-def records():
-    path = ROOT / "results/data/sequence/train.json"
-    with path.open("rb") as stream:
-        mapping = list(ijson.items(stream, "mapping.item", use_float=True))
-    selected = {}
-    with path.open("rb") as stream:
-        for row in ijson.items(stream, "records.item", use_float=True):
-            if row["token"] != TOKEN:
-                continue
-            delta = Path(row["delta"]).name if "delta" in row else None
-            if delta in FILES:
-                if delta in selected:
-                    raise ValueError("ambiguous source example")
-                selected[delta] = row
-            if len(selected) == len(FILES):
-                break
-    return mapping, [selected[name] for name in FILES]
+OUT = Path(__file__).resolve().parent
+INK, BLUE, TEAL, PURPLE, RED = "#263747", "#377EAB", "#20867A", "#8065A8", "#B95245"
 
 
 def main():
-    # Embed the requested text font and retain standard mathematical glyphs.
-    matplotlib.rcParams.update({
-        "font.family": "Times New Roman", "font.size": 8.5,
-        "pdf.fonttype": 42, "ps.fonttype": 42, "mathtext.fontset": "cm",
-        "axes.linewidth": .55, "xtick.major.width": .5,
-        "ytick.major.width": .5, "xtick.major.size": 2,
-        "ytick.major.size": 2, "savefig.facecolor": "white",
-    })
-    mapping, chosen = records()
-    frames = [read_nuscenes(record, mapping) for record in chosen]
-    inserted_masks = []
-    fig, axes = plt.subplots(2, 3, figsize=(5.5, 3.05),
-                             gridspec_kw={"height_ratios": [4, 1]})
-    fig.subplots_adjust(left=.092, right=.985, bottom=.24, top=.86,
-                        wspace=.22, hspace=.30)
-    titles = ("(a) Original scan", "(b) Auxiliary anomaly", "(c) Normal insertion")
-    stats = []
-    for col, (record, frame) in enumerate(zip(chosen, frames)):
-        xyz, target = frame.xyzi[:, :3], point_targets(frame)
-        inserted = np.zeros(len(xyz), dtype=bool)
-        changed_ignore = inserted.copy()
-        if "delta" in record:
-            with np.load(record["delta"], allow_pickle=False) as delta:
-                slots, labels = delta["slots"], delta["labels"]
-                inserted[slots[labels > 0]] = True
-                changed_ignore[slots[labels == 0]] = True
-        inserted_masks.append(inserted)
-        # One common crop is applied to all panels; every retained point is drawn.
-        crop = ((xyz[:, 0] >= 0) & (xyz[:, 0] <= 8)
-                & (xyz[:, 1] >= -24) & (xyz[:, 1] <= -16)
-                & (xyz[:, 2] >= -3) & (xyz[:, 2] <= -1))
-        if np.any(inserted & ~crop):
-            raise ValueError("the shared crop truncates an inserted object")
-        color, marker = (ORANGE, "o") if col == 1 else (TEAL, "^")
-        for row, vertical in enumerate((1, 2)):
-            ax = axes[row, col]
-            background = crop & ~inserted & ~changed_ignore
-            ax.scatter(xyz[background, 0], xyz[background, vertical],
-                       s=2, c=GRAY, linewidths=0, zorder=1)
-            ignored = crop & changed_ignore
-            ax.scatter(xyz[ignored, 0], xyz[ignored, vertical],
-                       s=8, c=GRAY, marker="x", linewidths=.5, zorder=2)
-            ax.scatter(xyz[inserted, 0], xyz[inserted, vertical],
-                       s=12, c=color, marker=marker, linewidths=0, zorder=3)
-            ax.set_xlim(0, 8)
-            ax.set_xticks([0, 4, 8])
-            ax.set_ylim((-24, -16) if row == 0 else (-3, -1))
-            ax.set_yticks([-24, -20, -16] if row == 0 else [-3, -1])
-            ax.set_aspect("equal", adjustable="box")
-            ax.spines[["top", "right"]].set_visible(False)
-            if col == 0:
-                ax.set_ylabel("LiDAR y (m)" if row == 0 else "LiDAR z (m)", labelpad=2)
-            else:
-                ax.tick_params(labelleft=False)
-            if row == 0:
-                ax.set_title(titles[col], fontsize=8.5, pad=15)
-                ax.tick_params(labelbottom=False)
-            else:
-                ax.set_xlabel("LiDAR x (m)", labelpad=1)
-        valid = inserted & (target >= 0)
-        count = int(valid.sum())
-        distance = float(np.median(np.linalg.norm(xyz[valid], axis=1))) if count else None
-        detail = "Same receiving scan" if not count else f"{count} returns; {distance:.1f} m"
-        axes[0, col].text(.5, 1.04, detail, ha="center", va="bottom",
-                          transform=axes[0, col].transAxes, fontsize=8)
-        stats.append((count, distance))
-    handles = [Line2D([], [], color=GRAY, marker=".", linestyle="", label="Background"),
-               Line2D([], [], color=GRAY, marker="x", markersize=4, linestyle="", label="Ignored occlusion"),
-               Line2D([], [], color=ORANGE, marker="o", markersize=4, linestyle="", label="Auxiliary anomaly"),
-               Line2D([], [], color=TEAL, marker="^", markersize=4, linestyle="", label="Inserted normal")]
-    fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(.52,.005),
-               ncol=2, frameon=False, fontsize=8, handletextpad=.3, columnspacing=1.2)
-    out = Path(__file__).resolve().parent / "data.pdf"
-    fig.savefig(out, metadata={"Title": "Paired nuScenes source observations",
-                              "Author": "Anonymous authors"})
+    # Use the actual requested font; never substitute Comic Neue silently.
+    windows = Path("/mnt/c/Windows/Fonts")
+    if (windows / "comic.ttf").is_file():
+        for name in ("comic.ttf", "comicbd.ttf"):
+            font_manager.fontManager.addfont(windows / name)
+    font_manager.findfont("Comic Sans MS", fallback_to_default=False)
+    plt.rcParams.update({"font.family": "Comic Sans MS", "font.size": 7,
+                         "mathtext.fontset": "cm", "pdf.fonttype": 42,
+                         "ps.fonttype": 42, "svg.fonttype": "none",
+                         "text.color": INK, "axes.unicode_minus": False})
+    fig = plt.figure(figsize=(5.5, 3.42))
+    ax = fig.add_axes([.008, .008, .984, .984])
+    ax.set(xlim=(0, 16), ylim=(0, 10))
+    ax.set_axis_off()
+
+    def label(x, y, value, size=6.6, **kw):
+        ax.text(x, y, value, ha=kw.pop("ha", "center"), va="center", fontsize=size, **kw)
+
+    def box(x, y, w, h, value="", color=BLUE, fill="#F0F6FA", size=6.5, **kw):
+        ax.add_patch(FancyBboxPatch((x, y), w, h,
+                     boxstyle="round,pad=0.03,rounding_size=0.10",
+                     ec=color, fc=fill, lw=.65, **kw))
+        if value:
+            label(x + w / 2, y + h / 2, value, size)
+
+    def wire(points, color=INK, dashed=False, arrow=True):
+        # Straight segments keep information paths distinguishable at print scale.
+        for k in range(len(points) - 1):
+            last = k == len(points) - 2
+            ax.add_patch(FancyArrowPatch(points[k], points[k + 1],
+                         arrowstyle="-|>" if last and arrow else "-",
+                         mutation_scale=6, lw=.65, color=color,
+                         linestyle=(0, (3, 2)) if dashed else "-",
+                         shrinkA=0, shrinkB=0, zorder=3))
+
+    def tensor(x, y, w, h, color=BLUE, planes=3, rows=5):
+        for k in reversed(range(planes)):
+            dx, dy = .10 * k, .09 * k
+            ax.add_patch(Rectangle((x + dx, y + dy), w, h,
+                                  ec=color, fc="white", lw=.55, zorder=4))
+            ax.add_patch(Rectangle((x + dx, y + dy), w, h,
+                                  ec="none", fc=color, alpha=.18, zorder=4))
+            for j in range(1, rows):
+                ax.plot([x + dx, x + dx + w], [y + dy + h*j/rows]*2,
+                        color=color, lw=.3, zorder=4)
+            ax.plot([x + dx + w/2]*2, [y + dy, y + dy + h], color=color, lw=.3, zorder=4)
+
+    # The encoders operate independently; only class vectors are shared.
+    box(2.05, 6.10, 9.22, 3.40, color="#ADCBDD", fill="#F5F9FC")
+    box(2.05, 2.00, 9.22, 3.02, color="#A9CFC5", fill="#F3F9F6")
+    label(2.23, 9.16, "(a) Appearance evidence", 7.8, ha="left", weight="bold")
+    label(2.23, 4.69, "(b) Return evidence", 7.8, ha="left", weight="bold")
+
+    # A schematic point cloud is an input icon, not a measured or inferred scene.
+    gx, gy = np.meshgrid(np.linspace(-.65, .65, 11), np.linspace(-.48, .48, 8))
+    ax.scatter(.83 + gx + .30*gy, 5.65 + .33*gy - .14*gx, s=.65, c="#8195A3", lw=0)
+    for level in np.linspace(0, .66, 6):
+        a = np.linspace(0, 2*np.pi, 13)
+        ax.scatter(.95 + .30*np.cos(a), 5.65 + .13*np.sin(a) + level,
+                   s=.8, c=BLUE, lw=0)
+    label(.88, 6.83, "Single scan", 7.2, weight="bold")
+    label(.88, 5.04, r"$X$", 9)
+    wire([(1.57, 5.75), (1.85, 5.75), (1.85, 7.80), (2.32, 7.80)])
+    wire([(1.85, 5.75), (1.85, 3.40), (2.27, 3.40)])
+
+    # The backbone is shown as a conventional encoder/decoder layer stack.
+    for x, y, w, h in [(2.38,7.32,.34,.86),(2.90,7.48,.37,.55),
+                       (3.45,7.53,.4,.44),(4.01,7.36,.34,.76)]:
+        tensor(x,y,w,h,planes=2,rows=3)
+    for start,end in [(2.82,2.89),(3.37,3.43),(3.95,4.00)]:
+        wire([(start,7.78),(end,7.78)])
+    label(3.41, 8.60, "LitePT-S", 7.2)
+    label(3.41, 7.00, "voxel to point", 5.7)
+    box(2.38, 6.25, 1.97, .57, "Point detail\nMLP", size=5.8)
+    wire([(1.85,6.54),(2.36,6.54)])
+    ax.add_patch(Circle((4.87,7.76),.20,ec=BLUE,fc="white",lw=.65))
+    label(4.87,7.76,"C",6.3)
+    wire([(4.48,7.76),(4.66,7.76)])
+    wire([(4.36,6.55),(4.87,6.55),(4.87,7.55)])
+    tensor(5.38,7.28,.39,.85,planes=3)
+    wire([(5.08,7.76),(5.36,7.76)])
+    label(5.68,8.63,r"$\mathbf{h}_i$",8.5)
+    label(5.68,6.91,"48-D",6.1)
+
+    # Four appearance modes per class; colors denote different normal classes.
+    box(6.43,7.10,2.13,1.19,color=BLUE,fill="white")
+    for row,col in enumerate((BLUE,TEAL,PURPLE)):
+        for k in range(4):
+            ax.add_patch(Circle((6.77+.47*k,7.34+.32*row),.085,ec=col,fc=col,lw=.3))
+    label(7.50,8.79,"Class centers",6.8)
+    label(7.50,8.42,"4 modes / class",5.4)
+    wire([(5.98,7.76),(6.40,7.76)])
+    tensor(9.31,7.12,.50,1.15,planes=1,rows=7)
+    wire([(8.61,7.76),(9.27,7.76)])
+    label(9.56,8.64,r"$a_{ic}$",8.5)
+    label(9.56,6.71,"19 class\nsupports",5.9)
+
+    # Shared class vectors are parameters, with no full-scan feature input.
+    box(5.63,5.36,3.72,.47,r"Shared class vectors $\mathbf{q}_c$",PURPLE,"#F3EFF8",6.3)
+    wire([(7.50,5.85),(7.50,6.45),(7.50,7.07)],color=PURPLE)
+    wire([(6.80,5.33),(6.80,4.10)],color=PURPLE)
+
+    # Cell-local encoding precedes neighbor selection and cross-cell attention.
+    tensor(2.30,2.95,.50,.83,TEAL,planes=1,rows=4)
+    label(2.55,2.43,"Angular\ncells",5.9)
+    box(3.35,2.93,1.43,.97,"Cell MLP\nmean + max",TEAL,"#E1F0EA",6.0)
+    wire([(2.84,3.40),(3.30,3.40)])
+    label(4.06,2.40,"Per cell",5.6)
+    # The crossed central token is removed before attention, including all returns.
+    for row in range(3):
+        for col in range(3):
+            x,y=5.06+.20*col,3.10+.20*row
+            ax.add_patch(Rectangle((x,y),.18,.18,ec=TEAL,fc="#DFEFE8",lw=.3))
+    ax.add_patch(Rectangle((5.26,3.30),.18,.18,ec=RED,fc="white",lw=.55,zorder=5))
+    ax.plot([5.26,5.44],[3.30,3.48],color=RED,lw=.65,zorder=5)
+    ax.plot([5.26,5.44],[3.48,3.30],color=RED,lw=.65,zorder=5)
+    wire([(4.83,3.40),(5.01,3.40)])
+    label(5.36,2.39,"Target\nexcluded",5.2,color=RED)
+    box(6.13,3.10,1.50,1.09,color=TEAL,fill="#DFEEE7")
+    box(6.04,3.01,1.50,1.09,"Cross\nattention\n+ FFN",TEAL,"#C5E0D4",5.8)
+    wire([(5.68,3.40),(6.00,3.40)])
+    label(6.80,2.44,"2 layers\n3 heads",5.5)
+    label(7.65,4.48,"class queries",5.3,color=PURPLE)
+    box(7.94,3.03,1.30,1.02,"Student-t\nmixture\nhead",TEAL,"#DFEEE7",5.6)
+    wire([(7.58,3.40),(7.90,3.40)])
+    label(8.59,2.47,"3 components\nper class",5.6)
+    label(8.59,4.27,r"$\mu,\sigma,w$",7.5)
+
+    # Density curves are schematic. The target measurement enters only here.
+    wire([(9.29,3.40),(9.56,3.40)])
+    t=np.linspace(0,1,100)
+    for mu,col in [(.29,BLUE),(.55,TEAL),(.73,PURPLE)]:
+        p=sum(w/scale*(1+((t-mean)/scale)**2/3)**-2
+              for mean,scale,w in [(mu-.16,.07,.20),(mu,.12,.65),(mu+.14,.05,.15)])
+        ax.plot(9.62+1.14*t,3.04+.09*p,color=col,lw=.65)
+    ax.plot([10.31,10.31],[3.01,3.94],color=RED,lw=.75)
+    ax.plot([9.62,10.76],[3.02,3.02],color=INK,lw=.45)
+    label(10.21,4.28,"Evaluate density",5.8)
+    label(10.85,2.55,r"$p_{ic}$",8.0)
+    wire([(.84,4.77),(.84,1.52),(10.31,1.52),(10.31,2.99)],color=RED)
+    label(4.10,1.51,r"Measured log range $z_i$",6.8,color=RED,
+          bbox={"fc":"white","ec":"none","pad":1.5})
+
+    # Evidence combines within a class before any class is selected.
+    wire([(9.86,7.76),(11.60,7.76),(11.60,6.05),(11.76,6.05)])
+    wire([(10.84,3.45),(11.40,3.45),(11.40,5.56),(11.76,5.56)])
+    label(13.47,8.80,"(c) Joint decision",7.6,weight="bold")
+    box(11.81,5.18,2.03,1.27,color=PURPLE,fill="#F1ECF6")
+    label(12.84,6.16,"Same class",6.3)
+    label(12.84,5.78,r"$v_{ic}=a_{ic}p_{ic}/M$",7.0)
+    label(12.84,5.40,r"$E_{ic}=-\log v_{ic}$",7.0)
+    box(14.40,6.65,1.40,1.18,"Semantic\nlabel\n"+r"$\arg\min_c E_{ic}$",PURPLE,"#F7F4FA",6.0)
+    box(14.40,4.14,1.40,1.18,"Unknown\nscore\n"+r"$\min_c E_{ic}$",PURPLE,"#F7F4FA",6.0)
+    wire([(13.88,5.96),(14.13,5.96),(14.13,7.23),(14.35,7.23)])
+    wire([(14.13,5.96),(14.13,4.73),(14.35,4.73)])
+
+    # Dashed paths are normal-data training objectives, retained in the caption.
+    box(11.99,2.70,1.72,.66,"Class loss\n"+r"$\mathcal{L}_{\rm joint}$",RED,"#FCF1EC",6.0)
+    wire([(12.84,5.15),(12.84,3.40)],color=RED,dashed=True)
+    box(14.27,2.70,1.52,.66,"Normal label\n"+r"$Y_i$",RED,"#FCF1EC",5.5)
+    wire([(14.23,3.03),(13.76,3.03)],color=RED,dashed=True)
+    box(11.99,.23,1.72,.75,"Likelihood loss\n"+r"$\mathcal{L}_{\rm pred}$",RED,"#FCF1EC",5.7)
+    wire([(10.84,3.45),(11.06,3.45),(11.06,.61),(11.94,.61)],color=RED,dashed=True)
+    wire([(15.03,2.66),(15.03,.61),(13.76,.61)],color=RED,dashed=True)
+    label(3.27,.57,"C: concatenate    Solid: inference    Dashed: training",5.8)
+    # Parameters of both branches receive the joint classification gradient.
+    label(12.80,1.98,"Joint loss trains\nboth evidence branches",5.8,color=RED)
+
+    fig.savefig(OUT / "method.pdf", metadata={"Title":"Class-conditional return evidence network",
+                                             "Author":"Anonymous authors"})
     plt.close(fig)
-    print(f"{out}: scene-0042, token={TOKEN}, inserted_counts_and_ranges={stats}")
-
-    # Scenes show measured source data, not model predictions. Generate them in
-    # the TeX build directory so the final vector figure remains self-contained.
-    with tempfile.TemporaryDirectory(prefix="ajae-method.") as build:
-        subprocess.run([
-            "/usr/bin/python3", "-c",
-            "import sys,cairosvg; from pathlib import Path; "
-            "s=Path(sys.argv[1]).read_text().replace('currentColor','#D86B2B'); "
-            "cairosvg.svg2pdf(bytestring=s.encode(),write_to=sys.argv[2])",
-            str(ROOT / "figures/assets/flame.svg"), str(Path(build) / "flame.pdf"),
-        ], check=True)
-        # The same camera and crop preserve spatial context across observations.
-        eye = np.array([12., 7., 9.])
-        forward = np.array([0., -20., -1.8]) - eye
-        forward /= np.linalg.norm(forward)
-        right = np.cross(forward, [0., 0., 1.])
-        right /= np.linalg.norm(right)
-        up = np.cross(right, forward)
-
-        def project(xyz):
-            shifted = xyz - eye
-            depth = shifted @ forward
-            return shifted @ right / depth, shifted @ up / depth, depth
-
-        with PdfPages(Path(build) / "observations.pdf") as pdf:
-            for index in (0, 1):
-                xyz = frames[index].xyzi[:, :3]
-                u, v, depth = project(xyz)
-                crop = ((np.abs(xyz[:, 0]) <= 25) & (xyz[:, 1] >= -45)
-                        & (xyz[:, 1] <= 5) & (xyz[:, 2] >= -3.5)
-                        & (xyz[:, 2] <= 8) & (depth > 1))
-                order = np.flatnonzero(crop)[np.argsort(-depth[crop])]
-                inserted = inserted_masks[index]
-                fig = plt.figure(figsize=(32 / 25.4, 22 / 25.4))
-                ax = fig.add_axes([0, 0, 1, 1])
-                ax.scatter(u[order], v[order], s=.32, c="#697782", linewidths=0)
-                ax.scatter(u[inserted], v[inserted], s=1.3, c=ORANGE, linewidths=0)
-                ax.set_xlim(-.85, .85)
-                ax.set_ylim(-.57, .5)
-                ax.set_aspect("equal")
-                ax.set_axis_off()
-                pdf.savefig(fig)
-                plt.close(fig)
-        run = subprocess.run(["xelatex", "-interaction=nonstopmode", "-halt-on-error",
-                              str(ROOT / "figures/method.tex")],
-                             cwd=build, capture_output=True, text=True)
-        if run.returncode:
-            raise RuntimeError(run.stdout[-3000:])
-        if "Missing character" in run.stdout or "Font Warning" in run.stdout:
-            raise RuntimeError(run.stdout[-3000:])
-        (ROOT / "figures/method.pdf").write_bytes((Path(build) / "method.pdf").read_bytes())
-    print(f"{ROOT / 'figures/method.pdf'}: pointwise model forward path; source-data scene")
+    print(OUT / "method.pdf")
 
 
 if __name__ == "__main__":
