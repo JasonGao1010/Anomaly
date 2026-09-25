@@ -239,6 +239,72 @@ class ScoreCalibration(nn.Module):
         return low_y + (scores - low_x) * ((high_y - low_y) / (high_x - low_x))
 
 
+@torch.no_grad()
+def select_score_calibration(reference, holdout, bandwidths, device, current=None):
+    """Select only on independent normal tails; stream queries to bound GPU memory."""
+    import copy
+    ref_score, ref_predicted, ref_conditions = reference
+    scores, predicted, conditions = holdout
+    ref_score = torch.as_tensor(ref_score).cpu()
+    scores, predicted = torch.as_tensor(scores).cpu(), torch.as_tensor(predicted).cpu().long()
+    conditions = torch.as_tensor(conditions).cpu()
+    raw_threshold = float(np.quantile(ref_score.numpy(), .99))
+    counts = torch.bincount(predicted, minlength=16)
+    raw_false = torch.bincount(predicted[scores > raw_threshold], minlength=16)
+    populated = counts >= 2048
+    if not bool(populated.any()):
+        raise ValueError("normal calibration selection has no sufficiently populated holdout group")
+    raw_rates = raw_false.double() / counts.clamp_min(1)
+    raw_error = float((raw_rates[populated] - .01).abs().mean())
+    candidates = []
+    if current is not None and bool(current.enabled):
+        candidates.append(("previous", copy.deepcopy(current).to(device), None))
+    for bandwidth in bandwidths:
+        candidate = ScoreCalibration(range_bandwidth=bandwidth).to(device)
+        fit = candidate.fit(ref_score, ref_predicted, ref_conditions)
+        candidate.enabled.fill_(True)
+        candidates.append(("full_normal" if current is not None else "normal", candidate, fit))
+    reports, best, best_error, best_source, best_bandwidth = [], None, math.inf, None, None
+    for source, candidate, fit in candidates:
+        false = torch.zeros(16, dtype=torch.long, device=device)
+        for start in range(0, len(scores), 65536):
+            stop = start + 65536
+            group = predicted[start:stop].to(device)
+            values = candidate(scores[start:stop].to(device), group, conditions[start:stop].to(device))
+            false += torch.bincount(group[values > math.log(100)], minlength=16)
+        rates = false.cpu().double() / counts.clamp_min(1)
+        error = float((rates[populated] - .01).abs().mean())
+        bandwidth = float(candidate.range_bandwidth) if hasattr(candidate, "range_bandwidth") else 0.
+        rows = [dict(category=c, points=int(counts[c]), raw_fpr01=float(raw_rates[c]),
+                     calibrated_fpr01=float(rates[c])) for c in range(16) if counts[c]]
+        reports.append(dict(source=source, range_bandwidth=bandwidth, classes=rows,
+                            fit=fit, mean_class_tail_error=error))
+        if error < best_error:
+            best, best_error, best_source, best_bandwidth = candidate, error, source, bandwidth
+        print(f"normal calibration {source} bandwidth={bandwidth:g}: tail error={error:.6f}", flush=True)
+    best.enabled.fill_(best_error < raw_error)
+    return best, dict(enabled=bool(best.enabled), range_bandwidth=best_bandwidth,
+        selected_source=best_source if bool(best.enabled) else "raw", candidates=reports,
+        raw_mean_class_tail_error=raw_error, calibrated_mean_class_tail_error=best_error,
+        normal_blocks_only=True,
+        selection="mean absolute deviation from 1% normal FPR across frozen prediction groups with at least 2048 holdout points; whole 64-frame blocks remain disjoint")
+
+
+def normal_semantic_metrics(confusion):
+    """Truth indexes rows; every false positive contributes to its predicted class union."""
+    matrix = torch.as_tensor(confusion, dtype=torch.float64, device="cpu")
+    if matrix.shape != (19, 19) or bool((matrix < 0).any()) or not bool(matrix.sum()):
+        raise ValueError("normal semantics require a nonempty 19-class confusion matrix")
+    support, predicted, correct = matrix.sum(1), matrix.sum(0), matrix.diag()
+    union = support + predicted - correct
+    return dict(points=int(matrix.sum()), confusion=matrix.long().tolist(),
+        iou=[float(correct[c]/union[c]) if union[c] else None for c in range(19)],
+        mean_iou_gt=float((correct[support>0]/union[support>0]).mean()),
+        mean_iou_present=float((correct[union>0]/union[union>0]).mean()),
+        point_accuracy=float(correct.sum()/matrix.sum()),
+        definition="pooled point confusion; mean_iou_gt averages ground-truth-present classes, including classes without training references")
+
+
 class InstanceSupport(nn.Module):
     """One observed normal instance jointly supports all frozen feature levels."""
 

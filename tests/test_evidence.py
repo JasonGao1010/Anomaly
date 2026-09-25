@@ -39,6 +39,29 @@ def test_voxel_sort_preserves_exact_point_order_means_and_origin_grid():
             np.testing.assert_array_equal(actual[key].numpy(), value, err_msg=key)
 
 
+def test_normal_semantics_keeps_unseen_training_classes_and_false_positives():
+    from src.normal import normal_semantic_metrics
+    matrix = torch.zeros(19, 19, dtype=torch.long)
+    matrix[0, 0], matrix[1, 1], matrix[9, 0] = 128, 128, 128
+    measured = normal_semantic_metrics(matrix)
+    assert measured["iou"][0] == .5 and measured["iou"][1] == 1
+    assert measured["iou"][9] == 0 and measured["mean_iou_gt"] == .5
+
+
+def test_target_cache_view_excludes_every_auxiliary_point(tmp_path):
+    from src.train import target_normal_cache
+    path = tmp_path / "source.npy"
+    np.save(path, np.array([1, 1, 1, 0, 0], np.uint8))
+    frames = [dict(index=0,begin=0,end=3,source="normal_stu",scene="206"),
+              dict(index=1,begin=3,end=5,source="nuscenes",scene="source")]
+    cache = dict(count=5,capacity=5,frames=frames,paths=dict(source=str(path)))
+    selected = target_normal_cache(cache,"206")
+    assert selected["count"] == 3 and selected["frames"] == frames[:1]
+    assert cache["count"] == 5
+    with pytest.raises(ValueError,match="original STU prefix"):
+        target_normal_cache(cache,"201")
+
+
 def point_records(scores, confidence):
     records = np.zeros(len(scores), dtype=[("score", "f4"), ("raw_score", "f4"),
                                          ("confidence", "f4"), ("semantic", "i2")])

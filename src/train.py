@@ -1762,8 +1762,9 @@ def normal_calibration(model, records, device, workers, output, *, seed=206, ref
 class SupportScans:
     """Single-view frozen features; labels select training queries, never inputs."""
 
-    def __init__(self, records, *, development=False):
+    def __init__(self, records, *, development=False, full=False):
         self.records, self.development = records, development
+        self.full = full
 
     def __len__(self):
         return len(self.records)
@@ -1779,7 +1780,9 @@ class SupportScans:
         singleton = np.flatnonzero(allowed.sum(1) == 1)
         budget = 2048 if self.development or row["source"] == "nuscenes" else 4096
         rng = np.random.default_rng(np.random.SeedSequence([206, index, int(self.development)]))
-        if self.development:
+        if self.full:
+            chosen = valid
+        elif self.development:
             chosen = rng.choice(valid, min(len(valid), budget), replace=False)
         else:
             # Reserve fine-label coverage; coarse normal sets remain eligible for
@@ -1798,7 +1801,7 @@ class SupportScans:
         chosen = np.sort(chosen).astype(np.int64)
         sample = voxelize(raw["xyzi"], official=True)
         sample.update(queries=torch.from_numpy(chosen),
-            conditions=torch.from_numpy(support_conditions(raw["xyzi"], chosen)),
+            conditions=torch.from_numpy(support_conditions(raw["xyzi"], chosen, range_only=self.full)),
             allowed=torch.from_numpy(allowed[chosen]),
             semantic=torch.from_numpy(np.where(allowed[chosen].sum(1) == 1,
                 allowed[chosen].argmax(1), -1).astype(np.int16)),
@@ -2053,6 +2056,23 @@ def support_development(scorer, cache, indices, device):
                 scope="Sampled singleton normal points; each represented class has equal model-selection weight")
 
 
+def target_normal_cache(cache, sequence):
+    """View only the STU prefix of a frozen cache; source points are never loaded."""
+    rows = [row for row in cache["frames"] if row["source"] == "normal_stu"]
+    cursor = 0
+    for index, row in enumerate(rows):
+        if (str(row["scene"]) != str(sequence) or row["index"] != index
+                or row["begin"] != cursor or row["end"] <= cursor):
+            raise ValueError("target cache must preserve the complete original STU prefix")
+        cursor = row["end"]
+    if not cursor or rows != cache["frames"][:len(rows)]:
+        raise ValueError("target cache cannot relabel or interleave source samples")
+    source = np.load(cache["paths"]["source"], mmap_mode="r")[:cursor]
+    if not np.all(source == 1):
+        raise ValueError("non-STU point entered the target-only cache view")
+    return dict(cache, count=cursor, capacity=cursor, frames=rows)
+
+
 def normal_cache(cache, device):
     """Read each immutable normal feature array once, excluding unused capacity."""
     values = {}
@@ -2068,6 +2088,8 @@ def instance_memory(cache, size):
     from scipy.linalg import solve_triangular
     arrays = {k: np.load(v, mmap_mode="r")[:cache["count"]] for k,v in cache["paths"].items()}
     source, frame = arrays["source"], arrays["frame"]
+    if not np.all(source == 1):
+        raise ValueError("current normal instance training admits STU206 only")
     allowed = arrays["allowed"]
     codes = allowed.astype(np.int64) @ (1 << np.arange(19,dtype=np.int64))
     if not np.all(codes>0):
@@ -2075,7 +2097,7 @@ def instance_memory(cache, size):
     bands = np.searchsorted(np.log([10.,20.,35.]), arrays["conditions"][:,0], side="right")
     rng = np.random.default_rng(206)
     chosen, report = [], []
-    for domain, mass in ((1,.8),(0,.2)):
+    for domain, mass in ((1,1.),):
         population = np.flatnonzero(source==domain)
         groups = defaultdict(list)
         for code in np.unique(codes[population]):
@@ -2126,58 +2148,60 @@ def instance_memory(cache, size):
     correlation=covariance/scale[:,None]/scale[None,:]
     chol=np.linalg.cholesky((correlation+correlation.T)*.5+.01*np.eye(252))
     whitener=solve_triangular(chol,np.eye(252),lower=True).T/scale[:,None]
-    # Source identifiers denote complete scenes; target identifiers remain actual frame numbers.
-    group=np.empty(cache["count"],dtype=np.int64)
-    scenes={}
-    for row in cache["frames"]:
-        if row["source"]=="nuscenes":
-            key=str(row["scene"])
-            value=scenes.setdefault(key,len(scenes))
-        else:
-            value=row["index"]
-        group[row["begin"]:row["end"]]=value
+    group=np.asarray(frame,dtype=np.int64).copy()
     return chosen, group, mean, whitener, dict(points=len(chosen),target_statistics_points=count,
         source_points=int((source[chosen]==0).sum()),target_points=int((source[chosen]==1).sum()),
         selection=report,coordinates="STU206 only; all 252 directions retained; correlation ridge .01",
-        exclusion="same nuScenes scene; STU206 frames less than 16 apart")
+        exclusion="STU206 frames less than 16 apart; no auxiliary-source instances")
 
 
 @torch.no_grad()
-def instance_development(scorer, data, indices, *, retain=False):
+def instance_development(scorer, data, indices, *, retain=False, exclude_neighbors=False):
     """Measure actual semantic support and normal scores on a specified normal population."""
     scorer.eval()
-    totals=torch.zeros(19,6,device=data["features"].device,dtype=torch.float64)
+    from .normal import normal_semantic_metrics
+    totals=torch.zeros(19,7,device=data["features"].device,dtype=torch.float64)
+    confusion=torch.zeros(19,19,device=data["features"].device,dtype=torch.long)
     scores=[]
     for start in range(0,len(indices),4096):
         at=indices[start:start+4096]
         f,g,y=data["features"][at],data["conditions"][at],data["semantic"][at]
         if bool((y<0).any()):
             raise ValueError("normal class development requires actual fine labels")
-        energy=scorer.class_energy(f)
-        correct=energy.argmin(1)==y
+        identity = (dict(source=data["source"][at],frame=data.get("group",data["frame"])[at])
+                    if exclude_neighbors else {})
+        energy=scorer.class_energy(f,**identity)
+        prediction=energy.argmin(1)
+        correct=prediction==y
+        confusion+=torch.bincount(y*19+prediction,minlength=361).reshape(19,19)
         valid=torch.isfinite(energy.gather(1,y[:,None]).squeeze(1))
-        if not bool(valid.all()):
-            raise ValueError("normal development class lacks a real singleton reference")
-        ce=F.cross_entropy(-energy/scorer.temperature,y,reduction="none")
-        raw=scorer.raw_score(f,g)
+        # An unseen normal fine class remains in recall and anomaly support.
+        # Its unavailable class likelihood is reported, never invented or dropped.
+        ce=torch.zeros_like(y,dtype=torch.float32)
+        if bool(valid.any()):
+            ce[valid]=F.cross_entropy(-energy[valid]/scorer.temperature,y[valid],reduction="none")
+        raw=scorer.raw_score(f,g,**identity)
         far=g[:,0]>=math.log(35.)
         values=torch.stack((torch.ones_like(raw),correct.float(),ce,far.float(),
-                            (far&correct).float(),raw),-1)
+                            (far&correct).float(),raw,valid.float()),-1)
         if not bool(torch.isfinite(values).all()):
             raise ValueError("nonfinite normal instance development")
         totals.index_add_(0,y,values.double())
         if retain:
             scores.append(raw.cpu())
-    rows=[dict(category=c,points=int(v[0]),recall=float(v[1]/v[0]),ce=float(v[2]/v[0]),
+    rows=[dict(category=c,points=int(v[0]),recall=float(v[1]/v[0]),ce=float(v[2]/v[6]) if v[6] else None,
+               class_reference_available=bool(v[6]),
                far_points=int(v[3]),far_recall=float(v[4]/v[3]) if v[3] else None,
                mean_score=float(v[5]/v[0])) for c,v in enumerate(totals.cpu().tolist()) if v[0]]
     reliable=[r for r in rows if r["points"]>=128]
     result=dict(points=int(totals[:,0].sum()),classes=rows,
         class_recall=float(np.mean([r["recall"] for r in reliable])),
-        class_ce=float(np.mean([r["ce"] for r in reliable])),
+        class_ce=float(np.mean([r["ce"] for r in reliable if r["ce"] is not None])),
+        points_without_fine_reference=int(totals[:,0].sum()-totals[:,6].sum()),
         point_recall=float(totals[:,1].sum()/totals[:,0].sum()),
         far_points=int(totals[:,3].sum()),far_recall=float(totals[:,4].sum()/totals[:,3].sum()),
         far_class_recall=float(np.mean([r["far_recall"] for r in rows if r["far_points"]])),
+        semantics=normal_semantic_metrics(confusion),
         role="normal instance-support development; no anomaly labels or density-likelihood surrogate")
     return (result,torch.cat(scores)) if retain else result
 
@@ -2186,7 +2210,7 @@ def normal_main():
     """Learn a bounded multilevel metric after the frozen official perception network."""
     from threadpoolctl import threadpool_limits
     from .model import FrozenSupport
-    from .normal import InstanceSupport, ScoreCalibration, INSTANCE_VERSION
+    from .normal import InstanceSupport, select_score_calibration, INSTANCE_VERSION
     parser=argparse.ArgumentParser(description=normal_main.__doc__)
     parser.add_argument("--normal",action="store_true")
     parser.add_argument("--output",type=Path,required=True)
@@ -2211,13 +2235,16 @@ def normal_main():
     dev_cache=json.loads((args.features/"development_features.json").read_text())
     if any(row.get("labels")!="normal_candidate_sets_v1" for row in (cache,dev_cache)):
         raise ValueError("normal cache must retain actual partial label sets")
+    cache=target_normal_cache(cache,"206")
+    dev_cache=target_normal_cache(dev_cache,"201")
     args.output.mkdir(parents=True)
     config=dict(version=INSTANCE_VERSION,architecture="frozen_litept_normal_instance_support",
         score_version="bounded_full_rank_multilevel_nearest_real_normal",features=str(args.features),
         initial_sha256=WEIGHTS_SHA256,seed=206,training_points=cache["count"],development_points=dev_cache["count"],
         memory_size=16384,batch_size=1024,epochs=args.epochs,learning_rate=.001,
-        coordinate_source="STU206 only",training="all cached trusted normals; 80% target and 20% auxiliary source loss mass; equal allowed-set mass within each source",
-        selection="STU201 odd contiguous 64-frame blocks only; mean fine-class recall, then mean class cross-entropy; identity metric retained as exact same-memory baseline",
+        coordinate_source="STU206 only",data_scope="STU206_STU201",
+        training="STU206 only; equal normal-class loss mass; no nuScenes training, reference or development points",
+        selection="STU201 odd contiguous 64-frame blocks only; mean IoU over ground-truth-present normal classes, then available-class cross-entropy; absent training classes retain zero recall and IoU",
         calibration="STU201 even blocks only; existing normal class/range tail rule",
         calibration_bandwidths=[0.,.25,.5,1.],backbone_frozen=True,no_synthetic_anomalies=True,
         val19_used_for_selection=False,evaluation="repeated val19 evaluation after normal-only selection",deadline=args.deadline)
@@ -2240,7 +2267,7 @@ def normal_main():
     weights=torch.zeros(count,device=device)
     codes=(data["allowed"].long()*(1<<torch.arange(19,device=device))).sum(1)
     mass_rows=[]
-    for domain,mass in ((1,.8),(0,.2)):
+    for domain,mass in ((1,1.),):
         mask=data["source"]==domain
         labels,which,frequency=torch.unique(codes[mask],return_inverse=True,return_counts=True)
         value=frequency[which].float().reciprocal()
@@ -2319,13 +2346,13 @@ def normal_main():
                 if time.time()>=args.deadline-3600:
                     break
         measured=instance_development(scorer,dev,selected)
-        quality=(measured["class_recall"],-measured["class_ce"])
-        improved=quality>(best["development"]["class_recall"],-best["development"]["class_ce"])
+        quality=(measured["semantics"]["mean_iou_gt"],-measured["class_ce"])
+        improved=quality>(best["development"]["semantics"]["mean_iou_gt"],-best["development"]["class_ce"])
         row=dict(epoch=epoch,development=measured,training_loss=total_loss/count,
                  processed_points=processed,skipped_without_independent_allowed_anchors=skipped,seconds=time.perf_counter()-epoch_start)
         with (args.output/"training.jsonl").open("a") as handle:
             handle.write(json.dumps(row)+"\n")
-        print(f"normal metric epoch {epoch}/{args.epochs}: class recall={measured['class_recall']:.4f}, "
+        print(f"normal metric epoch {epoch}/{args.epochs}: mIoU={measured['semantics']['mean_iou_gt']:.4f}, class recall={measured['class_recall']:.4f}, "
               f"CE={measured['class_ce']:.4f}, far recall={measured['far_recall']:.4f}, "
               f"skipped={skipped}, {row['seconds']:.1f}s",flush=True)
         if improved:
@@ -2338,39 +2365,19 @@ def normal_main():
             break
     saved=torch.load(args.output/"selected.pt",map_location=device,weights_only=False)
     scorer.load_state_dict(saved["scorer"]);scorer.eval()
+    training=instance_development(scorer,data,torch.arange(count,device=device),exclude_neighbors=True)
+    write_json(args.output/"normal206.json",dict(training,scope="all cached STU206 normal points; adjacent reference frames excluded"))
     holdout,hold_scores=instance_development(scorer,dev,selected,retain=True)
     reference,ref_scores=instance_development(scorer,dev,calibration,retain=True)
     model=FrozenSupport(scorer=scorer).to(device).eval()
     with torch.no_grad():
         predicted=model.perception.seg_head(dev["features"][:,180:]).argmax(-1)
-    raw_threshold=float(torch.quantile(ref_scores,.99))
-    calibrated_error=math.inf;calibration_candidates=[];selected_calibration=None
-    for bandwidth in config["calibration_bandwidths"]:
-        candidate=ScoreCalibration(range_bandwidth=bandwidth).to(device)
-        fit=candidate.fit(ref_scores,predicted[calibration].cpu(),dev["conditions"][calibration].cpu())
-        candidate.enabled.fill_(True)
-        with torch.no_grad():
-            values=candidate(hold_scores.to(device),predicted[selected],dev["conditions"][selected])
-        rows=[]
-        for category in range(16):
-            mask=predicted[selected]==category
-            if bool(mask.any()):
-                rows.append(dict(category=category,points=int(mask.sum()),
-                    raw_fpr01=float((hold_scores[mask.cpu()]>raw_threshold).float().mean()),
-                    calibrated_fpr01=float((values[mask]>math.log(100)).float().mean())))
-        enough=[r for r in rows if r["points"]>=2048]
-        error=float(np.mean([abs(r["calibrated_fpr01"]-.01) for r in enough]))
-        raw_error=float(np.mean([abs(r["raw_fpr01"]-.01) for r in enough]))
-        calibration_candidates.append(dict(range_bandwidth=bandwidth,classes=rows,fit=fit,mean_class_tail_error=error))
-        if error<calibrated_error:
-            calibrated_error=error;selected_calibration=candidate;selected_bandwidth=bandwidth
-        print(f"normal calibration bandwidth={bandwidth:g}: tail error={error:.6f}",flush=True)
-    scorer.calibration=selected_calibration
-    scorer.calibration.enabled.fill_(calibrated_error<raw_error)
-    write_json(args.output/"calibration.json",dict(enabled=bool(scorer.calibration.enabled),
-        range_bandwidth=selected_bandwidth,candidates=calibration_candidates,reference=reference,holdout=holdout,
-        raw_mean_class_tail_error=raw_error,calibrated_mean_class_tail_error=calibrated_error,normal_blocks_only=True))
-    config.update(calibration_bandwidth=selected_bandwidth,calibrated=bool(scorer.calibration.enabled))
+    scorer.calibration, calibration_report = select_score_calibration(
+        (ref_scores,predicted[calibration].cpu(),dev["conditions"][calibration].cpu()),
+        (hold_scores,predicted[selected].cpu(),dev["conditions"][selected].cpu()),
+        config["calibration_bandwidths"],device)
+    write_json(args.output/"calibration.json",dict(calibration_report,reference=reference,holdout=holdout))
+    config.update(calibration_bandwidth=calibration_report["range_bandwidth"],calibrated=bool(scorer.calibration.enabled))
     write_json(args.output/"config.json",config)
     atomic_save(args.output/"frozen.pt",dict(version=INSTANCE_VERSION,mode="frozen_support",model=model.state_dict(),
         config=config,frozen=True,selected=True,complete=True,selection=best,final_val19_evaluated=False))

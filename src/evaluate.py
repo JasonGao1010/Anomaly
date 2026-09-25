@@ -114,12 +114,14 @@ def evaluate_normal(model, manifest, device, workers=2):
 def evaluate_instance_normal(scorer, saved, device):
     """Compare learned and identity metrics on the same normal 201 points and bank."""
     from .normal import InstanceSupport, INSTANCE_VERSION, ScoreCalibration
-    from .train import normal_cache, instance_development
+    from .train import normal_cache, instance_development, target_normal_cache
 
     if saved.get("version") != INSTANCE_VERSION:
         raise ValueError("instance-support diagnostics require the current checkpoint version")
     metadata_path = Path(saved["config"]["features"]) / "development_features.json"
     cache = json.loads(metadata_path.read_text())
+    if saved["config"].get("data_scope") == "STU206_STU201":
+        cache = target_normal_cache(cache, "201")
     if (cache.get("labels") != "normal_candidate_sets_v1"
             or not 0 < cache["count"] <= cache["capacity"]
             or cache["count"] != saved["config"]["development_points"]):
@@ -188,6 +190,91 @@ def evaluate_instance_normal(scorer, saved, device):
         comparison="identical normal memory, preprocessing and queries; identity baseline changes only the 252-dimensional metric transform",
         metric_gain_definition="learned minus identity for recall; identity minus learned for cross-entropy",
         role="normal semantic and support diagnostic; not anomaly-detection accuracy")
+
+
+@torch.no_grad()
+def calibrate_instance_normal(model, saved, checkpoint, output, device, workers):
+    """Expand normal references to all real 201 returns without changing learned weights."""
+    from .data import normal_records, identity
+    from .normal import INSTANCE_VERSION, select_score_calibration
+    from .train import SupportScans, disk_check, runtime_snapshot, atomic_save
+    if saved.get("version") != INSTANCE_VERSION or not saved.get("frozen"):
+        raise ValueError("full normal calibration requires a completed instance-support checkpoint")
+    records = normal_records("201", development=True)
+    if any(row["source"] != "normal_stu" or str(row["scene"]) != "201" for row in records):
+        raise ValueError("full calibration may only read the normal STU201 sequence")
+    paths = [output, output.with_suffix(".npy"), output.with_suffix(".pt")]
+    if any(path.exists() for path in paths):
+        raise ValueError("full calibration preserves existing observations and checkpoints")
+    record_type = np.dtype([("score", "<f4"), ("log_range", "<f4"), ("predicted", "u1"),
+                           ("semantic", "u1"), ("frame", "<u2"), ("slot", "<u4")])
+    capacity = sum(Path(row["scan"]).stat().st_size // 16 for row in records)
+    resources = runtime_snapshot()
+    disk_check(capacity * record_type.itemsize + 200_000_000)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    observations = np.lib.format.open_memmap(paths[1], mode="w+", dtype=record_type, shape=(capacity,))
+    loader = DataLoader(SupportScans(records, development=True, full=True), batch_size=None,
+        num_workers=workers, pin_memory=device.type == "cuda", generator=torch.Generator().manual_seed(206),
+        **({"prefetch_factor": 1} if workers else {}))
+    cursor, frames, started = 0, [], time.perf_counter()
+    for number, sample in enumerate(loader, 1):
+        if not bool((sample["allowed"].sum(1) == 1).all()):
+            raise ValueError("normal STU201 calibration must preserve its actual singleton labels")
+        batch = to_device(sample, device)
+        encoded = model.perception.encode(batch, indices=batch["queries"])
+        score = model.scorer.raw_score(encoded["features"])
+        if not bool(torch.isfinite(score).all()):
+            raise ValueError("nonfinite full normal scores")
+        stop = cursor + len(score)
+        block = observations[cursor:stop]
+        block["score"] = score.cpu().numpy()
+        block["log_range"] = sample["conditions"][:, 0].numpy()
+        block["predicted"] = encoded["logits"].argmax(-1).cpu().numpy()
+        block["semantic"] = sample["semantic"].numpy()
+        block["frame"], block["slot"] = int(sample["index"]), sample["slots"].numpy()
+        if len(block) and (np.any(np.diff(block["slot"].astype(np.int64)) <= 0)
+                           or np.any(block["semantic"] >= 19)):
+            raise ValueError("full normal output must preserve distinct original slots and normal classes")
+        frames.append(dict(index=int(sample["index"]), begin=cursor, end=stop,
+                           scan=records[int(sample["index"])]["scan"]))
+        cursor = stop
+        del batch, encoded, score, block
+        if number % 25 == 0 or number == len(records):
+            elapsed = time.perf_counter() - started
+            print(f"full normal 201 {number}/{len(records)} scans, {cursor} points, "
+                  f"remaining {(len(records)-number)*elapsed/number/60:.1f} min", flush=True)
+            disk_check()
+    observations.flush()
+    del loader, sample
+    # Retain the same contiguous-block split. The expansion changes coverage,
+    # never uses unknown labels, and never combines fitting and held-out points.
+    actual = observations[:cursor]
+    odd = (actual["frame"] // 64) % 2 == 1
+    if not bool(odd.any()) or bool(odd.all()):
+        raise ValueError("full normal calibration requires both frame partitions")
+    subsets = []
+    for mask in (~odd, odd):
+        selected = actual[mask]
+        conditions = np.column_stack((selected["log_range"], np.zeros(len(selected), dtype=np.float32)))
+        subsets.append((selected["score"].copy(), selected["predicted"].astype(np.int64), conditions))
+        del selected
+    candidate, calibration = select_score_calibration(*subsets,
+        saved["config"]["calibration_bandwidths"], device, current=model.scorer.calibration)
+    model.scorer.calibration = candidate
+    config = dict(saved["config"], calibration_bandwidth=calibration["range_bandwidth"],
+        calibrated=calibration["enabled"], calibration_population="all trusted in-range original STU201 returns",
+        calibration_points=cursor, calibration_reference_points=len(subsets[0][0]),
+        calibration_holdout_points=len(subsets[1][0]))
+    atomic_save(paths[2], dict(saved, model=model.state_dict(), config=config,
+        calibration_selection=calibration, parent_checkpoint=str(checkpoint.resolve())))
+    return dict(points=cursor, capacity=capacity, scans=len(records), frames=frames,
+        reference_points=len(subsets[0][0]), holdout_points=len(subsets[1][0]),
+        calibration=calibration, selected_checkpoint=str(paths[2].resolve()),
+        source_checkpoint=str(checkpoint.resolve()), records_identity=identity(records),
+        resources=resources, seconds=time.perf_counter()-started,
+        weights="original frozen perception and selected learned metric unchanged; calibration only",
+        point_records="score, measured log range, frozen 16-class prediction, true STU19 class, original frame and slot; use only the first points entries",
+        role="normal-only calibration development; no anomaly labels or val19 model selection")
 
 
 def precision(device):
@@ -918,6 +1005,8 @@ def main():
         if name == "normal":
             command.add_argument("--manifest", type=Path,
                 help="required for earlier field models; class evidence uses its recorded normal cache and rejects this option")
+            command.add_argument("--full-calibration", action="store_true",
+                help="use all normal STU201 points for calibration; preserve learned weights and the original checkpoint")
         if name == "test":
             command.add_argument("--data", type=Path, required=True)
         if name in ("validate", "test"):
@@ -975,7 +1064,8 @@ def main():
         if saved.get("version") == INSTANCE_VERSION:
             if args.manifest is not None:
                 parser.error("instance-support normal diagnostics use the checkpoint's normal cache; do not supply --manifest")
-            result = evaluate_instance_normal(model.scorer, saved, device)
+            result = (calibrate_instance_normal(model, saved, args.checkpoint, args.output, device, args.workers)
+                      if args.full_calibration else evaluate_instance_normal(model.scorer, saved, device))
         else:
             if args.manifest is None:
                 parser.error("earlier normal-field diagnostics require --manifest")
