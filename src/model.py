@@ -175,8 +175,12 @@ class FrozenSupport(nn.Module):
         self.scorer = FeatureSupport() if scorer is None else scorer
 
     def forward(self, sample):
+        from .normal import CrossEvidence
         with torch.autocast(sample["voxel_xyzi"].device.type, enabled=False):
             encoded = self.perception.encode(sample)
+            if isinstance(self.scorer, CrossEvidence):
+                return self.scorer(encoded["features"], sample["conditions"].float(),
+                                   predicted=encoded["logits"].argmax(-1))
             return self.scorer(encoded["features"], sample["conditions"].float())
 
 

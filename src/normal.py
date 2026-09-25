@@ -11,6 +11,7 @@ from torch_scatter import segment_csr
 
 
 SUPPORT_VERSION = "AJAE-frozen-support"
+CROSS_VERSION = "AJAE-cross-evidence"
 
 
 def support_conditions(xyzi, indices=None):
@@ -85,6 +86,206 @@ class FeatureSupport(nn.Module):
     def forward(self, features, conditions):
         # Equal class priors avoid penalizing a valid but uncommon normal class.
         return self.class_energy(features, conditions).amin(-1)
+
+
+class ScoreCalibration(nn.Module):
+    """Rescale one score using normal references grouped by frozen 16-class output."""
+
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("probabilities", torch.tensor(
+            [.01, .05, .1, .25, .5, .75, .9, .95, .99, .995, .999], dtype=torch.float64))
+        self.register_buffer("knots", torch.zeros(17, 11))
+        self.register_buffer("levels", torch.zeros(17, 11))
+        self.register_buffer("lengths", torch.zeros(17, dtype=torch.long))
+        self.register_buffer("counts", torch.zeros(17, dtype=torch.long))
+        self.register_buffer("groups", torch.zeros(17, dtype=torch.long))
+        self.register_buffer("minimum_points", torch.tensor(2048, dtype=torch.long))
+        self.register_buffer("fitted", torch.tensor(False))
+        self.register_buffer("enabled", torch.tensor(False))
+
+    @staticmethod
+    def _validate(scores, predicted, conditions):
+        if (scores.ndim != 1 or predicted.shape != scores.shape
+                or conditions.shape != (len(scores), 2)):
+            raise ValueError("calibration values must identify the same points")
+        if predicted.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+            raise ValueError("calibration requires integer frozen 16-class predictions")
+        if bool(((predicted < 0) | (predicted >= 16)).any()):
+            raise ValueError("calibration requires frozen 16-class predictions")
+        if not bool(torch.isfinite(scores).all()):
+            raise ValueError("normal calibration scores must be finite")
+
+    @torch.no_grad()
+    def fit(self, scores, predicted, conditions):
+        # Class-only references retain range and spacing evidence in the raw score.
+        scores = torch.as_tensor(scores).detach().to(device="cpu", dtype=torch.float64)
+        predicted = torch.as_tensor(predicted).detach().cpu()
+        conditions = torch.as_tensor(conditions).detach().cpu()
+        self._validate(scores, predicted, conditions)
+        if len(scores) < 2:
+            raise ValueError("normal calibration requires at least two scores")
+        probabilities = self.probabilities.cpu().numpy()
+        quantile_levels = -np.log1p(-probabilities)
+        knots = torch.zeros_like(self.knots, device="cpu")
+        levels = torch.zeros_like(self.levels, device="cpu")
+        counts = torch.zeros_like(self.counts, device="cpu")
+        lengths = torch.zeros_like(self.lengths, device="cpu")
+        groups = torch.zeros_like(self.groups, device="cpu")
+        minimum = int(self.minimum_points)
+        for group in range(17):
+            values = scores if group == 0 else scores[predicted == group - 1]
+            counts[group] = len(values)
+            if group and len(values) < minimum:
+                continue
+            quantiles = np.quantile(values.numpy(), probabilities).astype(np.float32)
+            unique, repetitions = np.unique(quantiles, return_counts=True)
+            if len(unique) < 2:
+                if group == 0:
+                    raise ValueError("global normal calibration needs distinct score quantiles")
+                continue
+            # Merge atoms at their right quantile; never invent epsilon-width bins.
+            size = len(unique)
+            knots[group, :size] = torch.from_numpy(unique)
+            knots[group, size:] = float(unique[-1])
+            levels[group, :size] = torch.from_numpy(quantile_levels[repetitions.cumsum() - 1])
+            lengths[group], groups[group] = size, group
+        for name, value in (("knots", knots), ("levels", levels), ("counts", counts),
+                            ("lengths", lengths), ("groups", groups)):
+            getattr(self, name).copy_(value)
+        self.fitted.fill_(True)
+        self.enabled.fill_(False)
+        return dict(points=len(scores), minimum_points=minimum,
+                    class_counts=counts[1:].tolist(),
+                    fallback_classes=(groups[1:] == 0).nonzero().flatten().tolist(),
+                    class_quantile_counts=lengths[1:].tolist(),
+                    conditions="frozen official 16-class prediction only; no range or spacing bins")
+
+    def forward(self, scores, predicted, conditions):
+        if not bool(self.enabled):
+            return scores
+        if not bool(self.fitted):
+            raise ValueError("normal score calibration has not been fitted")
+        if predicted is None:
+            raise ValueError("calibration requires frozen 16-class predictions")
+        self._validate(scores, predicted, conditions)
+        rows = self.groups[predicted.long() + 1]
+        knots, levels = self.knots[rows], self.levels[rows]
+        upper = torch.searchsorted(knots, scores.contiguous()[:, None], right=True).flatten()
+        upper = torch.minimum(upper.clamp_min(1), self.lengths[rows] - 1)
+        index = torch.arange(len(scores), device=scores.device)
+        low_x, high_x = knots[index, upper - 1], knots[index, upper]
+        low_y, high_y = levels[index, upper - 1], levels[index, upper]
+        # Continue the first/last positive slope beyond the reference score range.
+        return low_y + (scores - low_x) * ((high_y - low_y) / (high_x - low_x))
+
+
+class CrossEvidence(nn.Module):
+    """Joint normal support for frozen deep features and cross-level observations.
+
+    Deep features already observe the target point: this is cross-level consistency,
+    not a blind-spot model or a guarantee that an unknown object is unpredictable.
+    """
+
+    dimensions = 182
+
+    def __init__(self, modes=1, hidden=128, latent=64):
+        super().__init__()
+        if min(modes, hidden, latent) < 1:
+            raise ValueError("cross evidence dimensions must be positive")
+        self.modes = modes
+        self.register_buffer("feat_location", torch.zeros(252))
+        self.register_buffer("feat_scale", torch.ones(252))
+        self.register_buffer("geo_location", torch.zeros(2))
+        self.register_buffer("geo_scale", torch.ones(2))
+        self.register_buffer("linear", torch.zeros(73, self.dimensions))
+        self.register_buffer("whitener", torch.eye(self.dimensions))
+        self.register_buffer("deep_centers", torch.zeros(19, 72))
+        self.register_buffer("deep_whitener", torch.eye(72))
+        self.register_buffer("deep_log_volume", torch.tensor(0.))
+        self.register_buffer("deep_present", torch.ones(19, dtype=torch.bool))
+        self.calibration = ScoreCalibration()
+        self.encoder = nn.Sequential(nn.Linear(72, hidden), nn.SiLU(),
+                                     nn.Linear(hidden, latent), nn.SiLU())
+        self.class_head = nn.Linear(latent, 19)
+        self.density_head = nn.Sequential(nn.Linear(latent, hidden), nn.SiLU(),
+            nn.Linear(hidden, modes * self.dimensions + self.dimensions + modes))
+        output = self.density_head[-1]
+        nn.init.zeros_(output.weight)
+        nn.init.zeros_(output.bias)
+        # Distinct component means break the exact symmetry of a mixture at startup.
+        with torch.no_grad():
+            output.bias[:modes * self.dimensions].normal_(std=.01)
+
+    def _features(self, features):
+        if features.ndim != 2 or features.shape[1] != 252:
+            raise ValueError("cross evidence requires point features with shape [N, 252]")
+        return (features.float() - self.feat_location) / self.feat_scale
+
+    def predict(self, features, *, semantics=False):
+        with torch.autocast(features.device.type, enabled=False):
+            deep = self._features(features)[:, 180:]
+            latent = self.encoder(deep)
+            raw = self.density_head(latent)
+            means, scale, weights = raw.split(
+                (self.modes * self.dimensions, self.dimensions, self.modes), -1)
+            result = dict(latent=latent, means=means.reshape(-1, self.modes, self.dimensions),
+                          log_scale=3 * torch.tanh(scale / 3), log_weights=weights.log_softmax(-1))
+            if semantics:
+                result["logits"] = self.class_head(latent)
+            return result
+
+    def observations(self, features, conditions):
+        if conditions.shape != (len(features), 2):
+            raise ValueError("cross evidence conditions must identify the same points")
+        with torch.autocast(features.device.type, enabled=False):
+            values = self._features(features)
+            geometry = (conditions.float() - self.geo_location) / self.geo_scale
+            observed = torch.cat((values[:, :180], geometry), -1)
+            base = F.pad(values[:, 180:], (1, 0), value=1) @ self.linear
+            return (observed - base) @ self.whitener
+
+    def deep_energy(self, features):
+        """Equal-prior normal class mixture with one shared within-class covariance."""
+        with torch.autocast(features.device.type, enabled=False):
+            if not bool(self.deep_present.any()):
+                raise ValueError("deep support requires at least one observed normal class")
+            deep = self._features(features)[:, 180:] @ self.deep_whitener
+            centers = self.deep_centers[self.deep_present] @ self.deep_whitener
+            square = (deep.square().sum(-1, keepdim=True) + centers.square().sum(-1)[None]
+                      - 2 * deep @ centers.T).clamp_min(0)
+            components = -.5 * square - math.log(len(centers))
+            return self.deep_log_volume + 36 * math.log(2 * math.pi) - torch.logsumexp(components, -1)
+
+    def raw_score(self, features, conditions):
+        with torch.autocast(features.device.type, enabled=False):
+            predicted = self.predict(features)
+            observed = self.observations(features, conditions)
+            # A plausible cross-level relation cannot excuse an unsupported deep
+            # representation: p(deep, observation) = p(deep) p(observation | deep).
+            return self.deep_energy(features) + self.negative_log_likelihood(predicted, observed)
+
+    def negative_log_likelihood(self, predicted, observed):
+        with torch.autocast(observed.device.type, enabled=False):
+            residual = (observed[:, None] - predicted["means"]) * torch.exp(-predicted["log_scale"][:, None])
+            component = predicted["log_weights"] - .5 * residual.square().sum(-1)
+            # Include covariance volume; inflating predicted uncertainty is not free.
+            return (.5 * self.dimensions * math.log(2 * math.pi)
+                    + predicted["log_scale"].sum(-1) - torch.logsumexp(component, -1))
+
+    def prediction(self, features):
+        with torch.autocast(features.device.type, enabled=False):
+            predicted = self.predict(features)
+            mean = (predicted["log_weights"].exp()[..., None] * predicted["means"]).sum(1)
+            base = F.pad(self._features(features)[:, 180:], (1, 0), value=1) @ self.linear
+            # Row-vector whitening is inverted by solving W.T @ residual.T = mean.T.
+            expected = base + torch.linalg.solve(self.whitener.T, mean.T).T
+            return dict(features=expected[:, :180] * self.feat_scale[:180] + self.feat_location[:180],
+                        conditions=expected[:, 180:] * self.geo_scale + self.geo_location)
+
+    def forward(self, features, conditions, predicted=None):
+        score = self.raw_score(features, conditions)
+        return self.calibration(score, predicted, conditions)
 
 
 NORMAL_MODES = ("field",)

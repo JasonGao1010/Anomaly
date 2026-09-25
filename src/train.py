@@ -2039,126 +2039,271 @@ def support_development(scorer, cache, indices, device):
                 scope="Sampled singleton normal points; each represented class has equal model-selection weight")
 
 
+def cross_initialize(scorer, cache, indices):
+    """Fit the linear normal prediction and residual coordinate system once."""
+    from scipy.linalg import solve_triangular
+    standard = support_standardization(cache, indices)
+    scorer.feat_location.copy_(torch.tensor(standard["location"][:252]))
+    scorer.feat_scale.copy_(torch.tensor(standard["scale"][:252]))
+    scorer.geo_location.copy_(torch.tensor([standard["range_location"], standard["location"][-1]]))
+    scorer.geo_scale.copy_(torch.tensor([standard["range_scale"], standard["scale"][-1]]))
+    features = np.load(cache["paths"]["features"], mmap_mode="r")
+    geometry = np.load(cache["paths"]["conditions"], mmap_mode="r")
+    xx, xy, yy = np.zeros((73,73)), np.zeros((73,182)), np.zeros((182,182))
+    count = 0
+    class_count, class_sum = np.zeros(19), np.zeros((19,72))
+    for category,group in enumerate(indices):
+        for start in range(0, len(group), 8192):
+            at = group[start:start+8192]
+            f = (features[at].astype(float)-scorer.feat_location.numpy())/scorer.feat_scale.numpy()
+            g = (geometry[at].astype(float)-scorer.geo_location.numpy())/scorer.geo_scale.numpy()
+            x, y = np.column_stack((np.ones(len(at)),f[:,180:])), np.column_stack((f[:,:180],g))
+            xx += x.T@x
+            xy += x.T@y
+            yy += y.T@y
+            count += len(at)
+            class_count[category] += len(at)
+            class_sum[category] += f[:,180:].sum(0)
+    penalty = np.diag(np.r_[0.,np.full(72,.01*count)])
+    linear = np.linalg.solve(xx+penalty,xy)
+    covariance = (yy-xy.T@linear-linear.T@xy+linear.T@xx@linear)/count
+    covariance = (covariance+covariance.T)/2 + .01*np.eye(182)
+    chol = np.linalg.cholesky(covariance)
+    scorer.linear.copy_(torch.tensor(linear))
+    scorer.whitener.copy_(torch.tensor(solve_triangular(chol,np.eye(182),lower=True).T))
+    centers=class_sum/np.maximum(class_count[:,None],1)
+    within=(xx[1:,1:]-centers.T@(class_count[:,None]*centers))/count
+    deep_chol=np.linalg.cholesky((within+within.T)/2+.01*np.eye(72))
+    scorer.deep_centers.copy_(torch.tensor(centers))
+    scorer.deep_whitener.copy_(torch.tensor(solve_triangular(deep_chol,np.eye(72),lower=True).T))
+    scorer.deep_log_volume.fill_(float(np.log(np.diag(deep_chol)).sum()))
+    scorer.deep_present.copy_(torch.tensor(class_count>0))
+    return dict(points=count, ridge=.01, residual_covariance_regularization=.01,
+                residual_log_volume=float(np.log(np.diag(chol)).sum()),
+                meaning="Fixed training coordinates shared by every candidate; no development refitting")
+
+
+def cross_cache(cache, device):
+    """Load each immutable feature array once; no new on-disk feature copies."""
+    values = {}
+    for key in ("features","conditions","semantic","source","frame"):
+        data = np.load(cache["paths"][key], mmap_mode="r")[:cache["count"]]
+        dtype = torch.float32 if key in ("features","conditions") else torch.long
+        values[key] = torch.tensor(data, device=device, dtype=dtype)
+    return values
+
+
+@torch.no_grad()
+def cross_development(scorer, data, indices, *, retain=False):
+    """Normal held-out likelihood, semantic recall and physical prediction error."""
+    scorer.eval()
+    totals = torch.zeros(19,7,device=data["features"].device,dtype=torch.float64)
+    all_scores = []
+    inverse = torch.linalg.inv(scorer.whitener)
+    for start in range(0,len(indices),16384):
+        at = indices[start:start+16384]
+        f,g,y = data["features"][at],data["conditions"][at],data["semantic"][at]
+        predicted = scorer.predict(f,semantics=True)
+        nll = scorer.negative_log_likelihood(predicted,scorer.observations(f,g))+scorer.deep_energy(f)
+        ce = F.cross_entropy(predicted["logits"],y,reduction="none")
+        mean = (predicted["means"]*predicted["log_weights"].exp()[...,None]).sum(1)
+        base = F.pad(scorer._features(f)[:,180:],(1,0),value=1)@scorer.linear
+        expected = ((base+mean@inverse)[:,180:]*scorer.geo_scale+scorer.geo_location)
+        error = expected-g
+        v = torch.stack((torch.ones_like(nll),nll,ce,
+                         (predicted["logits"].argmax(-1)==y).float(),
+                         error[:,0].abs(),error[:,1].abs(),error.square().sum(-1)),-1)
+        if not bool(torch.isfinite(v).all()):
+            raise ValueError("nonfinite cross-level normal development")
+        totals.index_add_(0,y,v.double())
+        if retain:
+            all_scores.append(nll.cpu())
+    totals = totals.cpu().numpy()
+    rows = [dict(category=c,points=int(t[0]),nll=float(t[1]/t[0]),ce=float(t[2]/t[0]),
+                 recall=float(t[3]/t[0]),log_range_mae=float(t[4]/t[0]),
+                 log_spacing_mae=float(t[5]/t[0])) for c,t in enumerate(totals) if t[0]]
+    # A handful of points cannot reliably select mixture capacity for a rare class.
+    selection = [r for r in rows if r["points"]>=128]
+    report = dict(points=int(totals[:,0].sum()),classes=rows,
+                  class_nll=float(np.mean([r["nll"] for r in selection])),
+                  point_nll=float(totals[:,1].sum()/totals[:,0].sum()),
+                  class_recall=float(np.mean([r["recall"] for r in selection])),
+                  log_range_mae=float(totals[:,4].sum()/totals[:,0].sum()),
+                  log_spacing_mae=float(totals[:,5].sum()/totals[:,0].sum()),
+                  selection_classes=[r["category"] for r in selection])
+    return (report,torch.cat(all_scores)) if retain else report
+
+
 def normal_main():
-    """Fit a small normal-only scoring model after a completely frozen backbone."""
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    """Train cross-level normal evidence after an unchanged perception network."""
     from threadpoolctl import threadpool_limits
     from .model import FrozenSupport
-    from .normal import FeatureSupport, SUPPORT_VERSION
-    from .data import NORMAL_CLASSES
+    from .normal import CrossEvidence, CROSS_VERSION
     parser = argparse.ArgumentParser(description=normal_main.__doc__)
-    parser.add_argument("--normal", action="store_true")
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--workers", type=int, default=16)
-    parser.add_argument("--threads", type=int, default=4)
-    parser.add_argument("--deadline", type=float, required=True)
+    parser.add_argument("--normal",action="store_true")
+    parser.add_argument("--output",type=Path,required=True)
+    parser.add_argument("--features",type=Path,default=Path("results/train/support"))
+    parser.add_argument("--threads",type=int,default=4)
+    parser.add_argument("--workers",type=int,default=16)
+    parser.add_argument("--epochs",type=int,default=40)
+    parser.add_argument("--deadline",type=float,required=True)
     args = parser.parse_args()
-    if args.workers < 0 or args.threads < 1:
-        parser.error("workers must be nonnegative and threads must be positive")
+    if args.epochs<1 or args.threads<1 or args.workers<0:
+        parser.error("invalid training or resource budget")
     if args.output.exists() and any(args.output.iterdir()):
-        raise ValueError("use an empty output directory; existing research outputs are not overwritten")
-    # Reserve two hours for all 1,960 final validation scans, exact metrics and delivery.
-    normal_deadline = args.deadline-7200
-    if time.time() >= normal_deadline:
-        raise TimeoutError("insufficient normal-development time before final evaluation reserve")
-    threadpool_limits(limits=1)
+        raise ValueError("use an empty output directory")
+    if time.time()>=args.deadline-3600:
+        raise TimeoutError("reserve an hour for final full evaluation and verification")
+    threadpool_limits(limits=args.threads)
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
-    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32=False
     seed_all(206)
-    resources = runtime_snapshot()
-    disk_check(18_000_000_000)
-    args.output.mkdir(parents=True, exist_ok=True)
-    train, development = support_records()
-    candidates = [dict(modes=k, regularization=reg, conditioned=conditioned)
-                  for k,reg,conditioned in [(1,.05,True),(4,.05,True),(8,.05,True),
-                                           (4,.01,True),(4,.05,False)]]
-    config = dict(version=SUPPORT_VERSION, architecture="frozen_litept_joint_normal_mixture",
-        score_version="minimum_class_joint_nll", classes=NORMAL_CLASSES,
-        official_semantic_classes=16, seed=206, candidates=candidates,
-        initial="assets/nuscenes.pth", initial_sha256=WEIGHTS_SHA256,
-        trained_backbone_parameters=0, training_frames=len(train), development_frames=len(development),
-        training_records=train, development_records=development,
-        features="enc0(36), enc2(144), decoder(72); full dimensional float32",
-        observations="joint multilevel features and log eighth-neighbor spacing; mean and scalar covariance scale conditioned on log range",
-        preprocessing="deterministic original medoid per 5cm voxel; grid minimum shift; single view",
-        training="only trustworthy singleton normal point labels; ambiguous sets are not hard assigned",
-        selection="equal-class held-out normal NLL; STU201, source validation only for missing target classes",
-        evaluation="STU val19 once after selection; no anomaly-guided choice",
-        deadline=args.deadline, normal_deadline=normal_deadline)
-    write_json(args.output/"config.json", config)
-    write_json(args.output/"resources.json", resources)
-    device = torch.device("cuda")
-    model = FrozenSupport().to(device).eval()
-    cache = support_cache(model, train, args.output, device, args.workers, deadline=normal_deadline)
-    dev_cache = support_cache(model, development, args.output, device, args.workers,
-                              development=True, deadline=normal_deadline)
-    chosen, counts = support_indices(cache, training=True)
-    dev_chosen, dev_counts = support_indices(dev_cache, training=False)
-    standard = support_standardization(cache, chosen)
-    write_json(args.output/"sampling.json", dict(training=counts, development=dev_counts))
-    del train, development
-    gc.collect()
-    # Ten independent class fits with two BLAS threads use 20 of 24 CPU cores.
-    jobs = min(10, max(1, (len(os.sched_getaffinity(0))-4)//2))
-    fits = {}
-    fit_started = time.perf_counter()
-    import multiprocessing
-    with ProcessPoolExecutor(max_workers=jobs, mp_context=multiprocessing.get_context("spawn")) as pool:
-        futures = [pool.submit(fit_support_class, (category, at, cache, standard, candidates))
-                   for category, at in enumerate(chosen)]
-        for future in as_completed(futures):
-            category, values = future.result()
-            fits[category] = values
-            print(f"normal density: {len(fits)}/19 classes fitted, "
-                  f"{(time.perf_counter()-fit_started)/60:.1f} min", flush=True)
-            if time.time() >= normal_deadline:
-                raise TimeoutError("normal density fitting exceeded its reserved budget")
-    summaries, best = [], None
-    for index, spec in enumerate(candidates):
-        scorer = FeatureSupport(modes=spec["modes"])
-        for key,value in standard.items():
-            getattr(scorer,key).copy_(torch.as_tensor(value, dtype=torch.float32))
-        fit_rows = []
-        for category in range(19):
-            fitted = fits[category][index]
-            if fitted is None:
-                continue
-            scorer.present[category] = True
-            modes = len(fitted["centers"])
-            for key in ("coefficients", "log_variance_coefficients", "precision_cholesky"):
-                getattr(scorer,key)[category].copy_(torch.from_numpy(fitted[key]))
-            scorer.centers[category,:modes].copy_(torch.from_numpy(fitted["centers"]))
-            scorer.log_weights[category,:modes].copy_(torch.from_numpy(fitted["log_weights"]))
-            scorer.log_volume[category] = fitted["log_volume"]
-            fit_rows.append(dict(category=category, **{key:value for key,value in fitted.items()
-                if key not in ("coefficients","log_variance_coefficients","precision_cholesky","centers","log_weights")}))
-        scorer = scorer.to(device).eval()
-        measured = support_development(scorer, dev_cache, dev_chosen, device)
-        row = dict(candidate=index, configuration=spec, development=measured, fitting=fit_rows)
-        summaries.append(row)
-        print(f"normal selection {index+1}/{len(candidates)}: "
-              f"class mean NLL {measured['class_mean_nll']:.6f}", flush=True)
-        if best is None or measured["class_mean_nll"] < best["development"]["class_mean_nll"]:
-            best = row
-            model.scorer = scorer
-            selected_config = {**config, **spec}
-        write_json(args.output/"development.json", dict(candidates=summaries, selected=best["candidate"]))
-    atomic_save(args.output/"frozen.pt", dict(version=SUPPORT_VERSION, mode="frozen_support",
-        model={key:value.cpu() for key,value in model.state_dict().items()},
-        config=selected_config, frozen=True, selected=True, complete=True,
-        selection=best, final_val19_evaluated=False))
-    result = dict(version=SUPPORT_VERSION, complete=True, frozen="frozen.pt",
-        selected=best["candidate"], configuration=best["configuration"],
-        development=best["development"], feature_extraction_seconds=cache["seconds"]+dev_cache["seconds"],
-        density_fitting_seconds=time.perf_counter()-fit_started, fitting_points=sum(map(len,chosen)),
-        normal_development_points=sum(map(len,dev_chosen)),
-        absent_training_classes=[NORMAL_CLASSES[i] for i in range(19) if fits[i][best["candidate"]] is None],
-        absent_development_classes=[NORMAL_CLASSES[i] for i in range(19) if not len(dev_chosen[i])],
-        no_synthetic_anomalies=True, backbone_frozen=True, val19_used_for_selection=False,
-        final_val19_evaluated=False)
-    write_json(args.output/"result.json", result)
-    print(json.dumps(result, ensure_ascii=False), flush=True)
+    resources=runtime_snapshot()
+    disk_check(300_000_000)
+    cache_config=json.loads((args.features/"config.json").read_text())
+    if cache_config["initial_sha256"]!=WEIGHTS_SHA256 or cache_config["trained_backbone_parameters"]!=0:
+        raise ValueError("only exactly identified official frozen features may be reused")
+    cache=json.loads((args.features/"training.json").read_text())
+    dev_cache=json.loads((args.features/"development_features.json").read_text())
+    args.output.mkdir(parents=True,exist_ok=True)
+    config=dict(version=CROSS_VERSION,architecture="frozen_litept_cross_level_evidence",
+        score_version="joint_deep_support_cross_level_normal_nll",initial_sha256=WEIGHTS_SHA256,seed=206,
+        features=str(args.features),training_points=cache["count"],development_points=dev_cache["count"],
+        epochs=args.epochs,batch_size=16384,learning_rate=.001,weight_decay=.0001,
+        training="all cached singleton normal points; each point once per epoch",
+        weighting="80% target / 20% source; within each domain inverse-square-root class frequency",
+        selection="mean class normal NLL, classes with >=128 points; odd 64-frame STU201 blocks plus missing-class source normal development",
+        calibration="even 64-frame STU201 blocks; original16 predicted class; no actual-spacing conditioning",
+        candidates=[dict(modes=k,semantic_weight=w) for k in (1,4) for w in (0.,.1)],
+        backbone_frozen=True,no_synthetic_anomalies=True,val19_used_for_selection=False,
+        evaluation="repeated val19 evaluation after normal-only selection",deadline=args.deadline)
+    write_json(args.output/"config.json",config)
+    write_json(args.output/"resources.json",resources)
+    started=time.perf_counter()
+    chosen,counts=support_indices(cache,training=True)
+    template=CrossEvidence()
+    initialization=cross_initialize(template,cache,chosen)
+    write_json(args.output/"initialization.json",dict(**initialization,sampling=counts))
+    device=torch.device("cuda")
+    data,dev=cross_cache(cache,device),cross_cache(dev_cache,device)
+    count=len(data["semantic"])
+    weights=torch.zeros(count,device=device)
+    for source,mass in ((0,.2),(1,.8)):
+        mask=data["source"]==source
+        frequency=torch.bincount(data["semantic"][mask],minlength=19).float().clamp_min(1)
+        value=frequency[data["semantic"][mask]].rsqrt()
+        weights[mask]=value/value.sum()*(count*mass)
+    select=(dev["source"]==1)&((dev["frame"]//64)%2==1)
+    represented=torch.bincount(dev["semantic"][select],minlength=19)>0
+    select|=(dev["source"]==0)&(~represented[dev["semantic"]])
+    selected=select.nonzero().flatten()
+    calibration=((dev["source"]==1)&((dev["frame"]//64)%2==0)).nonzero().flatten()
+    if not len(selected) or not len(calibration):
+        raise ValueError("normal model selection and score calibration require disjoint temporal blocks")
+    write_json(args.output/"split.json",dict(selection_points=len(selected),calibration_points=len(calibration),
+        selection_frames=dev["frame"][selected].unique().cpu().tolist(),
+        calibration_frames=dev["frame"][calibration].unique().cpu().tolist(),
+        temporal_block_frames=64,anomaly_labels_used=False))
+    summaries,best=[],None
+    for candidate,spec in enumerate(config["candidates"]):
+        seed_all(206)
+        scorer=CrossEvidence(modes=spec["modes"])
+        for key in ("feat_location","feat_scale","geo_location","geo_scale","linear","whitener",
+                    "deep_centers","deep_whitener","deep_log_volume","deep_present"):
+            getattr(scorer,key).copy_(getattr(template,key))
+        scorer=scorer.to(device)
+        optimizer=torch.optim.AdamW(scorer.parameters(),lr=.001,weight_decay=.0001)
+        local_best,stale=None,0
+        for epoch in range(args.epochs+1):
+            if time.time()>=args.deadline-3600:
+                raise TimeoutError("normal training exceeded the reserved time")
+            epoch_start=time.perf_counter()
+            train_loss=0.
+            if epoch:
+                scorer.train()
+                generator=torch.Generator(device=device).manual_seed(206+epoch)
+                order=torch.randperm(count,generator=generator,device=device)
+                lr=.001*(.1+.9*.5*(1+math.cos(math.pi*(epoch-1)/args.epochs)))
+                for group in optimizer.param_groups:
+                    group["lr"]=lr
+                for start in range(0,count,config["batch_size"]):
+                    at=order[start:start+config["batch_size"]]
+                    f,g,y=data["features"][at],data["conditions"][at],data["semantic"][at]
+                    predicted=scorer.predict(f,semantics=True)
+                    nll=scorer.negative_log_likelihood(predicted,scorer.observations(f,g))/scorer.dimensions
+                    ce=F.cross_entropy(predicted["logits"],y,reduction="none")
+                    loss=((nll+spec["semantic_weight"]*ce)*weights[at]).mean()
+                    optimizer.zero_grad(set_to_none=True)
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(scorer.parameters(),5.,error_if_nonfinite=True)
+                    optimizer.step()
+                    train_loss+=float(loss.detach())*len(at)
+            measured=cross_development(scorer,dev,selected)
+            row=dict(candidate=candidate,configuration=spec,epoch=epoch,training_loss=train_loss/count,
+                     development=measured,seconds=time.perf_counter()-epoch_start)
+            with (args.output/"training.jsonl").open("a") as handle:
+                handle.write(json.dumps(row)+"\n")
+            print(f"normal candidate {candidate+1}/4 epoch {epoch}/{args.epochs}: "
+                  f"NLL={measured['class_nll']:.3f}, geometry MAE="
+                  f"{measured['log_range_mae']:.3f}/{measured['log_spacing_mae']:.3f}, "
+                  f"{row['seconds']:.1f}s",flush=True)
+            if local_best is None or measured["class_nll"]<local_best["development"]["class_nll"]-.01:
+                local_best,stale=row,0
+                if best is None or measured["class_nll"]<best["development"]["class_nll"]:
+                    best=row
+                    atomic_save(args.output/"selected.pt",dict(scorer={k:v.cpu() for k,v in scorer.state_dict().items()},
+                                                              selection=best))
+            else:
+                stale+=1
+            if epoch>=10 and stale>=6:
+                break
+        summaries.append(local_best)
+        write_json(args.output/"development.json",dict(candidates=summaries,selected=best))
+        del scorer,optimizer
+    saved=torch.load(args.output/"selected.pt",map_location="cpu",weights_only=False)
+    spec=saved["selection"]["configuration"]
+    scorer=CrossEvidence(modes=spec["modes"]).to(device)
+    scorer.load_state_dict(saved["scorer"],strict=True)
+    holdout,hold_scores=cross_development(scorer,dev,selected,retain=True)
+    reference,ref_scores=cross_development(scorer,dev,calibration,retain=True)
+    model=FrozenSupport(scorer=scorer).to(device).eval()
+    with torch.no_grad():
+        predicted=model.perception.seg_head(dev["features"][:,180:]).argmax(-1)
+    calibration_fit=scorer.calibration.fit(ref_scores,predicted[calibration].cpu(),dev["conditions"][calibration].cpu())
+    scorer.calibration.enabled.fill_(True)
+    with torch.no_grad():
+        calibrated=scorer.calibration(hold_scores.to(device),predicted[selected],dev["conditions"][selected])
+    # Compare class tail errors on unseen normal blocks, never on val19 anomalies.
+    normal_tail=[]
+    raw_threshold=float(torch.quantile(ref_scores,.99))
+    for category in range(16):
+        mask=(predicted[selected]==category)&(dev["source"][selected]==1)
+        n=int(mask.sum())
+        if n:
+            normal_tail.append(dict(category=category,points=n,
+                raw_fpr01=float((hold_scores[mask.cpu()]>raw_threshold).float().mean()),
+                calibrated_fpr01=float((calibrated[mask]>math.log(100)).float().mean())))
+    eligible=[r for r in normal_tail if r["points"]>=2048]
+    raw_error=float(np.mean([abs(r["raw_fpr01"]-.01) for r in eligible]))
+    calibrated_error=float(np.mean([abs(r["calibrated_fpr01"]-.01) for r in eligible]))
+    use_calibration=calibrated_error<raw_error
+    scorer.calibration.enabled.fill_(use_calibration)
+    write_json(args.output/"calibration.json",dict(enabled=use_calibration,classes=normal_tail,fit=calibration_fit,
+        raw_mean_class_tail_error=raw_error,calibrated_mean_class_tail_error=calibrated_error,
+        reference=reference,holdout=holdout,normal_blocks_only=True))
+    config.update(spec,calibrated=use_calibration)
+    atomic_save(args.output/"frozen.pt",dict(version=CROSS_VERSION,mode="frozen_support",
+        model={k:v.cpu() for k,v in model.state_dict().items()},config=config,
+        frozen=True,selected=True,complete=True,selection=best,final_val19_evaluated=False))
+    (args.output/"selected.pt").unlink()
+    result=dict(version=CROSS_VERSION,complete=True,selected=best,configuration=spec,
+        calibration_enabled=use_calibration,training_seconds=time.perf_counter()-started,
+        trainable_parameters=sum(p.numel() for p in scorer.parameters()),
+        no_synthetic_anomalies=True,backbone_frozen=True,val19_used_for_selection=False,
+        evaluation_status="not yet repeated",gpu_peak_bytes=torch.cuda.max_memory_allocated())
+    write_json(args.output/"result.json",result)
+    print(json.dumps(result,ensure_ascii=False),flush=True)
 
 
 def main():

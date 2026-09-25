@@ -247,13 +247,14 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
 def load_model(path, device):
     saved = torch.load(path, map_location="cpu", weights_only=False)
     from .model import NormalHypothesis, NORMAL_VERSION
-    from .normal import FeatureSupport, SUPPORT_VERSION
-    if saved.get("version") == SUPPORT_VERSION:
+    from .normal import FeatureSupport, CrossEvidence, SUPPORT_VERSION, CROSS_VERSION
+    if saved.get("version") in (SUPPORT_VERSION, CROSS_VERSION):
         from .model import FrozenSupport
         if (not saved.get("frozen") or not saved.get("complete") or not saved.get("selected")
                 or saved["config"]["initial_sha256"] != "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"):
             raise ValueError("frozen support requires completed normal-only model selection")
-        model = FrozenSupport(scorer=FeatureSupport(modes=saved["config"]["modes"]))
+        scorer_type = CrossEvidence if saved["version"] == CROSS_VERSION else FeatureSupport
+        model = FrozenSupport(scorer=scorer_type(modes=saved["config"]["modes"]))
         model.load_state_dict(saved["model"], strict=True)
         return model.to(device).eval(), saved
     if saved.get("version") in (NORMAL_VERSION, "AJAE-normal-hypothesis"):
@@ -656,9 +657,11 @@ def infer(model, scan, device, *, return_semantics=False):
         with autocast(device):
             if return_semantics:
                 if model.mode == "frozen_support":
+                    from .normal import CrossEvidence
                     encoded = model.perception.encode(sample)
-                    prediction = model.scorer(encoded["features"], sample["conditions"])
                     classes, count = encoded["logits"].argmax(-1), 16
+                    options = dict(predicted=classes) if isinstance(model.scorer, CrossEvidence) else {}
+                    prediction = model.scorer(encoded["features"], sample["conditions"], **options)
                 else:
                     outputs = model.predict(sample)
                     prediction, classes, count = outputs["score"], outputs["semantic"], 19
@@ -866,10 +869,10 @@ def main():
         return
     model, saved = load_model(args.checkpoint, device)
     from .model import NORMAL_VERSION
-    from .normal import SUPPORT_VERSION
-    if saved.get("version") == SUPPORT_VERSION:
+    from .normal import SUPPORT_VERSION, CROSS_VERSION
+    if saved.get("version") in (SUPPORT_VERSION, CROSS_VERSION):
         torch.backends.cuda.matmul.allow_tf32 = False
-    normal_run = saved.get("version") in (NORMAL_VERSION, SUPPORT_VERSION)
+    normal_run = saved.get("version") in (NORMAL_VERSION, SUPPORT_VERSION, CROSS_VERSION)
     if args.action == "infer" and args.semantic_output and not normal_run:
         parser.error("--semantic-output requires a joint normal-evidence checkpoint")
     if normal_run and args.action in ("normal", "mine"):
@@ -901,6 +904,7 @@ def main():
         metadata = (dict(version=saved["version"], complete=saved.get("frozen", False),
                          seed=saved["config"]["seed"], mode=saved["mode"], method=saved["mode"],
                          architecture=saved["config"]["architecture"], score_version=saved["config"]["score_version"],
+                         evaluation_role=saved["config"].get("evaluation", "recorded checkpoint evaluation"),
                          checkpoint_update=saved.get("stages", {}).get("target", {}).get("selected_update"))
                     if normal_run else dict(version=saved["version"], complete=saved["complete"], seed=saved["seed"],
                                             mode=saved["mode"], method=saved["method"], checkpoint_epoch=saved["epoch"],
