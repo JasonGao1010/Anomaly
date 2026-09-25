@@ -1406,6 +1406,14 @@ def normal_records(source, *, development=False):
         records = manifest["records"]
         if any(row.get("source") != "nuscenes" or row.get("delta") or row.get("anomaly", 0) for row in records):
             raise ValueError("normal-only training cannot consume inserted foregrounds")
+        for row in records:
+            for key in ("scan", "label"):
+                digest = file_sha256(row[key])
+                expected = row.get(key + "_sha256")
+                if expected is not None and expected != digest:
+                    raise ValueError("normal annotation source file changed: " + key)
+                # The run identity must include the bytes, including unrefined source scans.
+                row[key + "_sha256"] = digest
         return attach_normal_annotations(records, manifest["root"])
     if source not in ("206", "201") or development != (source == "201"):
         raise ValueError("normal protocol permits 206 training and 201 development only")

@@ -1348,3 +1348,36 @@ def test_normal_reader_rejects_same_path_training_input_replacement(tmp_path):
     labels.tofile(label)
     with pytest.raises(ValueError, match="source file changed: label"):
         read_normal_record(record)
+
+
+@pytest.mark.parametrize("changed_file", ["scan", "label"])
+def test_normal_source_identity_tracks_bytes_and_preserves_existing_hashes(tmp_path, monkeypatch, changed_file):
+    import json
+    from src import data
+    scan, label = tmp_path / "scan.bin", tmp_path / "label.bin"
+    np.array([[5., 0., 0., 127.5, 0]], np.float32).tofile(scan)
+    np.array([17], np.uint8).tofile(label)
+    row = dict(source="nuscenes", scan=str(scan), label=str(label), pose=np.eye(4).tolist())
+    directory = tmp_path / "results/data/background"
+    directory.mkdir(parents=True)
+    manifest = directory / "train.json"
+    manifest.write_text(json.dumps(dict(root=str(tmp_path), records=[row])))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(data, "attach_normal_annotations", lambda records, root: records)
+    records = data.normal_records("nuscenes")
+    initial_identity = data.identity(records)
+    assert records[0]["scan_sha256"] == data.file_sha256(scan)
+    assert records[0]["label_sha256"] == data.file_sha256(label)
+    assert data.read_normal_record(records[0])["allowed"][0, 0]
+    if changed_file == "scan":
+        np.array([[6., 0., 0., 127.5, 0]], np.float32).tofile(scan)
+    else:
+        np.array([23], np.uint8).tofile(label)
+    with pytest.raises(ValueError, match="source file changed: " + changed_file):
+        data.read_normal_record(records[0])
+    # An unhashed source manifest can start a new run, whose actual input identity differs.
+    assert data.identity(data.normal_records("nuscenes")) != initial_identity
+    manifest.write_text(json.dumps(dict(root=str(tmp_path), records=records)))
+    # Existing identities may never be silently replaced with the changed file's digest.
+    with pytest.raises(ValueError, match="source file changed: " + changed_file):
+        data.normal_records("nuscenes")
