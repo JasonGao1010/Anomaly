@@ -196,7 +196,7 @@ def evaluate_instance_normal(scorer, saved, device):
 def calibrate_instance_normal(model, saved, checkpoint, output, device, workers):
     """Expand normal references to all real 201 returns without changing learned weights."""
     from .data import normal_records, identity
-    from .normal import INSTANCE_VERSION, select_score_calibration
+    from .normal import INSTANCE_VERSION, select_score_calibration, normal_semantic_metrics
     from .train import SupportScans, disk_check, runtime_snapshot, atomic_save
     if saved.get("version") != INSTANCE_VERSION or not saved.get("frozen"):
         raise ValueError("full normal calibration requires a completed instance-support checkpoint")
@@ -207,7 +207,8 @@ def calibrate_instance_normal(model, saved, checkpoint, output, device, workers)
     if any(path.exists() for path in paths):
         raise ValueError("full calibration preserves existing observations and checkpoints")
     record_type = np.dtype([("score", "<f4"), ("log_range", "<f4"), ("predicted", "u1"),
-                           ("semantic", "u1"), ("frame", "<u2"), ("slot", "<u4")])
+                           ("normal_prediction", "u1"), ("semantic", "u1"),
+                           ("frame", "<u2"), ("slot", "<u4")])
     capacity = sum(Path(row["scan"]).stat().st_size // 16 for row in records)
     resources = runtime_snapshot()
     disk_check(capacity * record_type.itemsize + 200_000_000)
@@ -217,12 +218,21 @@ def calibrate_instance_normal(model, saved, checkpoint, output, device, workers)
         num_workers=workers, pin_memory=device.type == "cuda", generator=torch.Generator().manual_seed(206),
         **({"prefetch_factor": 1} if workers else {}))
     cursor, frames, started = 0, [], time.perf_counter()
+    confusion = torch.zeros(2, 19, 19, device=device, dtype=torch.long)
+    fine_memory = bool((model.scorer.memory_allowed.sum(1) == 1).all())
     for number, sample in enumerate(loader, 1):
         if not bool((sample["allowed"].sum(1) == 1).all()):
             raise ValueError("normal STU201 calibration must preserve its actual singleton labels")
         batch = to_device(sample, device)
         encoded = model.perception.encode(batch, indices=batch["queries"])
-        score = model.scorer.raw_score(encoded["features"])
+        energy = model.scorer.class_energy(encoded["features"])
+        # With singleton normal references, minimum class distance is exactly
+        # minimum reference distance; reuse it for semantics and anomaly support.
+        score = energy.amin(-1) if fine_memory else model.scorer.raw_score(encoded["features"])
+        prediction = energy.argmin(-1)
+        partition = (int(sample["index"]) // 64) % 2
+        confusion[partition] += torch.bincount(batch["semantic"] * 19 + prediction,
+                                               minlength=361).reshape(19, 19)
         if not bool(torch.isfinite(score).all()):
             raise ValueError("nonfinite full normal scores")
         stop = cursor + len(score)
@@ -230,6 +240,7 @@ def calibrate_instance_normal(model, saved, checkpoint, output, device, workers)
         block["score"] = score.cpu().numpy()
         block["log_range"] = sample["conditions"][:, 0].numpy()
         block["predicted"] = encoded["logits"].argmax(-1).cpu().numpy()
+        block["normal_prediction"] = prediction.cpu().numpy()
         block["semantic"] = sample["semantic"].numpy()
         block["frame"], block["slot"] = int(sample["index"]), sample["slots"].numpy()
         if len(block) and (np.any(np.diff(block["slot"].astype(np.int64)) <= 0)
@@ -238,7 +249,7 @@ def calibrate_instance_normal(model, saved, checkpoint, output, device, workers)
         frames.append(dict(index=int(sample["index"]), begin=cursor, end=stop,
                            scan=records[int(sample["index"])]["scan"]))
         cursor = stop
-        del batch, encoded, score, block
+        del batch, encoded, energy, score, prediction, block
         if number % 25 == 0 or number == len(records):
             elapsed = time.perf_counter() - started
             print(f"full normal 201 {number}/{len(records)} scans, {cursor} points, "
@@ -270,10 +281,13 @@ def calibrate_instance_normal(model, saved, checkpoint, output, device, workers)
     return dict(points=cursor, capacity=capacity, scans=len(records), frames=frames,
         reference_points=len(subsets[0][0]), holdout_points=len(subsets[1][0]),
         calibration=calibration, selected_checkpoint=str(paths[2].resolve()),
+        semantics=dict(reference=normal_semantic_metrics(confusion[0]),
+                       development=normal_semantic_metrics(confusion[1]),
+                       all=normal_semantic_metrics(confusion.sum(0))),
         source_checkpoint=str(checkpoint.resolve()), records_identity=identity(records),
         resources=resources, seconds=time.perf_counter()-started,
         weights="original frozen perception and selected learned metric unchanged; calibration only",
-        point_records="score, measured log range, frozen 16-class prediction, true STU19 class, original frame and slot; use only the first points entries",
+        point_records="score, measured log range, frozen 16-class prediction, normal support STU19 prediction, true STU19 class, original frame and slot; use only the first points entries",
         role="normal-only calibration development; no anomaly labels or val19 model selection")
 
 
@@ -807,7 +821,8 @@ def compare(checkpoints, manifest, output, device, *, workers=4, fprs=(.01, .05)
 
 @torch.no_grad()
 def infer(model, scan, device, *, return_semantics=False):
-    if return_semantics and model.mode not in ("normal_hypothesis", "frozen_support"):
+    mode = getattr(model, "mode", None)
+    if return_semantics and mode not in ("normal_hypothesis", "frozen_support"):
         raise ValueError("semantic export requires a normal perception model")
     if device.type == "cuda":
         torch.cuda.synchronize(device)
@@ -823,20 +838,20 @@ def infer(model, scan, device, *, return_semantics=False):
                                    targets=np.full(int(frame.actual.sum()), -1, np.int8),
                                    slot_count=len(frame.xyzi), index=frame.frame_id),
                               relations=getattr(model, "relation", None) is not None,
-                              official=model.mode == "frozen_support")
+                              official=mode == "frozen_support")
         if getattr(model, "normal", None) is not None:
             sample["observation"] = angular_observation(xyzi)
-        elif model.mode == "normal_hypothesis":
+        elif mode == "normal_hypothesis":
             from .normal import hypothesis_observation
             sample["observation"] = hypothesis_observation(xyzi)
-        elif model.mode == "frozen_support":
+        elif mode == "frozen_support":
             from .normal import InstanceSupport, support_conditions
             sample["conditions"] = torch.from_numpy(support_conditions(
                 xyzi, range_only=isinstance(model.scorer, InstanceSupport)))
         sample = to_device(sample, device)
         with autocast(device):
             if return_semantics:
-                if model.mode == "frozen_support":
+                if mode == "frozen_support":
                     from .normal import InstanceSupport
                     encoded = model.perception.encode(sample)
                     classes, count = encoded["logits"].argmax(-1), 16

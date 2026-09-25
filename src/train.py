@@ -2222,8 +2222,11 @@ def normal_main():
     args=parser.parse_args()
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("use an empty output directory")
-    if time.time()>=args.deadline-3600:
-        raise TimeoutError("reserve one hour for complete inference and arithmetic verification")
+    # Measured full inference is about 22 minutes; retain 45 minutes for
+    # normal checks, any authorized final inference, and independent arithmetic.
+    reserve_seconds=2700
+    if time.time()>=args.deadline-reserve_seconds:
+        raise TimeoutError("reserve 45 minutes for normal checks, inference and arithmetic verification")
     threadpool_limits(limits=args.threads);torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1);torch.backends.cuda.matmul.allow_tf32=False
     seed_all(206)
@@ -2247,7 +2250,8 @@ def normal_main():
         selection="STU201 odd contiguous 64-frame blocks only; mean IoU over ground-truth-present normal classes, then available-class cross-entropy; absent training classes retain zero recall and IoU",
         calibration="STU201 even blocks only; existing normal class/range tail rule",
         calibration_bandwidths=[0.,.25,.5,1.],backbone_frozen=True,no_synthetic_anomalies=True,
-        val19_used_for_selection=False,evaluation="repeated val19 evaluation after normal-only selection",deadline=args.deadline)
+        val19_used_for_selection=False,evaluation="repeated val19 evaluation after normal-only selection",
+        deadline=args.deadline,reserve_seconds=reserve_seconds)
     write_json(args.output/"config.json",config);write_json(args.output/"resources.json",resources)
     started=time.perf_counter()
     chosen,groups,location,whitener,initialization=instance_memory(cache,config["memory_size"])
@@ -2315,7 +2319,7 @@ def normal_main():
     optimizer=torch.optim.AdamW(scorer.parameters(),lr=.001,weight_decay=0.)
     stale=0
     for epoch in range(1,args.epochs+1):
-        if time.time()>=args.deadline-3600:
+        if time.time()>=args.deadline-reserve_seconds:
             break
         epoch_start=time.perf_counter();scorer.train()
         generator=torch.Generator(device=device).manual_seed(206+epoch)
@@ -2343,7 +2347,7 @@ def normal_main():
                 elapsed=time.perf_counter()-epoch_start
                 print(f"normal metric epoch {epoch}/{args.epochs}: {processed}/{count} points, "
                       f"loss={total_loss/max(processed,1):.4f}, remaining {(count-processed)*elapsed/max(processed,1):.0f}s",flush=True)
-                if time.time()>=args.deadline-3600:
+                if time.time()>=args.deadline-reserve_seconds:
                     break
         measured=instance_development(scorer,dev,selected)
         quality=(measured["semantics"]["mean_iou_gt"],-measured["class_ce"])
