@@ -7,6 +7,7 @@
 \setsansfont{Times New Roman}
 \setmonofont{Times New Roman}
 \font\iclrtenhv="Times New Roman/B" at 8pt
+\usepackage[protrusion=true,expansion=false]{microtype}
 \usepackage{amsmath,amssymb,booktabs,array,graphicx,xcolor,placeins,xurl}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning}
@@ -17,47 +18,46 @@
 \newcommand{\blank}{\textcolor{gray}{\textemdash}}
 \newcommand{\figureblank}[2]{\fbox{\begin{minipage}[c][#1][c]{.94\linewidth}\centering\color{gray}#2\end{minipage}}}
 \newcommand{\resultslot}{\par\smallskip{\color{gray}\textit{[Experimental findings.]}}}
-\title{Verifying Semantic Predictions with\\Held-Out LiDAR Observations}
+\title{CReV: Verifying LiDAR Semantic Predictions\\with Held-Out Returns}
 \author{Anonymous authors}
 \lhead{Under review as a conference paper at ICLR 2027}
 \begin{document}
 \maketitle
 
 \begin{abstract}
-Semantic segmentation selects the most plausible known class for each LiDAR point. Recognizing an unfamiliar object requires an additional judgment: whether that class provides a convincing explanation of the observation. We introduce class-conditional observation verification, an end-to-end model that learns both judgments from normal semantic supervision. A full-scan encoder represents the observed point, while a separate context encoder predicts its return distribution under each known class. The predictor excludes all returns in the target angular cell, so its predictions are formed from surrounding measurements before the target range is evaluated. Each class combines a multimodal appearance representation with a multimodal distribution over the held-out log range. Their joint support determines both the semantic label and the unknown score. Normal labels train this joint class competition, and a normalized likelihood objective ties the predicted distributions to physical measurements. This formulation makes observation compatibility part of learning a semantic explanation. Evaluation on nuScenes and STU couples normal-class segmentation, real-anomaly ranking, high-recall false positives, and single-scan inference cost.
-\resultslot
+Semantic segmentation assigns a known class to every LiDAR point, including observations of unfamiliar objects. Detecting these objects requires assessing whether the predicted class is supported by the observation. We introduce Class-conditional Return Verification (CReV), an end-to-end model that learns this assessment from normal semantic labels and measured ranges. A full-scan encoder represents the observed point, while a separate context encoder predicts a log-range distribution for each known class. The context encoder excludes all returns in the target angular cell, making the measured range a held-out target for prediction. Each class combines appearance support with the likelihood of that measurement. The class with the strongest joint support supplies the semantic label, and its energy supplies the unknown score. Normal labels train both terms through the resulting class probabilities, while a likelihood objective fits the predictive distributions to normal observations. Multiple appearance modes and predictive components accommodate variation within each class. Evaluation on nuScenes and STU examines normal semantic accuracy, real-anomaly detection, high-recall false positives, and inference cost. {\color{gray}\textit{[Experimental findings.]}}
 \end{abstract}
 
 \section{Introduction}
 \label{sec:intro}
-A semantic label is a claim about the scene. When a LiDAR model labels a group of points as a car, it assigns those measurements a familiar interpretation. An unfamiliar road obstacle may nevertheless receive the same label because car is the closest available category. The distinction between the \emph{best known explanation} and a \emph{well-supported explanation} matters whenever a perception system encounters objects beyond its training vocabulary. STU makes this problem concrete through point-level annotations of unexpected objects in real road scenes \citep{stu}.
+LiDAR semantic segmentation assigns observed points to a fixed set of known classes. An unfamiliar road obstacle must therefore receive one of these labels, even when it differs from every class represented in training. A high class probability expresses a preference among the available labels, leaving open whether the selected class adequately explains the observation. Reliable perception consequently requires both a semantic prediction and an assessment of the evidence supporting it. STU provides a setting for studying this problem through point-level annotations of unexpected objects in real road scenes \citep{stu}.
 
-Learning this distinction from normal observations has practical appeal: familiar classes are extensively annotated, whereas future unknown objects cannot be enumerated. Normal feature distributions already provide useful rejection signals. LIDO organizes LiDAR features around semantic prototypes \citep{lido}; PixOOD models multiple normal feature configurations \citep{pixood}; and RbA identifies image regions rejected by known classes \citep{rba}. These approaches establish a productive connection between semantic perception and unknown detection. The remaining question is what evidence can challenge a familiar-looking representation.
+Normal semantic annotations provide a way to learn this assessment without enumerating future unknown objects. LIDO organizes LiDAR features around semantic prototypes \citep{lido}, PixOOD models multiple normal feature configurations \citep{pixood}, and RbA identifies image regions rejected by known classes \citep{rba}. These methods use learned class support to recognize observations that fall outside the known vocabulary. We investigate an additional source of support: whether a candidate class can predict a physical measurement from the surrounding scene.
 
-LiDAR provides a direct source of such evidence. A class hypothesis constrains how a surface can continue through a local scene. Nearby returns, their angular arrangement, and a candidate class jointly constrain the range of a return that has been withheld. For example, a road interpretation predicts a local continuation of the ground. A measured return that is incompatible with that continuation weakens the road interpretation. A vehicle interpretation can still support a normal vehicle in the same region. Unknown scoring should therefore depend on whether \emph{any single known class} can account for both appearance and the measured return.
+The spatial structure of LiDAR observations makes this prediction possible. Neighboring returns constrain how a surface can continue through a local region, and a candidate class further specifies the normal structures expected there. Under a road hypothesis, nearby ground returns constrain the range along a held-out direction. A measurement that departs from that continuation weakens the road hypothesis. A vehicle class can provide an alternative explanation for a normal car at the same location. The relevant decision is therefore whether a single known class supports both the observed point features and the measured range.
 
-This reasoning motivates a particular use of prediction. We predict a physical measurement from its surroundings, evaluate the prediction at the actual measurement, and use that compatibility to learn the point's semantic class. Class-conditioned reconstruction already supports open-set recognition and segmentation \citep{c2ae,coreseg}, while semantic representations guide multi-category anomaly reconstruction \citep{sedir}. Our formulation brings a held-out measurement likelihood directly into dense semantic class competition. Its prediction target is the recorded range, which remains fixed as the representation learns.
+To obtain this measurement evidence, the predictor must infer the target range from surrounding observations. CReV excludes every return in the target angular cell before combining neighboring measurements. Its full-scan semantic encoder separately preserves the observed geometry and point details. Because normal objects vary in pose, shape, and visibility, the context encoder predicts a distribution of plausible ranges for each class. Evaluating this distribution at the measured range supplies class-specific observation support. A normalized density accounts for both prediction error and predictive spread.
 
-The model has two complementary information paths. A full-scan semantic encoder preserves the observed geometry and point details. A lightweight context encoder excludes the target angular cell and produces a return distribution for every known class. The same class vectors organize appearance modes and query the context. For each point and class, appearance support is multiplied by measurement support. Maximizing this joint support gives the normal label; the strength of that maximum gives the unknown score. Training on normal labels makes the measurement predictor responsible for choosing the correct semantic explanation, while likelihood training constrains the distributions it proposes.
+The connection to semantic learning determines how CReV uses this support. Class-conditioned reconstruction supports open-set recognition and segmentation \citep{c2ae,coreseg}, while semantic representations guide multi-category anomaly reconstruction \citep{sedir}. CReV places the likelihood of a held-out measurement directly inside the supervised pointwise class decision. Appearance support and measurement support are multiplied within each class, so the selected class must account for both. Normal semantic labels train this joint class competition, and a likelihood objective fits the predicted distributions to measured ranges. The measurement target remains fixed as the semantic representation learns.
 
-The contribution is this connection between \emph{what a class predicts} and \emph{how that class is selected}. It has three concrete elements: a target-excluded, class-conditioned predictive distribution over raw LiDAR returns; a common class-support function for semantic labeling and unknown scoring; and normal-data learning that couples predictive likelihood with class competition. The empirical question is whether that connection preserves normal semantic quality while recovering unknown points that a conventional semantic model recognizes with high confidence. We evaluate these outcomes together, including false positives at high anomaly recall and the computation required for a complete scan.
+CReV thus learns semantic segmentation and unknown recognition through the same class-support function. Its central mechanism is a class-conditioned prediction of held-out LiDAR range whose likelihood participates in learning the semantic decision. We evaluate whether this coupling preserves normal semantic accuracy while detecting unknown points that an appearance-based classifier confidently assigns to known classes. Measuring these outcomes together with high-recall false positives and full-scan computation connects the proposed mechanism to its practical value for perception.
 
 \section{Related Work}
 \label{sec:related}
 \paragraph{Unknown recognition within semantic perception.}
-Confidence and energy scores use information already available in a classifier \citep{msp,energy}. Joint energy models connect classification and generative learning through shared class energies \citep{jem}. Dense open-set methods develop related ideas through class rejection, feature distributions, and joint discriminative and generative objectives \citep{rba,pixood,densehybrid}. In LiDAR, LIDO learns compact normal-class features \citep{lido}, and hierarchical Gaussian mixtures model class-conditional feature uncertainty \citep{hgmm}. Other approaches train with generated or auxiliary unknown observations, including resized objects, diverse synthetic objects, diffusion-generated examples, and distribution-prior learning \citep{real,lion,doodle,ndp,rel}. These supervision choices define different experimental settings. Our training uses normal semantic labels, with the additional supervision supplied by the measured returns themselves.
+Confidence and energy scores assess unknown inputs through a classifier's outputs \citep{msp,energy}. Joint energy models connect classification and generative learning through shared class energies \citep{jem}. Dense open-set methods develop this connection through class rejection, feature distributions, and joint discriminative and generative objectives \citep{rba,pixood,densehybrid}. In LiDAR, LIDO learns compact normal-class features \citep{lido}, and hierarchical Gaussian mixtures model class-conditional feature uncertainty \citep{hgmm}. Generated or auxiliary unknown observations provide another source of supervision, including resized objects, diverse synthetic objects, diffusion-generated examples, and distribution-prior learning \citep{real,lion,doodle,ndp,rel}. CReV learns appearance and measurement support from normal semantic labels and measured ranges.
 
 \paragraph{Class-conditioned reconstruction and anomaly detection.}
-Image resynthesis tests a semantic prediction through a generated image \citep{resynthesis}. C2AE learns class-conditioned reconstruction for open-set recognition \citep{c2ae}; CoReSeg extends conditional reconstruction to dense labeling and uses the smallest class-conditioned reconstruction error to reject unknown pixels \citep{coreseg}. UniAD studies reconstruction of normal features and identifies the importance of controlling information transfer \citep{uniad}. In 3D, IMRNet detects object anomalies through iterative masked reconstruction \citep{imrnet}, while SeDiR uses object-category semantics and geometric attention to organize multi-category feature reconstruction \citep{sedir}. Our method predicts a held-out raw measurement for each class and places its likelihood inside the supervised pointwise class decision. The distinction concerns the prediction target, the information available to the predictor, and the role of verification in semantic learning.
+Reconstruction assesses an observation by comparing it with a learned normal representation. Image resynthesis makes this comparison through a generated image conditioned on semantic predictions \citep{resynthesis}. C2AE learns class-conditioned reconstruction for open-set recognition \citep{c2ae}, and CoReSeg uses the smallest class-conditioned reconstruction error to reject unknown pixels in dense labeling \citep{coreseg}. UniAD controls information transfer when reconstructing normal features \citep{uniad}. In 3D, IMRNet detects object anomalies through iterative masked reconstruction \citep{imrnet}, while SeDiR uses object-category semantics and geometric attention to organize multi-category feature reconstruction \citep{sedir}. In CReV, each class predicts a held-out range distribution, and its likelihood participates in the supervised pointwise class decision.
 
 \paragraph{Context prediction and probabilistic support.}
-Blind-spot denoising learns from targets excluded from a predictor's input \citep{noise2self,blindspot,pn2v}. Conditional neural processes learn distributions at query locations from observed context \citep{cnp,anp}. Point-cloud pretraining uses related prediction objectives to learn representations \citep{pointmae,ponder,sonata}, and probabilistic LiDAR fields model range distributions for mapping \citep{plink}. We use local conditional prediction during both training and inference, with known classes as candidate explanations. Proper logarithmic scoring constrains the predictive distributions \citep{proper}. Studies of generative likelihood show that observation modeling and unknown recognition are distinct statistical questions \citep{likelihood,perfectdensity}. Our decision function combines class-specific appearance and conditional measurement support, and its evaluation includes both normal semantics and real unknowns.
+Excluding the prediction target makes surrounding observations the source of predictive information. Blind-spot denoising uses this principle for self-supervision \citep{noise2self,blindspot,pn2v}, and conditional neural processes predict distributions at query locations from observed context \citep{cnp,anp}. Point-cloud pretraining uses prediction objectives to learn representations \citep{pointmae,ponder,sonata}, while probabilistic LiDAR fields model range distributions for mapping \citep{plink}. A logarithmic scoring rule provides a direct objective for fitting such distributions \citep{proper}. Studies of generative likelihood show that unknown-sample rankings depend on the observation representation and scoring rule \citep{likelihood,perfectdensity}. CReV uses predictive likelihood as measurement evidence within each semantic class and trains the resulting joint support through normal class supervision.
 
-\section{Class-Conditional Observation Verification}
+\section{Class-conditional Return Verification}
 \label{sec:method}
 \subsection{Semantic Decisions from Joint Class Support}
 \label{sec:joint}
-Let a scan be $X=\{(\mathbf{x}_i,I_i)\}_{i=1}^{N}$, where $\mathbf{x}_i\in\R^3$ is a return in the scan coordinate frame and $I_i$ is its intensity. Define range $r_i=\|\mathbf{x}_i\|_2$, direction $\boldsymbol\omega_i=\mathbf{x}_i/r_i$, and log range $z_i=\log r_i$. The known vocabulary is $\mathcal C=\{1,\ldots,C\}$. Training provides a known class $y_i$, or an allowed set $Y_i\subseteq\mathcal C$ when a source label has several compatible interpretations. The output is a class $\hat y_i\in\mathcal C$ and a continuous unknown score $u_i$ for every return.
+CReV maps a single scan to a semantic label and an unknown score for every return. Let the scan be $X=\{(\mathbf{x}_i,I_i)\}_{i=1}^{N}$, where $\mathbf{x}_i\in\R^3$ is a return in the scan coordinate frame and $I_i$ is its intensity. Define range $r_i=\|\mathbf{x}_i\|_2$, direction $\boldsymbol\omega_i=\mathbf{x}_i/r_i$, and log range $z_i=\log r_i$. The known vocabulary is $\mathcal C=\{1,\ldots,C\}$. Training provides a known class $y_i$, or an allowed set $Y_i\subseteq\mathcal C$ when a source label corresponds to several target classes. The outputs are $\hat y_i\in\mathcal C$ and $u_i\in\R$.
 
 For each candidate class, we compute appearance support $a_{ic}\in(0,1]$ and a conditional density $p_{ic}=p_\theta(z_i\mid C_i,\boldsymbol\omega_i,c)$, where $C_i$ contains surrounding returns and excludes the target angular cell. A common upper bound $M$ on the density defines measurement support $b_{ic}=p_{ic}/M$. The joint support and corresponding energy are
 \begin{equation}
@@ -72,9 +72,9 @@ Both outputs follow from these class energies:
  u_i=\min_{c\in\mathcal C} E_{ic}.
  \label{eq:outputs}
 \end{equation}
-The label identifies the best-supported class. The unknown score retains its absolute support even when that class wins by a large margin over other classes.
+The label identifies the best-supported class. The unknown score measures the weakness of that class's joint support, even when it wins by a large margin over other classes.
 
-\begin{figure}[t]
+\begin{figure}[htbp]
 \centering
 \begin{tikzpicture}[font=\small,>=Stealth,
  box/.style={draw,rounded corners=2pt,align=center,minimum height=10mm,inner sep=5pt}]
@@ -96,19 +96,19 @@ The label identifies the best-supported class. The unknown score retains its abs
 \end{figure}
 
 \paragraph{A common class must explain both observations.}
-The class index is shared before the final maximization:
+Combining the two supports within each class is essential to the decision rule. Independent maximization could select different classes for appearance and measurement, since
 \begin{equation}
  \max_c(a_{ic}b_{ic})\;\leq\;
  (\max_c a_{ic})(\max_c b_{ic}).
  \label{eq:agreement}
 \end{equation}
-The right-hand side may combine the appearance of one class with the geometry of another. Equation~\eqref{eq:energy} requires the two supports to agree on a class. For example, supports $(0.9,0.1)$ and $(0.1,0.9)$ give joint support $0.09$, whereas independently choosing each maximum gives $0.81$. This elementary property identifies the decision being learned: compatibility of a complete class explanation.
+For example, appearance supports $(0.9,0.1)$ and measurement supports $(0.1,0.9)$ give a maximum joint support of $0.09$, whereas independently choosing each maximum gives $0.81$. Equation~\eqref{eq:energy} retains this disagreement: a class receives strong joint support when both its appearance representation and its range prediction support the observation.
 
 \subsection{Multimodal Appearance Support}
 \label{sec:appearance}
-A LitePT-S backbone \citep{litept} encodes the scan after $5$\,cm voxel aggregation. Each original point also receives a detail embedding of its coordinates, intensity, and offset from its voxel center. Concatenating the decoded voxel feature and point detail produces $\mathbf h_i\in\R^D$, with $D=48$. Thus points sharing a voxel retain distinct evidence.
+Appearance support represents the observed geometry across the complete scan. A LitePT-S backbone \citep{litept} encodes this geometry after $5$\,cm voxel aggregation. To preserve differences between returns in the same voxel, a point-level encoder embeds each return's coordinates, intensity, and offset from its voxel center. Concatenating this embedding with the decoded voxel feature produces $\mathbf h_i\in\R^D$, with $D=48$.
 
-Each class has a vector $\mathbf q_c$ and $A=4$ learned appearance offsets $\boldsymbol\delta_{cm}$. The centers and support are
+Normal objects within a class can have different observed shapes and point densities. We represent this variation with a shared class vector $\mathbf q_c$ and $A=4$ learned offsets $\boldsymbol\delta_{cm}$. The resulting appearance centers and support are
 \begin{equation}
  \mathbf t_{cm}=\sqrt D\,\frac{\mathbf q_c+\boldsymbol\delta_{cm}}
  {\|\mathbf q_c+\boldsymbol\delta_{cm}\|_2},\qquad
@@ -116,14 +116,14 @@ Each class has a vector $\mathbf q_c$ and $A=4$ learned appearance offsets $\bol
  \exp\!\left(-\frac{\|\mathbf h_i-\mathbf t_{cm}\|_2^2}{D\tau}\right),
  \label{eq:appearance}
 \end{equation}
-where $\tau=0.2$. Equal center norms, temperature, and mode counts provide a common scale across classes. Multiple centers represent different normal configurations within a class. The same $\mathbf q_c$ conditions the measurement predictor, linking the class's appearance representation to its predicted geometry.
+where $\tau=0.2$. Equal center norms, temperature, and mode counts provide a common scale across classes. The same $\mathbf q_c$ conditions the range predictor, connecting each class's appearance representation to the measurements it predicts.
 
 \subsection{Predicting Returns from Target-Excluded Context}
 \label{sec:prediction}
 \paragraph{Information available to the predictor.}
-We partition azimuth and elevation into nonoverlapping $0.5^\circ$ cells. A pointwise encoder maps each return's coordinates, intensity, and direction to a feature. Mean and maximum pooling within each cell produce an independent cell token. For a target cell, the context consists of eight neighboring offsets at each of two radii, one and three cells. Its own token is excluded. Class queries attend to these context tokens through two shared attention layers of width $48$.
+Measurement support evaluates a prediction formed from neighboring returns. We partition azimuth and elevation into nonoverlapping $0.5^\circ$ cells and encode each cell independently. A pointwise encoder maps coordinates, intensity, and direction to features, which are aggregated by mean and maximum pooling within the cell. For each target cell, class queries attend to eight neighboring offsets at each of two radii, one and three cells. Excluding the target cell's token makes these neighbors the sole source of observed context. Two shared attention layers of width $48$ process the class queries.
 
-This construction fixes the information boundary before cross-cell interaction. Target range, target intensity, and target return count do not enter the predictive state. The query contains the target cell's angular position and the candidate class. The full-scan semantic features follow their own path in Figure~\ref{fig:method}. At inference, all cells undergo the same local exclusion while sharing the point encoder and context projections.
+Independent cell encoding places the exclusion before any cross-cell interaction. The query supplies the target cell's angular position and the candidate class, while the context supplies the neighboring measurements. The target range is reserved for evaluating the predictive density. The appearance path separately processes the complete scan, as shown in Figure~\ref{fig:method}. Applying the same construction to every cell allows all predictions to share the point encoder and context projections.
 
 \paragraph{A distribution of plausible normal returns.}
 For each target cell $j$ and class $c$, the predictor outputs $K=3$ mixture weights $w_{jck}$, mean parameters, and scales $\sigma_{jck}$. Let $(d_a,d_e)$ be a ray's azimuth and elevation offsets from the cell center, normalized by the half-cell width, and define
@@ -142,7 +142,7 @@ The conditional density is a Student-$t$ mixture with three degrees of freedom:
  \left(1+\frac{(z_i-\mu_{ick})^2}{3\sigma_{jck}^2}\right)^{-2}.
  \label{eq:density}
 \end{equation}
-The mixture represents alternative normal surfaces, and its learned scale represents the spread of their possible observations. These parameters are predicted from context. The held-out measurement is used when evaluating Equation~\eqref{eq:density}. Appearance modes and return components express different variations and have separate indices.
+The mixture components represent alternative local range patterns, and their learned scales describe the spread of plausible observations. Context determines these parameters before Equation~\eqref{eq:density} is evaluated at the held-out measurement. The appearance centers and predictive components therefore represent complementary aspects of normal variation.
 
 \paragraph{Measurement support includes predictive concentration.}
 Each component is bounded above by $M=2/(\pi\sqrt3\,\sigma_{\min})$, so the mixture yields $0<b_{ic}\leq1$. Equation~\eqref{eq:energy} retains the scale normalization of the density. At a component mean, increasing its scale by a factor of ten raises its negative log density by $\log 10$. A broad prediction therefore carries a cost as well as accommodating a wider range of returns. For a completely isolated target cell, we set $b_{ic}=1$ for all classes, giving the appearance-based decision. The predicted variable is the log range of an existing return, with density defined relative to $d(\log r)$.
@@ -161,15 +161,17 @@ For a fine label $Y_i=\{y_i\}$ with available neighboring cells, normal semantic
  =P_\theta(c\mid X,i)-\mathbf1[c=y_i].
  \label{eq:gradient}
 \end{equation}
-Thus the true class is encouraged to explain the measured return, and competing known classes are compared through the same evidence. This gradient is the direct link between observation verification and semantic learning.
+Increasing the true class's measurement likelihood reduces the classification loss, while increasing a competing class's likelihood raises it. The predictive branch therefore receives semantic supervision through the same class decision as the appearance branch.
 
-The predictor also receives a normalized likelihood objective. Its context states produce class logits $\eta_{ic}$, which define a distribution restricted to the allowed label set,
+Class competition compares candidate explanations, and a predictive likelihood objective fits each class's distribution to its normal measurements. The context states produce class logits $\eta_{ic}$, which define a mixture restricted to the allowed label set,
 \begin{equation}
  \pi_{ic}^{Y}=\frac{\exp\eta_{ic}}{\sum_{d\in Y_i}\exp\eta_{id}}\quad(c\in Y_i),\qquad
  \ell_{\mathrm{pred},i}=-\log\sum_{c\in Y_i}\pi_{ic}^{Y}p_{ic}.
  \label{eq:predloss}
 \end{equation}
-For a fine label, this is the negative log likelihood under the true class. The logarithmic score rewards predictive distributions that fit the normal observations \citep{proper}. A context-class loss supervises the total probability of $Y_i$. An appearance-only class loss, obtained by replacing $E$ with $s$ in Equation~\eqref{eq:jointloss}, supplies semantic supervision to every reliably labeled point. A compactness loss strengthens absolute appearance support,
+For a fine label, this objective is the negative log likelihood (NLL) under the true class. For a coarse label, it fits the allowed-class mixture to the measured range. The logarithmic score rewards predictive distributions that fit the normal observations \citep{proper}, while a context-class loss supervises the total probability assigned to $Y_i$.
+
+The appearance representation also receives direct semantic supervision. Replacing $E$ with $s$ in Equation~\eqref{eq:jointloss} gives an appearance classification loss on every reliably labeled point. A compactness loss additionally increases absolute appearance support for the allowed classes,
 \begin{equation}
  \ell_{\mathrm{compact},i}=-\log\left(\frac{1}{|Y_i|}\sum_{c\in Y_i}a_{ic}\right).
  \label{eq:compact}
@@ -186,29 +188,29 @@ The training objective is
 We balance classification losses over the distinct allowed label sets present in a frame. Predictive likelihood and compactness are point averages. Up to $4{,}096$ normally labeled points per frame supervise joint verification, while the appearance loss covers all reliable normal labels. The complete scan supplies the input. Appendix~\ref{app:training} specifies these reductions and the source-to-target schedule.
 
 \paragraph{Inference and a normal reference scale.}
-A single scan supplies the semantic features and all context predictions. Class parameters are shared across angular cells, and neighboring tokens are encoded once. Each class density is evaluated at the original point's range, yielding Equation~\eqref{eq:outputs}. A common strictly increasing transform fitted to normal development scores expresses $u_i$ relative to the upper tail of normal class energy. Its role is a common reference scale for the same underlying ranking.
+A single scan supplies the appearance features and context predictions. Neighboring tokens are encoded once, and class parameters are shared across angular cells. Evaluating each class density at the original point's range yields the label and raw unknown score in Equation~\eqref{eq:outputs}. A strictly increasing transform fitted to normal development scores then expresses $u_i$ on a common normal-reference scale. Because the transform is shared across classes and preserves score order, it retains the ranking defined by joint class support.
 
 \section{Experiments}
 \label{sec:experiments}
-The evaluation links three questions: whether observation verification maintains accurate known-class segmentation, whether it recovers unfamiliar points confidently assigned to known classes, and whether those gains remain useful at high anomaly recall.
+The evaluation follows the role of measurement evidence in CReV. Normal semantic accuracy measures its effect on known-class decisions. Real-anomaly detection tests whether it identifies unknown points that an appearance-based classifier assigns to known classes. High-recall false positives and inference cost then characterize the operating conditions under which this additional evidence is useful.
 
 \subsection{Data, Training, and Evaluation}
 \paragraph{Normal supervision.}
-nuScenes \citep{nuscenes} supplies $28{,}130$ training scans from $700$ scenes and a scene-disjoint development set of $6{,}019$ scans from $150$ scenes. STU sequence 206 supplies $449$ target-domain normal training scans; sequence 201 supplies $682$ normal development scans. Training uses trusted normal labels within $2.5$--$50$\,m, while all recorded returns remain available as inputs. Coarse nuScenes labels specify sets of compatible STU classes. Fine source annotations refine selected bicycle, parking, and building points. Ambiguous points carry no semantic loss. The vocabulary contains the $19$ STU normal classes.
+Training combines broad normal observations from nuScenes with target-sensor observations from STU. nuScenes \citep{nuscenes} supplies $28{,}130$ training scans from $700$ scenes and a scene-disjoint development set of $6{,}019$ scans from $150$ scenes. STU sequence 206 supplies $449$ normal training scans, and sequence 201 supplies $682$ normal development scans. The output vocabulary contains the $19$ STU normal classes. Coarse nuScenes labels specify sets of compatible target classes, and additional source annotations refine selected bicycle, parking, and building points. Semantic supervision uses reliable normal labels within $2.5$--$50$\,m. All recorded returns remain available as input, including points with ambiguous labels.
 
 \paragraph{Optimization.}
 The backbone starts from official nuScenes-pretrained LitePT-S weights. All other parameters are initialized randomly. Source training comprises two passes over nuScenes, followed by eight passes over sequence 206 with one source replay scan per four target scans. AdamW uses an effective batch size of two, weight decay $0.005$, $3\%$ linear warmup, and cosine decay to $5\%$ of the peak rate. The source peak rates are $10^{-4}$ for the backbone and $8\times10^{-4}$ for new parameters; target rates are $3\times10^{-5}$ and $2\times10^{-4}$. Selection uses normal-development mean intersection-over-union (mIoU), with the normal objective breaking ties. The independent controls use the same initial weights, data order, augmentations, and update budget.
 
 \paragraph{Evaluation.}
-Normal perception is evaluated by per-class IoU and mIoU on sequence 201, retaining the set of classes represented in its ground truth. STU's real-anomaly validation and hidden test sets supply average precision (AP), area under the receiver operating characteristic curve (AUROC), and the normal false-positive rate at $95\%$ anomaly recall (FPR95). Evaluation follows the official distance, label, and anomaly-instance rules \citep{stu}. The official anomaly-evaluation mask determines the normal denominator. Normal training labels and anomaly-evaluation labels serve their respective tasks. We also examine recall at matched normal false-positive rates of $1\%$ and $5\%$, and report full-scan latency and peak memory on the same device.
+Normal perception is evaluated by per-class IoU and mIoU on sequence 201, using the classes represented in its ground truth. STU's real-anomaly validation and hidden test sets supply average precision (AP), area under the receiver operating characteristic curve (AUROC), and the normal false-positive rate at $95\%$ anomaly recall (FPR95). These metrics use the official distance, label, and anomaly-instance rules \citep{stu}, including the official set of normal points in the false-positive denominator. Recall at matched normal false-positive rates of $1\%$ and $5\%$ further compares unknown detection under equal false-alarm budgets. Full-scan latency and peak memory quantify the associated computation on a common device.
 
 \subsection{Normal Perception and Real-Anomaly Segmentation}
 \label{sec:benchmark}
-Table~\ref{tab:main} places normal semantic accuracy beside the three anomaly metrics. The controlled comparison uses an independently trained appearance model and an equally trained joint model with the same backbone and normal data. Published STU methods provide an external comparison, with training resources and auxiliary supervision recorded explicitly. This arrangement connects unknown recognition to the quality of the underlying normal perception model.
+Table~\ref{tab:main} evaluates semantic accuracy and unknown detection together because measurement evidence influences both outputs. CReV and an independently trained appearance model use the same backbone, normal data, and training budget. Their comparison measures the change in perception obtained by introducing class-conditioned return verification.
 
-The published LIDO model uses MinkowskiNet trained on SemanticKITTI \citep{lido}. The STU implementations of MC dropout, RbA, MaxLogit, and deep ensembles use Mask4Former-3D trained on SemanticKITTI, Panoptic-CUDAL, and the STU normal training split \citep{stu}. These rows report the papers' original results. The matched-data comparison uses the nuScenes and STU normal training described above.
+Published STU results provide an external performance reference. LIDO uses MinkowskiNet trained on SemanticKITTI \citep{lido}. The STU implementations of MC dropout, RbA, MaxLogit, and deep ensembles use Mask4Former-3D trained on SemanticKITTI, Panoptic-CUDAL, and the STU normal training split \citep{stu}. Table~\ref{tab:main} reports these methods' original results alongside the comparison using matched nuScenes and STU normal data.
 
-\begin{table}[t]
+\begin{table}[htbp]
 \caption{Normal perception and real-anomaly segmentation. All metrics are percentages. The first group uses matched normal data and training budgets; dashes reserve pending results. Published results in the second group retain their original training resources; n/r denotes an unreported normal-semantic result.}
 \label{tab:main}
 \centering\small\setlength{\tabcolsep}{3.5pt}
@@ -220,7 +222,7 @@ Model & mIoU$\uparrow$ & AP$\uparrow$ & AUROC$\uparrow$ & FPR95$\downarrow$ & AP
 \midrule
 Appearance only & \blank & \blank & \blank & \blank & \blank & \blank & \blank\\
 Separate objectives & \blank & \blank & \blank & \blank & \blank & \blank & \blank\\
-Joint verification & \blank & \blank & \blank & \blank & \blank & \blank & \blank\\
+CReV & \blank & \blank & \blank & \blank & \blank & \blank & \blank\\
 \midrule
 MC dropout \citep{stu} & n/r & 0.17 & 65.76 & 79.82 & 0.11 & 61.51 & 82.37\\
 RbA \citep{stu} & n/r & 1.64 & 73.00 & 100.00 & 0.81 & 66.38 & 100.00\\
@@ -233,18 +235,18 @@ LIDO \citep{lido} & n/r & 27.53 & 95.05 & 34.86 & 14.99 & 93.67 & 34.29\\
 
 \subsection{Effect of Observation Evidence on Semantic Decisions}
 \label{sec:mechanism}
-The central comparison removes observation compatibility from the supervised class competition while retaining the predictive objective, shared class parameters, and joint inference score. The difference between this control and the complete model measures the effect of learning to classify with observation evidence. An independently trained appearance-only model establishes the normal semantic reference.
+To isolate the role of measurement evidence in semantic learning, the separate-objectives control trains classification using appearance support while retaining the predictive objective, shared class parameters, and joint inference score. Its comparison with CReV tests the effect of using measurement support during class competition. The independently trained appearance model provides a common reference for examining which pointwise decisions change.
 
-For unknown points, the reference classifier defines a fixed subset whose maximum class probability is at least $0.9$. Recall on this subset measures recovery of confident semantic misrecognitions. At each matched false-positive rate, paired point identities determine how many unknowns are recovered or lost. On normal points, the same analysis counts corrected and newly introduced semantic errors, with per-class IoU exposing the distribution of these changes. Table~\ref{tab:coupling} and Figure~\ref{fig:decisions} join these two views of observation verification.
+For unknown points, the reference classifier defines a fixed subset whose maximum class probability is at least $0.9$. Recall on this subset measures recovery of confident semantic misrecognitions. At each false-positive rate, we match point identities across models and count recovered and lost unknown points. On normal points, the same analysis counts corrected and newly introduced semantic errors, with per-class IoU exposing the distribution of these changes. Table~\ref{tab:coupling} and Figure~\ref{fig:decisions} join these two views of observation verification.
 
-\begin{figure}[t]
+\begin{figure}[htbp]
 \centering
 \figureblank{1.12in}{Normal-class IoU changes and unknown recall at matched false-positive rates}
 \caption{Effect of verification on semantic decisions and unknown recognition. Left: per-class IoU relative to the independently trained appearance model. Right: recall of confidently misrecognized unknown points at matched normal false-positive rates. The same reference model defines the subset for every method.}
 \label{fig:decisions}
 \end{figure}
 
-\begin{table}[t]
+\begin{table}[htbp]
 \caption{Changes in pointwise decisions relative to the appearance model. Corrected and introduced normal errors are percentages of all evaluated normal semantic points. Unknown recall is measured on the fixed subset confidently assigned a normal class by the reference model, at matched normal false-positive rates.}
 \label{tab:coupling}
 \centering\small
@@ -255,31 +257,31 @@ Model & Corrected$\uparrow$ & Introduced$\downarrow$ & at $1\%$ FPR & at $5\%$ F
 \midrule
 Appearance only & & & \blank & \blank\\
 Separate objectives & \blank & \blank & \blank & \blank\\
-Joint verification & \blank & \blank & \blank & \blank\\
+CReV & \blank & \blank & \blank & \blank\\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{Predictive Quality, Sparse Returns, and Computation}
 \label{sec:quality}
-Normal-data diagnostics examine held-out log likelihood, the coverage and width of $90\%$ predictive intervals, and the use of mixture components. Jointly examining coverage and width tests whether the model accommodates normal variation with informative predictions \citep{proper}. Stratification by range and angular-cell return count connects these quantities to sparse observations. The anomaly analysis uses the same strata to locate changes in missed unknown points and normal false positives.
+Measurement support depends on how well the predicted distributions describe normal returns. We examine held-out log likelihood, the coverage and width of $90\%$ predictive intervals, and mixture-component use. Coverage measures how often a normal return falls within the predicted interval, while width measures how concentrated that prediction is \citep{proper}. Stratifying these quantities by range and angular-cell return count reveals how predictive quality varies with observation sparsity. Applying the same strata to anomaly recall and normal false positives relates prediction quality to detection behavior.
 
-Qualitative examples place the scan, normal labels, unknown scores, and class-conditioned return distributions side by side. The most informative cases compare a normal and an unfamiliar object with similar appearance-based class confidence. The plots show which candidate class remains supported by the actual measurement. Timing includes scan preparation, the semantic encoder, contextual prediction, and pointwise scoring, with peak memory measured under the same execution conditions for each model.
+Figure~\ref{fig:qualitative} examines this relationship at individual returns. Normal and unfamiliar objects with similar appearance-based class confidence are shown alongside their class-conditioned range distributions. The measured range then identifies which candidate predictions support the observation. Computational measurements cover scan preparation, semantic encoding, context prediction, and pointwise scoring, with peak memory measured under the same execution conditions for each model.
 
-\begin{figure}[t]
+\begin{figure}[htbp]
 \centering
-\figureblank{1.12in}{Observed scans, class predictions, unknown scores, and held-out return distributions}
-\caption{Class explanations at observed returns. Each selected point is accompanied by the predicted return distributions for the most relevant known classes and its measured range. Normal sparse objects and confidently misrecognized unknown objects are presented with the same visualization scale.}
+\figureblank{1.12in}{Observed scans, class predictions, unknown scores, and held-out range distributions}
+\caption{Class explanations at observed returns. Each selected point is accompanied by the predicted range distributions for the most relevant known classes and its measured range. Normal sparse objects and confidently misrecognized unknown objects are presented with the same visualization scale.}
 \label{fig:qualitative}
 \end{figure}
 
 \section{Conclusion}
-We formulate normal semantic perception as a class decision supported by both appearance and a testable prediction of the observed return. A context branch predicts the held-out log range for every known class, and its likelihood enters the same class competition that learns semantic segmentation. The resulting class energy provides both a normal label and an unknown score. This formulation gives normal labels and physical measurements complementary roles in learning when a familiar explanation is supported.
+CReV connects LiDAR semantic decisions to predictions of measured range. Each known class receives appearance support from the full scan and measurement support from a context-conditioned distribution over a held-out return. Normal semantic labels train their joint support through class competition, while a likelihood objective fits the predictive distributions to normal measurements. The resulting class energy supplies both semantic labels and unknown scores, linking the recognition of known objects to the evidence supporting their classification.
 \resultslot
 
 \FloatBarrier
 \section*{AI Use Statement}
-We used OpenAI Codex for literature retrieval and synthesis, research-question refinement, model formulation, mathematical derivations, experiment design, data processing and annotation review, implementation, debugging, analysis of development results, and manuscript preparation. Assistance with the manuscript included drafting, editing, reference verification, diagrams, and typesetting. Source texts were consulted for method comparisons; the formulation was checked against the implementation; numerical and real-scan checks examined the implemented computations. The authors are responsible for the submitted text, claims, code, and data artifacts.
+We used OpenAI Codex for literature retrieval and synthesis, research-question refinement, model formulation, mathematical derivations, experiment design, data processing and annotation review, implementation, debugging, and analysis of development results. Manuscript assistance included drafting, editing, reference verification, method naming, diagrams, and typesetting. Verification used source texts for method comparisons, implementation checks for the formulation, and numerical and real-scan tests for the computations. The authors are responsible for the submitted text, claims, code, and data artifacts.
 
 \section*{Reproducibility Statement}
 Section~\ref{sec:method} defines the class energies and training objectives. Appendix~\ref{app:architecture} specifies the context construction and predictive distribution, Appendix~\ref{app:training} gives supervision and optimization details, and Appendix~\ref{app:evaluation} defines the evaluation reductions. The experiments use nuScenes and STU with the stated scene and sequence assignments.
@@ -334,7 +336,7 @@ For supported cells, the class logits can be written $-s_{ic}+\log p_{ic}-\log M
 \end{equation}
 Then $\partial\ell_{\mathrm{joint},i}/\partial\log p_{ic}=P_\theta(c\mid X,i)-P^Y_{ic}$. The allowed set therefore receives joint support according to its currently compatible members. The predictive loss in Equation~\eqref{eq:predloss} uses a context-derived class mixture within that set.
 
-The joint function $v_{ic}$ is a discriminative class support. Its appearance encoder and context encoder both process the scan, with distinct information restrictions. The density $p_{ic}$ describes the conditional log-range prediction. The class competition uses their combined support as a discriminative energy.
+The joint function $v_{ic}$ is a discriminative class support. Its appearance encoder and context encoder both process the scan, with distinct information restrictions. The density $p_{ic}$ describes the conditional log-range prediction. The negative logarithm of their combined support serves as the class energy.
 
 \section{Normal Supervision and Optimization}
 \label{app:training}
@@ -412,7 +414,7 @@ Model & Latency (ms)$\downarrow$ & Peak memory (GB)$\downarrow$ & NLL$\downarrow
 \midrule
 Appearance only & \blank & \blank & & \\
 Separate objectives & \blank & \blank & \blank & \blank\\
-Joint verification & \blank & \blank & \blank & \blank\\
+CReV & \blank & \blank & \blank & \blank\\
 \bottomrule
 \end{tabular}
 \end{table}
