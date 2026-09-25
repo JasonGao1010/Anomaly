@@ -67,9 +67,11 @@ STU201按连续64帧分块。奇数块用于正常模型选择，偶数块用于
 
 ## 实现与当前证据
 
-权威实现是 `src/normal.py` 的 `CrossEvidence` 与 `ScoreCalibration`，`src/model.py` 的 `FrozenPerception`、`FrozenSupport`，以及 `src/train.py --normal`。当前版本标识为 `AJAE-observation-evidence`，已实现并完成公式测试，尚未开展本版本的正式训练，因而没有本版本的训练或异常评价结论。它复用已完成的4,720,640个正常训练点、1,620,350个正常开发点的冻结特征，不重训骨干。初始化、选型与校准分别记录在 `initialization.json`、`development.json`、`calibration.json`；逐轮记录为 `training.jsonl`。
+权威实现是 `src/normal.py` 的 `CrossEvidence` 与 `ScoreCalibration`，`src/model.py` 的 `FrozenPerception`、`FrozenSupport`，以及 `src/train.py --normal`。当前版本标识为 `AJAE-observation-evidence`，已实现并完成公式测试，正式训练正在 `results/train/prior/` 运行，尚无本版本的完整训练或异常评价结论。它复用已完成的4,720,640个正常训练点、1,620,350个正常开发点的冻结特征，不重训骨干。初始化、选型与校准分别记录在 `initialization.json`、`development.json`、`calibration.json`；逐轮记录为 `training.jsonl`。
 
 固定高斯类别后验版本 `AJAE-class-evidence` 已完成正常训练，选中四分量、判别权重0、第6轮，记录位于 `results/train/class/result.json`。对201奇数块320帧、644,238个缓存正常点的机制检查见 `results/train/class/normal_mechanism.json`：实际联合后验的类别等权正确率为55.9518%，固定深层高斯读出为55.3619%，仅改善0.5899个百分点；35米以上分别为41.7770%与47.2239%，下降5.4468个百分点。远距点平均正确率虽从74.5803%升至83.6336%，仍不能替代逐类结果。这里的退步是正常语义识别退步，不能等同异常检测误报增加。
+
+该固定类别权重版本已完成val19的1,960帧重复评价，AP为0.4077170639%、AUROC为89.4657569867%、FPR95为51.3258182839%，三项仍未达到LIDO。193,879,969个有效点的独立复算与官方指标及阈值逐值一致，见 `results/train/class/verification.json`。当前学习类别先验版本的实现和正常选择规则已在本次评价结束前提交于 `18b91b8`；这次异常结果未用于选择新版本的结构或参数。
 
 将实测观测替换为仅由深层产生的共同期望后，同一201总体的类别等权正确率为54.7532%，低于实际观测的55.9518%。该正常对照支持观测包含额外类别信息，但固定类别权重版本没有稳健利用到每个距离子群。当前学习 $\rho_\theta(c\mid D)$ 的改动针对固定高斯类别权重与正常类别监督不匹配这一待验证解释；正常对照不能证明它是唯一原因，也不能预告新版本的异常收益。该修改依据正常数据，不依据val19结果。
 

@@ -1,0 +1,30 @@
+{
+  "independent_metrics": {
+    "AP": 0.4077170638966698,
+    "AUROC": 89.46575698669977,
+    "FPR95": 51.325818283857984,
+    "threshold": 0.5356411933898926
+  },
+  "points": 193879969,
+  "normal_points": 193792470,
+  "anomaly_points": 87499,
+  "scans": 1960,
+  "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "seconds": 3.6091848890064284,
+  "method": "exact score ranks with whole ties and the official ROC vertex-removal rule",
+  "official_metrics": {
+    "AP": 0.4077170638966698,
+    "FPR95": 51.325818283857984,
+    "AUROC": 89.46575698669977,
+    "threshold": 0.5356411933898926
+  },
+  "absolute_difference": {
+    "AP": 0.0,
+    "FPR95": 0.0,
+    "AUROC": 0.0,
+    "threshold": 0.0
+  },
+  "consistent": true,
+  "val19_used_for_selection": false,
+  "role": "completed fixed-prior class-conditioned normal model; current learned-prior design was committed before this evaluation completed"
+}
