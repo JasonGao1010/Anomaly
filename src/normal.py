@@ -15,6 +15,7 @@ SCALES = (1, 2, 4)
 HYPOTHESES, KERNELS = 4, 8
 LOWER, UPPER = 2.5, 50.
 RAY_CHUNK, BLOCK_CHUNK = 2048, 256
+HYPOTHESIS_CHUNK = 1024
 MIN_RETURN_SCALE = .001
 LOG_RETURN_PEAK = math.log(2 / (math.pi * math.sqrt(3) * MIN_RETURN_SCALE))
 
@@ -199,7 +200,7 @@ class SemanticHypotheses(nn.Module):
                         mean=zero.expand(0, 19, 3))
         projected = self.project_context(encoded[0])
         groups, inverse = observation["group"][indices].unique(sorted=True, return_inverse=True)
-        parts = [self.propose(observation, encoded, part, projected) for part in groups.split(BLOCK_CHUNK)]
+        parts = [self.propose(observation, encoded, part, projected) for part in groups.split(HYPOTHESIS_CHUNK)]
         fields = {key: torch.cat([part[key] for part in parts]) for key in parts[0]}
         selected = {key: value[inverse] for key, value in fields.items()}
         mean = selected["mean"] + (selected["slope"] * observation["offset"][indices, None, None]).sum(-1)

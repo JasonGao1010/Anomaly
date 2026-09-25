@@ -409,8 +409,9 @@ class PointROPEAttention(PointModule):
 
         # FP32 inputs alone do not stop autocast from quantizing rotary phases.
         with torch.autocast(q.device.type, enabled=False):
-            q = self.rope(q.float(), pos).to(q.dtype) # [1, H, N, head_dim]
-            k = self.rope(k.float(), pos).to(k.dtype) # [1, H, N, head_dim]
+            # Serialization already bounds every coordinate; avoid two GPU scalar reads.
+            q = self.rope(q.float(), pos, max_seqlen=(1 << point.serialized_depth) - 1).to(q.dtype)
+            k = self.rope(k.float(), pos, max_seqlen=(1 << point.serialized_depth) - 1).to(k.dtype)
 
         # assemble input for flash attention
         qkv_rotated = torch.stack([
@@ -426,12 +427,11 @@ class PointROPEAttention(PointModule):
                 raise ValueError("FP32 attention expects the segmentor's single-scan forward")
             width = min(self.patch_size, len(point.feat))
             q, k, v = qkv_rotated.reshape(-1, width, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(0)
-            # Independent patches keep their full receptive fields. Recompute
-            # quadratic attention activations instead of retaining every layer's.
+            # Retain small attention maps; recompute larger scans to bound memory.
             patches = []
             for start in range(0, len(q), 2):
                 args = (q[start:start + 2], k[start:start + 2], v[start:start + 2])
-                if self.training and torch.is_grad_enabled():
+                if len(q) > 8 and self.training and torch.is_grad_enabled():
                     patches.append(checkpoint(self.attend, *args, use_reentrant=False,
                                               preserve_rng_state=True))
                 else:

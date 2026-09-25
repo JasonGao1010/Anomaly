@@ -1612,3 +1612,128 @@ def test_normal_development_keeps_all_point_semantics_and_additive_diagnostics(m
     assert measured["observation_diagnostics"]["query_count"] == [2., 2.]
     for name in ("distance_metres", "returns_per_angular_cell"):
         assert sum(row[0] for row in measured["strata"][name]["counts"]) == 6
+
+
+def test_normal_calibration_reuses_development_with_identical_samples_quantiles_and_rng(tmp_path, monkeypatch):
+    import src.data as data
+    import src.train as training
+    from src.model import CALIBRATION_PROBABILITIES
+    from src.train import normal_calibration, normal_development
+
+    loads = []
+
+    class Dataset:
+        def __init__(self, records, queries):
+            self.records, self.queries = records, queries
+
+        def __len__(self):
+            return len(self.records)
+
+        def __getitem__(self, index):
+            loads.append((index, self.queries))
+            count = 2800 + index * 13
+            allowed = torch.zeros(count, 19, dtype=torch.bool)
+            allowed[:, 0], allowed[::9, 0] = True, False
+            xyzi = torch.zeros(count, 4)
+            xyzi[:, 0] = torch.linspace(3., 45., count)
+            return dict(index=index, xyzi=xyzi, allowed=allowed,
+                        observation=dict(group=torch.arange(count) // 5))
+
+    class Model(nn.Module):
+        variant = "joint"
+
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("calibration", torch.zeros(len(CALIBRATION_PROBABILITIES)))
+            self.register_buffer("calibrated", torch.tensor(False))
+            self.reference_forwards = 0
+            self.development_forwards = 0
+
+        @staticmethod
+        def raw_score(sample):
+            return torch.arange(len(sample["xyzi"]), dtype=torch.float32).square() / 123 + sample["index"] * 17
+
+        def loss(self, sample):
+            self.development_forwards += 1
+            self.development_raw_score = self.raw_score(sample)
+            self.development_prediction = torch.zeros(len(sample["xyzi"]), dtype=torch.long)
+            self.development_semantic_prediction = self.development_prediction
+            self.development_diagnostics = dict(query_count=np.array([1.]))
+            return self.development_raw_score.mean(), dict(classification=torch.tensor(1.))
+
+        def components(self, sample, indices):
+            self.reference_forwards += 1
+            return dict(raw_score=self.raw_score(sample)[indices])
+
+    monkeypatch.setattr(data, "NormalScans", Dataset)
+    records = [dict(source="normal_stu", scene="201", frame=100 + index) for index in range(3)]
+    device = torch.device("cpu")
+    reused, fresh = Model(), Model()
+    reference = dict(seed=206)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(172)
+        normal_development(reused, records, [0, 1, 2], device, 0, queries=8192, calibration=reference)
+        first = normal_calibration(reused, records, device, 0, tmp_path / "reused", reference=reference)
+        reused_rng = torch.get_rng_state()
+        assert loads == [(0, 8192), (1, 8192), (2, 8192)]
+        assert reused.reference_forwards == 0
+        loads.clear()
+        torch.manual_seed(172)
+        normal_development(fresh, records, [0, 1, 2], device, 0, queries=8192)
+        second = normal_calibration(fresh, records, device, 0, tmp_path / "fresh")
+        assert torch.equal(torch.get_rng_state(), reused_rng)
+    assert loads == [(0, 8192), (1, 8192), (2, 8192), (0, 1), (1, 1), (2, 1)]
+    assert fresh.reference_forwards == 3
+    torch.testing.assert_close(reused.calibration, fresh.calibration, atol=0, rtol=0)
+    assert reused.calibrated and fresh.calibrated
+    for key in first:
+        if key not in ("seconds", "inference"):
+            assert first[key] == second[key], key
+    independent = []
+    for frame in range(3):
+        sample = Dataset(records, 1)[frame]
+        valid = np.flatnonzero(sample["allowed"].numpy().any(1))
+        chosen = np.sort(np.random.default_rng(np.random.SeedSequence([206, frame])).choice(valid, 2048, replace=False))
+        values = Model.raw_score(sample).numpy()[chosen]
+        np.testing.assert_array_equal(reference["scores"][frame], values)
+        independent.append(values)
+    np.testing.assert_array_equal(reused.calibration.numpy(),
+        np.quantile(np.concatenate(independent), CALIBRATION_PROBABILITIES).astype(np.float32))
+    with pytest.raises(ValueError, match="model, seed and full normal population"):
+        normal_calibration(reused, records, device, 0, tmp_path / "wrong", seed=207, reference=reference)
+    clock = [10.]
+    monkeypatch.setattr(training.time, "time", lambda: clock[0])
+    before = len(loads)
+    with pytest.raises(TimeoutError, match="before normal calibration"):
+        normal_calibration(fresh, records, device, 0, tmp_path / "late", deadline=10.)
+    assert len(loads) == before
+    assert not (tmp_path / "late" / "calibration.json").exists()
+
+    clock[0] = 0.
+    original_loss = fresh.loss
+
+    def finish_at_deadline(sample):
+        result = original_loss(sample)
+        clock[0] = 10.
+        return result
+
+    monkeypatch.setattr(fresh, "loss", finish_at_deadline)
+    before = fresh.development_forwards
+    with pytest.raises(TimeoutError, match="before complete normal development"):
+        normal_development(fresh, records, [0, 1, 2], device, 0, deadline=10.)
+    assert fresh.development_forwards == before + 1
+
+    clock[0] = 0.
+    original_components = fresh.components
+
+    def reference_at_deadline(sample, indices):
+        result = original_components(sample, indices)
+        clock[0] = 10.
+        return result
+
+    monkeypatch.setattr(fresh, "components", reference_at_deadline)
+    before = fresh.reference_forwards
+    with pytest.raises(TimeoutError, match="before complete normal calibration"):
+        normal_calibration(fresh, records, device, 0, tmp_path / "partial", deadline=10.)
+    assert fresh.reference_forwards == before + 1
+    assert not (tmp_path / "partial" / "calibration.json").exists()

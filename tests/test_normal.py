@@ -20,6 +20,23 @@ from src.model import Segmentor, balanced_loss, ranking_loss, to_device
 from src.train import cached_backward, seed_all, rng_state, restore_rng
 
 
+@pytest.mark.parametrize("maximum", [31, 57, 1299])
+def test_rotary_serialization_bound_preserves_values_and_gradients(maximum):
+    from vendor.litept.pointrope import PointROPE
+    torch.manual_seed(84)
+    positions = torch.randint(0, maximum + 1, (1, 127, 3))
+    positions[0, 0, 0] = maximum
+    tokens = torch.randn(1, 4, 127, 18, requires_grad=True)
+    rope = PointROPE()
+    expected = rope(tokens, positions)
+    expected_gradient = torch.autograd.grad(expected.square().sum(), tokens)[0]
+    depth = (maximum + 1).bit_length()
+    actual = rope(tokens, positions, max_seqlen=(1 << depth) - 1)
+    actual_gradient = torch.autograd.grad(actual.square().sum(), tokens)[0]
+    assert torch.equal(actual, expected)
+    assert torch.equal(actual_gradient, expected_gradient)
+
+
 def test_semantic_hypotheses_exclude_entire_target_cell_values_counts_and_gradients():
     from src.normal import hypothesis_observation, SemanticHypotheses
     torch.manual_seed(71)
@@ -263,7 +280,7 @@ def test_joint_components_use_matching_classes_and_preserve_point_subsets(hypoth
         full = hypothesis_model.components(sample)
         indices = torch.tensor([180, 4, 119, 4, 51])
         subset = hypothesis_model.components(sample, indices)
-        monkeypatch.setattr("src.normal.BLOCK_CHUNK", 2)
+        monkeypatch.setattr("src.normal.HYPOTHESIS_CHUNK", 2)
         chunked = hypothesis_model.components(sample, indices)
     for key in ("energy", "logits", "semantic_energy", "geometry_energy", "raw_score"):
         assert len(subset[key]) == len(indices)

@@ -1471,9 +1471,14 @@ NORMAL_SELECTION = "maximum mIoU over the fixed ground-truth-present normal deve
 
 
 @torch.no_grad()
-def normal_development(model, records, indices, device, workers, *, queries=4096):
+def normal_development(model, records, indices, device, workers, *, queries=4096, calibration=None, deadline=None):
     from .data import NormalScans
     model.eval()
+    if calibration is not None:
+        if (list(indices) != list(range(len(records))) or not records
+                or any(row.get("source") != "normal_stu" or row.get("scene") != "201" for row in records)):
+            raise ValueError("calibration reuse requires the complete ordered STU 201 development population")
+        calibration.update(frames=[], scores=[], data_identity=identity(records), variant=model.variant)
     data = NormalScans(records, queries=queries)
     loader = DataLoader(data, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=True, prefetch_factor=1 if workers else None)
@@ -1486,11 +1491,22 @@ def normal_development(model, records, indices, device, workers, *, queries=4096
                                   ("returns_per_angular_cell", [1, 3, 7, 15]))}
     confusions = {name: np.zeros((19, 19), np.int64) for name in ("joint", "semantic")}
     start = time.monotonic()
-    for sample in loader:
+    for frame, sample in enumerate(loader):
+        if deadline is not None and time.time() >= deadline:
+            raise TimeoutError("deadline reached before complete normal development; selected weights are saved; retry with --calibration-only and a new deadline")
+        if calibration is not None:
+            chosen, eligible = normal_reference_points(sample["allowed"], frame, calibration["seed"])
         sample = to_device(sample, device)
         loss, detail = model.loss(sample)
         if not bool(torch.isfinite(loss)):
             raise FloatingPointError("nonfinite normal development loss")
+        if calibration is not None:
+            values = model.development_raw_score[torch.as_tensor(chosen, device=device)]
+            if values.shape != (len(chosen),) or not bool(torch.isfinite(values).all()):
+                raise ValueError("nonfinite or misaligned reused normal reference scores")
+            if len(chosen):
+                calibration["scores"].append(values.float().cpu().numpy())
+            calibration["frames"].append(dict(frame=records[frame]["frame"], eligible=eligible, retained=len(chosen)))
         totals["objective"] += float(loss)
         for key, value in detail.items():
             totals[key] += float(value)
@@ -1674,34 +1690,56 @@ def normal_optimizer(model, stage):
     return torch.optim.AdamW(groups, weight_decay=.005, eps=1e-6)
 
 
+def normal_reference_points(allowed, frame, seed):
+    """Identical uniform reference points for fresh and reused normal inference."""
+    valid = allowed.any(1).nonzero().flatten().cpu().numpy()
+    rng = np.random.default_rng(np.random.SeedSequence([seed, frame]))
+    return np.sort(rng.choice(valid, min(len(valid), 2048), replace=False)), len(valid)
+
+
 @torch.no_grad()
-def normal_calibration(model, records, device, workers, output, *, seed=206):
+def normal_calibration(model, records, device, workers, output, *, seed=206, reference=None, deadline=None):
     from .data import NormalScans
     from .model import CALIBRATION_PROBABILITIES, NORMAL_SCORE_VERSION
-    reference, frames = [], []
+    if deadline is not None and time.time() >= deadline:
+        raise TimeoutError("deadline reached before normal calibration; selected weights are saved; retry with --calibration-only and a new deadline")
+    frames = []
     model.eval()
     start = time.monotonic()
     if not records or any(row.get("source") != "normal_stu" or row.get("scene") != "201" for row in records):
         raise ValueError("joint normal references must use only the STU 201 normal development sequence")
-    loader = DataLoader(NormalScans(records, queries=1), batch_size=None, num_workers=workers,
-                        pin_memory=device.type == "cuda", prefetch_factor=1 if workers else None)
-    for frame, sample in enumerate(loader):
-        # Reference sampling follows the normal point population, not class quotas.
-        valid = sample["allowed"].any(1).nonzero().flatten().numpy()
-        rng = np.random.default_rng(np.random.SeedSequence([seed, frame]))
-        chosen = np.sort(rng.choice(valid, min(len(valid), 2048), replace=False))
-        if len(chosen):
-            sample = to_device(sample, device)
-            values = model.components(sample, torch.as_tensor(chosen, device=device))["raw_score"]
-            if values.shape != (len(chosen),) or not bool(torch.isfinite(values).all()):
-                raise ValueError("nonfinite or misaligned joint normal reference scores")
-            reference.append(values.float().cpu().numpy())
-        frames.append(dict(frame=records[frame]["frame"], eligible=len(valid), retained=len(chosen)))
-        if (frame + 1) % 50 == 0:
-            print(f"calibration 201 {frame + 1}/{len(records)} elapsed={(time.monotonic()-start)/60:.1f}min", flush=True)
-    if not reference:
+    reused = reference is not None
+    if reused:
+        if (reference["seed"] != seed or reference["variant"] != model.variant
+                or reference["data_identity"] != identity(records)
+                or [row["frame"] for row in reference["frames"]] != [row["frame"] for row in records]):
+            raise ValueError("reused calibration must match this model, seed and full normal population")
+        scores, frames = reference["scores"], reference["frames"]
+        # A skipped sequential DataLoader iterator would have consumed one CPU
+        # base seed. Preserve that RNG transition without loading the scans twice.
+        torch.empty((), dtype=torch.int64).random_()
+    else:
+        scores = []
+        loader = DataLoader(NormalScans(records, queries=1), batch_size=None, num_workers=workers,
+                            pin_memory=device.type == "cuda", prefetch_factor=1 if workers else None)
+        for frame, sample in enumerate(loader):
+            if deadline is not None and time.time() >= deadline:
+                raise TimeoutError("deadline reached before complete normal calibration; selected weights are saved; retry with --calibration-only and a new deadline")
+            chosen, eligible = normal_reference_points(sample["allowed"], frame, seed)
+            if len(chosen):
+                sample = to_device(sample, device)
+                values = model.components(sample, torch.as_tensor(chosen, device=device))["raw_score"]
+                if values.shape != (len(chosen),) or not bool(torch.isfinite(values).all()):
+                    raise ValueError("nonfinite or misaligned joint normal reference scores")
+                scores.append(values.float().cpu().numpy())
+            frames.append(dict(frame=records[frame]["frame"], eligible=eligible, retained=len(chosen)))
+            if (frame + 1) % 50 == 0:
+                print(f"calibration 201 {frame + 1}/{len(records)} elapsed={(time.monotonic()-start)/60:.1f}min", flush=True)
+    if not scores:
         raise ValueError("STU 201 has no reliable normal reference points")
-    quantiles = np.quantile(np.concatenate(reference), CALIBRATION_PROBABILITIES).astype(np.float32)
+    if sum(map(len, scores)) != sum(row["retained"] for row in frames):
+        raise ValueError("normal reference scores and their sampled point counts disagree")
+    quantiles = np.quantile(np.concatenate(scores), CALIBRATION_PROBABILITIES).astype(np.float32)
     if not np.isfinite(quantiles).all() or np.any(np.diff(quantiles) < 0):
         raise ValueError("joint normal reference quantiles must be finite and nondecreasing")
     model.calibration.copy_(torch.from_numpy(quantiles).to(device))
@@ -1710,8 +1748,9 @@ def normal_calibration(model, records, device, workers, output, *, seed=206):
                   frames=frames, target_scans=len(records),
                   score_version=NORMAL_SCORE_VERSION, probabilities=CALIBRATION_PROBABILITIES.tolist(),
                   quantiles=quantiles.tolist(), seed=seed, samples_per_frame=2048,
-                  eligible_points=sum(row["eligible"] for row in frames), reference_points=sum(map(len, reference)),
+                  eligible_points=sum(row["eligible"] for row in frames), reference_points=sum(map(len, scores)),
                   seconds=time.monotonic() - start, anomaly_labels_used=False,
+                  inference="reused from full normal development" if reused else "dedicated normal reference inference",
                   point_scope="actual returns with at least one reliable normal class in the 2.5–50 metre supervision range",
                   sampling="uniform without replacement within each frame's reliable normal points; no class balancing or support filtering",
                   score_definition=f"minimum formal class energy for variant={model.variant}; identical raw_score as inference",
@@ -1721,16 +1760,17 @@ def normal_calibration(model, records, device, workers, output, *, seed=206):
 
 
 def normal_main():
+    from threadpoolctl import threadpool_info, threadpool_limits
     from .data import NormalScans, normal_records, NORMAL_CLASSES, STU_NORMAL_SEMANTICS, NUSCENES_NORMAL_SETS
     from .model import (NormalHypothesis, NORMAL_VERSION, NORMAL_ARCHITECTURE,
                         NORMAL_SCORE_VERSION)
     parser = argparse.ArgumentParser(description="Real-normal semantic hypothesis training; stop before STU val19")
     parser.add_argument("--normal", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--source-epochs", type=int, default=1)
+    parser.add_argument("--source-epochs", type=int, default=2)
     parser.add_argument("--target-epochs", type=int, default=8)
     parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--threads", type=int, default=2)
+    parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--batch", type=int, default=2)
     parser.add_argument("--seed", type=int, default=206)
     parser.add_argument("--variant", choices=("joint", "semantic", "separate"), default="joint",
@@ -1760,9 +1800,13 @@ def normal_main():
                 raise ValueError("resume/calibration variant must match the recorded trained method")
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
+    # NumPy/SciPy BLAS has its own pool; forked loader workers inherit this cap.
+    threadpool_limits(limits=1, user_api="blas")
     seed_all(args.seed)
     device = torch.device("cuda")
     resources = runtime_snapshot()
+    resources["execution"] = dict(loader_workers=args.workers, torch_threads=args.threads,
+                                  blas_threads=1, threadpools=threadpool_info())
     disk_check(3_000_000_000)
     args.output.mkdir(parents=True, exist_ok=True)
     source = normal_records("nuscenes")
@@ -1804,12 +1848,13 @@ def normal_main():
         calibration="one global minimum-formal-class-energy reference; uniform reliable normal points from STU 201 only",
         score_version=NORMAL_SCORE_VERSION,
         selection=NORMAL_SELECTION,
+        execution_reservations=dict(source=5400, target=1200),
         match_run=str(args.match_run.resolve()) if args.match_run else None,
         baseline=str(args.baseline.resolve()) if args.baseline else None,
         deadline=args.deadline, code=code_record())
     if initial is not None:
         # Runtime limits may change on resume; scientific inputs and losses may not.
-        changed = [key for key, value in config.items() if key not in ("deadline", "code")
+        changed = [key for key, value in config.items() if key not in ("deadline", "code", "execution_reservations")
                    and identity(value) != identity(initial["config"].get(key))]
         if changed:
             raise ValueError(f"normal resume changes the scientific configuration: {changed}")
@@ -1890,9 +1935,9 @@ def normal_main():
             size = min(args.batch, len(order) - (visits // args.batch) * args.batch)
             (loss / size).backward()
             visits += 1
-            recent["loss"] += float(loss.detach())
+            recent["loss"] += loss.detach().double()
             for key, value in details.items():
-                recent[key] += float(value)
+                recent[key] += value.detach().double() if isinstance(value, torch.Tensor) else float(value)
             recent["frames"] += 1
             if visits % args.batch and visits != len(order):
                 continue
@@ -1905,16 +1950,22 @@ def normal_main():
             optimizer.zero_grad(set_to_none=True)
             steps += 1
             if steps % 20 == 0:
+                # Keep the original frame-by-frame FP64 sums, then transfer all
+                # logging scalars together after the optimizer update.
+                names = [key for key in recent if key != "frames"]
+                packed = [torch.as_tensor(recent[key], device=device, dtype=torch.float64) for key in names]
+                values = torch.stack([gradient.detach().double(), *packed]).cpu().tolist()
                 row = dict(stage=stage, update=steps, visits=visits, total=len(order),
-                           seconds=time.monotonic() - started, gradient=float(gradient),
-                           **{k: v / recent["frames"] for k, v in recent.items() if k != "frames"})
+                           seconds=time.monotonic() - started, gradient=values[0],
+                           **{key: value / recent["frames"] for key, value in zip(names, values[1:])})
                 log.write(json.dumps(row) + "\n")
                 print(f"{stage} {visits}/{len(order)} loss={row['loss']:.3f} cls={row['classification']:.3f} sem={row['semantic']:.3f} "
                       f"geo={row['geometry']:.3f} elapsed={row['seconds']/60:.1f}min "
                       f"ETA={(row['seconds']/max(1,visits-first)*(len(order)-visits))/60:.1f}min", flush=True)
                 recent.clear()
-            # The source stage reserves time for target adaptation and the final checks.
-            reserve = 3.25 * 3600 if stage == "source" else 90 * 60
+            # Wall-clock reserves protect the remaining phases; the nominal
+            # sample/update budget and learning-rate schedule remain independent.
+            reserve = config["execution_reservations"][stage]
             ending = visits == len(order) or time.time() > args.deadline - reserve
             interval = args.eval_every if stage == "source" else min(args.eval_every, 225)
             validate = steps % interval == 0 or ending
@@ -1951,12 +2002,16 @@ def normal_main():
         del optimizer, loader, dataset, selected
         gc.collect()
         torch.cuda.empty_cache()
+    reference = None
     if full is None:
-        full = normal_development(model, target_val, list(range(len(target_val))), device, args.workers, queries=8192)
+        reference = dict(seed=config["seed"])
+        full = normal_development(model, target_val, list(range(len(target_val))), device, args.workers,
+                                  queries=8192, calibration=reference, deadline=args.deadline)
     if args.baseline is not None:
         full["baseline_comparison"] = normal_baseline_comparison(args.baseline, config, full)
     write_json(args.output / "normal201.json", full)
-    calibration = normal_calibration(model, target_val, device, args.workers, args.output, seed=config["seed"])
+    calibration = normal_calibration(model, target_val, device, args.workers, args.output,
+                                     seed=config["seed"], reference=reference, deadline=args.deadline)
     final = dict(version=config["version"], mode=model.mode, model=model.state_dict(), config=config,
                  normal201=full, stages=stage_results, frozen=True, final_val19_evaluated=False)
     atomic_save(args.output / "frozen.pt", final)

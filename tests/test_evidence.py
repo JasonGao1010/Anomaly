@@ -10,6 +10,35 @@ from src.evaluate import comparison_conditions, comparison_metrics, official_pop
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
+def test_voxel_sort_preserves_exact_point_order_means_and_origin_grid():
+    from src.model import voxelize, GRID_SIZE
+    rng = np.random.default_rng(107)
+    cells = rng.integers(-5, 6, (400, 3))
+    cells[1::3] = cells[::3][:len(cells[1::3])]
+    cells[2::3] = cells[::3][:len(cells[2::3])]
+    points = np.c_[(cells + rng.uniform(.05, .95, cells.shape)) * GRID_SIZE,
+                   np.resize([1e20, 1., -1e20], len(cells))].astype(np.float32)
+    # Large cancelling values expose changes in within-cell reduction order.
+    samples = (points, points[:1], np.tile(points[:1], (7, 1)),
+               np.array([[np.nextafter(np.float32(.05), np.float32(0)), -1., 2., .3],
+                         [.05, -1., 2., .4], [-.05, -1., 2., .5]], np.float32))
+    for xyzi in samples:
+        grid = np.floor(xyzi[:, :3].astype(np.float64) / GRID_SIZE).astype(np.int64)
+        unique, inverse, counts = np.unique(grid, axis=0, return_inverse=True, return_counts=True)
+        order = np.argsort(inverse, kind="stable")
+        pointer = np.r_[0, np.cumsum(counts)].astype(np.int64)
+        mean = (np.add.reduceat(xyzi[order].astype(np.float64), pointer[:-1], axis=0)
+                / counts[:, None]).astype(np.float32)
+        expected = dict(xyzi=xyzi, grid=unique - (unique.min(axis=0) // 16) * 16,
+                        voxel_xyzi=mean, inverse=inverse, order=order, pointer=pointer,
+                        offset=((xyzi[:, :3].astype(np.float64) - (grid + .5) * GRID_SIZE)
+                                / GRID_SIZE).astype(np.float32))
+        actual = voxelize(xyzi)
+        for key, value in expected.items():
+            assert actual[key].numpy().dtype == value.dtype
+            np.testing.assert_array_equal(actual[key].numpy(), value, err_msg=key)
+
+
 def point_records(scores, confidence):
     records = np.zeros(len(scores), dtype=[("score", "f4"), ("raw_score", "f4"),
                                          ("confidence", "f4"), ("semantic", "i2")])

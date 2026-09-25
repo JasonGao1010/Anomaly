@@ -46,9 +46,15 @@ def voxelize(xyzi):
     if not len(xyzi) or not np.isfinite(xyzi).all() or np.any(~np.any(xyzi[:, :3] != 0, axis=1)):
         raise ValueError("voxelization requires finite real returns, with no empty ray slots")
     grid = np.floor(xyzi[:, :3].astype(np.float64) / GRID_SIZE).astype(np.int64)
-    unique, inverse, counts = np.unique(grid, axis=0, return_inverse=True, return_counts=True)
-    order = np.argsort(inverse, kind="stable")
-    pointer = np.concatenate(([0], np.cumsum(counts))).astype(np.int64)
+    # One stable lexicographic sort preserves both voxel and within-voxel sum order.
+    order = np.lexsort((grid[:, 2], grid[:, 1], grid[:, 0]))
+    ordered_grid = grid[order]
+    starts = np.r_[True, np.any(ordered_grid[1:] != ordered_grid[:-1], axis=1)]
+    pointer = np.r_[np.flatnonzero(starts), len(grid)].astype(np.int64)
+    counts = np.diff(pointer)
+    unique = ordered_grid[pointer[:-1]]
+    inverse = np.empty(len(grid), dtype=np.int64)
+    inverse[order] = np.cumsum(starts) - 1
     mean = (np.add.reduceat(xyzi[order].astype(np.float64), pointer[:-1], axis=0)
             / counts[:, None]).astype(np.float32)
     # A multiple of 16 preserves the sensor-origin grid at all four pooling steps.
@@ -327,6 +333,7 @@ class NormalHypothesis(nn.Module):
             # Development measures the exact full-point classifier used at inference.
             self.development_prediction = parts["logits"].argmax(-1).detach()
             self.development_semantic_prediction = semantic_energy.argmin(-1).detach()
+            self.development_raw_score = parts["raw_score"].detach()
             logits = parts["logits"][indices]
             prediction = ({key: value[indices] for key, value in parts["prediction"].items()}
                           if parts["prediction"] is not None else None)
@@ -350,8 +357,8 @@ class NormalHypothesis(nn.Module):
         terms = dict(classification=classification, semantic=semantic, normal=normal, geometry=geometry, context=context)
         loss = sum(self.loss_weights()[key] * value for key, value in terms.items())
         details = {key: value.detach() for key, value in terms.items()}
-        details.update(supervised=int(allowed.any(1).sum()), queries=len(indices),
-                       supported=int(prediction["supported"].sum()) if prediction is not None else 0)
+        details.update(supervised=allowed.any(1).sum().detach(), queries=len(indices),
+                       supported=prediction["supported"].sum().detach() if prediction is not None else 0)
         return loss, details
 
     def calibrate_score(self, raw_score):
