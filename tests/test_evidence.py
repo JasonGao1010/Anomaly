@@ -1,6 +1,8 @@
 """Paired mechanism comparisons retain official populations and exact decisions."""
 
 from copy import deepcopy
+import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -62,12 +64,194 @@ def test_target_cache_view_excludes_every_auxiliary_point(tmp_path):
         target_normal_cache(cache,"201")
 
 
+def test_auxiliary_ranking_lowers_normal_and_raises_anomaly_scores():
+    from src.train import auxiliary_loss
+    # One supported class isolates ranking from semantic competition.
+    energy = torch.tensor([[4., torch.inf], [1., torch.inf]], requires_grad=True)
+    scorer = SimpleNamespace(classes=2, temperature=torch.tensor(2.),
+                             class_energy=lambda features, **kwargs: features)
+    data = dict(features=energy, frame=torch.tensor([0, 1]), semantic=torch.tensor([0, -1]))
+    positive, negative = torch.tensor([1]), torch.tensor([0])
+    loss, ranking, normal, missing = auxiliary_loss(scorer, data, positive, negative)
+    loss.backward()
+    assert torch.isfinite(energy.grad).all()
+    assert energy.grad[0, 0] > 0 and energy.grad[1, 0] < 0
+    assert normal == 0 and missing == 0 and ranking > 0
+    # Anomalies have no normal category; their semantic value must never enter CE.
+    data["semantic"][positive] = 999
+    changed, _, _, _ = auxiliary_loss(scorer, data, positive, negative)
+    torch.testing.assert_close(changed, loss)
+
+
+@pytest.mark.parametrize("all_missing", [False, True])
+def test_auxiliary_semantics_skips_only_unavailable_true_class_references(all_missing):
+    from src.train import auxiliary_loss
+    energy = torch.tensor([[4., torch.inf], [2., 7.], [1., 3.], [5., 6.]], requires_grad=True)
+    if all_missing:
+        with torch.no_grad():
+            energy[1, 1] = torch.inf
+    scorer = SimpleNamespace(classes=2, temperature=torch.tensor(2.),
+                             class_energy=lambda features, **kwargs: features)
+    labels = torch.tensor([1, 1 if all_missing else 0, -1, -1])
+    data = dict(features=energy, frame=torch.arange(4), semantic=labels)
+    loss, _, normal, missing = auxiliary_loss(scorer, data, torch.tensor([2, 3]), torch.tensor([0, 1]))
+    loss.backward()
+    assert torch.isfinite(loss) and torch.isfinite(energy.grad).all()
+    assert missing == (2 if all_missing else 1)
+    expected = 0. if all_missing else np.log1p(np.exp(-2.5))
+    assert float(normal.detach()) == pytest.approx(expected)
+    assert energy.grad[0, 0] > 0  # Missing fine-class support does not erase ranking supervision.
+
+
+def test_auxiliary_views_use_count_strata_and_keep_source_splits_separate(tmp_path, monkeypatch):
+    import src.train as training
+    from src.train import auxiliary_records
+    folder = tmp_path / "train" / "object"
+    (folder / "frames").mkdir(parents=True)
+    counts = (0, 1, 4, 2, 3, 1, 4, 5, 20, 6, 10, 21, 100, 50, 75, 101, 200, 120, 400)
+    frames = [dict(frame=i, in_range=count, range=30-i) for i, count in enumerate(counts)]
+    world = dict(world_identity="object", source_sequence=206, frames=frames)
+    world_path = folder / "manifest.json"
+    world_path.write_text(json.dumps(world))
+    # The zero-anomaly frame and the synthetic validation tree deliberately do not exist.
+    for row in frames[1:]:
+        np.savez(folder / "frames" / f"{row['frame']:06d}.npz", fixture=np.array([row["frame"]]))
+    empty = tmp_path / "train" / "empty"
+    empty.mkdir()
+    (empty / "manifest.json").write_text(json.dumps(dict(world_identity="empty", source_sequence=206,
+        frames=[dict(frame=0, in_range=0, range=0)])))
+    pool = dict(format="stu-frozen-dataset", splits=dict(
+        train=dict(source_sequence=206, samples=len(frames)+1, worlds=[
+            dict(path="train/object", world_identity="object"), dict(path="train/empty", world_identity="empty")]),
+        validation=dict(source_sequence=201, worlds=[dict(path="missing-validation", world_identity="unused")])))
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(pool))
+    hashed = []
+    original_sha = training.file_sha256
+
+    def record_hash(filename):
+        hashed.append(str(filename))
+        return original_sha(filename)
+
+    monkeypatch.setattr(training, "file_sha256", record_hash)
+    selected = auxiliary_records(path, samples=12)
+    assert [r["available"] for r in selected["count_strata"]] == [6, 4, 4, 4]
+    assert [r["selected"] for r in selected["count_strata"]] == [3, 3, 3, 3]
+    assert len(selected["records"]) == len({r["frame"] for r in selected["records"]}) == 12
+    assert set(hashed) == {str(path), *(r["delta"] for r in selected["records"])}
+    assert auxiliary_records(path, samples=12) == selected
+    redistributed = auxiliary_records(path, samples=17)
+    assert [r["selected"] for r in redistributed["count_strata"]] == [5, 4, 4, 4]
+    assert selected["positive_frames"] == len(frames)-1 > 8
+    assert selected["zero_anomaly_frames_excluded"] == 2
+    assert selected["source_sequence"] == 206
+    world["source_sequence"] = 201
+    world_path.write_text(json.dumps(world))
+    with pytest.raises(ValueError, match="source identities"):
+        auxiliary_records(path)
+    pool["splits"]["train"]["source_sequence"] = 201
+    path.write_text(json.dumps(pool))
+    with pytest.raises(ValueError, match="train input must use STU206"):
+        auxiliary_records(path)
+    pool["splits"]["train"].update(source_sequence=206, samples=1,
+        worlds=[dict(path="train/empty", world_identity="empty")])
+    path.write_text(json.dumps(pool))
+    with pytest.raises(ValueError, match="no in-range anomaly observations"):
+        auxiliary_records(path)
+    # The independently authorized development split must use 201, never train206.
+    validation = tmp_path / "validation" / "object"
+    (validation / "frames").mkdir(parents=True)
+    (validation / "manifest.json").write_text(json.dumps(dict(world_identity="dev", source_sequence=201,
+        frames=[dict(frame=0, in_range=4, range=8)])))
+    np.savez(validation / "frames" / "000000.npz", fixture=np.array([0]))
+    pool["splits"]["validation"] = dict(source_sequence=201, samples=1,
+        worlds=[dict(path="validation/object", world_identity="dev")])
+    path.write_text(json.dumps(pool))
+    development = auxiliary_records(path, split="validation", samples=80)
+    assert development["source_sequence"] == development["seed"] == 201
+    assert development["selected_frames"] == 1 and development["records"][0]["world"] == "dev"
+    pool["splits"]["validation"]["worlds"][0]["path"] = "train/object"
+    path.write_text(json.dumps(pool))
+    with pytest.raises(ValueError):
+        auxiliary_records(path, split="validation")
+
+
+@pytest.mark.parametrize("sequence", [206, 201])
+def test_auxiliary_scan_preserves_training_and_full_evaluation_points(tmp_path, monkeypatch, sequence):
+    import src.data as data
+    from src.train import AuxiliaryScans, file_sha256
+
+    xyzi = np.zeros((524, 4), np.float32)
+    xyzi[:520, 0] = 10
+    xyzi[521:, 0] = [10, 100, 10]
+    packed = np.full(524, 40, np.uint32)
+    packed[520], packed[521], packed[523] = 0, 1, 0
+    original = data.Frame(0, xyzi, np.eye(4), packed, sequence_id=sequence)
+    monkeypatch.setattr(data, "STUSequence", lambda root: [original])
+    scan_path, label_path = tmp_path / "source.bin", tmp_path / "source.label"
+    xyzi.tofile(scan_path)
+    packed.tofile(label_path)
+
+    def normal_records(source, *, development):
+        assert source == "201" and development
+        return [dict(frame=0, scan=str(scan_path), label=str(label_path), pose=np.eye(4).tolist())]
+
+    monkeypatch.setattr(data, "normal_records", normal_records)
+    delta = tmp_path / "frame.npz"
+    np.savez(delta, format="stu-frozen-frame", source_identity=data.legacy_source_identity(original),
+        world_identity="object", source_slot=np.array([520], np.int32),
+        inserted_slot=np.array([520], np.int32), occluded_slot=np.array([], np.int32),
+        xyzi=np.array([[10, 0, 1, .5]], np.float32),
+        packed_labels=np.array([(60001 << 16) | 2], np.uint32))
+    records = [dict(frame=0, delta=str(delta), delta_sha256=file_sha256(delta),
+                    world="object", recorded_anomalies=1)]
+    manifest = dict(records=records, source_sequence=sequence, split="train" if sequence == 206 else "validation")
+    sample = AuxiliaryScans(manifest)[0]
+    assert len(sample["slots"]) == 513 and sample["slots"][-1] == 520
+    assert sample["targets"].tolist() == [0]*512 + [1]
+    assert sample["semantic"].tolist() == [8]*512 + [-1]
+    complete = AuxiliaryScans(manifest, full=True)[0]
+    assert complete["slots"].tolist() == list(range(522))
+    assert complete["targets"].tolist() == [0]*520 + [1, 0]
+    assert complete["semantic"].tolist() == [8]*520 + [-1, -1]
+    np.testing.assert_allclose(complete["conditions"][:520, 0].numpy(), np.log(10))
+    assert (complete["conditions"][:, 1] == 0).all()
+    records[0]["recorded_anomalies"] = 2
+    with pytest.raises(ValueError, match="anomaly count disagrees"):
+        AuxiliaryScans(manifest)[0]
+
+
 def point_records(scores, confidence):
     records = np.zeros(len(scores), dtype=[("score", "f4"), ("raw_score", "f4"),
                                          ("confidence", "f4"), ("semantic", "i2")])
     records["score"], records["raw_score"], records["confidence"] = scores, scores, confidence
     records["semantic"] = np.arange(len(scores)) % 19
     return records
+
+
+def test_synthetic_development_preserves_background_and_separates_few_point_frames(tmp_path):
+    from src.train import auxiliary_development
+    class Scores(torch.nn.Module):
+        def forward(self, features, conditions, predicted):
+            return features[:, 0]
+    normal = np.array([.1, .2, .3, .5, .8, .9], np.float32)
+    anomaly = np.array([.3, .4, .7, .8, 1.], np.float32)
+    samples = ((normal, anomaly), (normal+.1, anomaly[:4]-.2))
+    paths = []
+    for i, (n, a) in enumerate(samples):
+        score = np.r_[n, a]
+        path = tmp_path / f"{i}.npz"
+        np.savez(path, features=score[:, None], targets=np.r_[np.zeros(len(n)), np.ones(len(a))],
+            conditions=np.zeros((len(score), 2), np.float32), predicted=np.zeros(len(score), np.int64))
+        paths.append(str(path))
+    result = auxiliary_development(Scores(), dict(frames=paths), torch.device("cpu"))
+    expected = PointOODMetricsCalculator()
+    expected.all_scores, expected.all_labels = [np.r_[normal, anomaly]], [np.r_[np.zeros(6), np.ones(5)]]
+    for key, value in expected.compute_metrics().items():
+        assert result["metrics"][key] == pytest.approx(value, abs=2e-6)
+    assert result["frames"] == 2 and result["eligible_frames"] == 1
+    assert result["normal_points"] == 12 and result["anomaly_points"] == 9
+    assert result["all_positive_frame_metrics"]["AP"] != result["metrics"]["AP"]
 
 
 def test_official_population_preserves_raw_slot_order_and_boundary_rules():

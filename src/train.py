@@ -1810,6 +1810,246 @@ class SupportScans:
         return sample
 
 
+def auxiliary_records(path, split="train", samples=1920):
+    """Choose frames only by anomaly-count strata within the authorized source split."""
+    if split not in ("train", "validation") or type(samples) is not int or samples < 1:
+        raise ValueError("auxiliary selection requires train/validation and a positive sample count")
+    sequence = 206 if split == "train" else 201
+    path = Path(path).resolve()
+    pool = json.loads(path.read_text())
+    subset = pool.get("splits", {}).get(split, {})
+    if pool.get("format") != "stu-frozen-dataset" or subset.get("source_sequence") != sequence:
+        raise ValueError(f"auxiliary {split} input must use STU{sequence}")
+    buckets = [[] for _ in range(4)]
+    total_frames = 0
+    for entry in subset["worlds"]:
+        folder = (path.parent / entry["path"]).resolve()
+        folder.relative_to(path.parent / split)
+        world = json.loads((folder / "manifest.json").read_text())
+        if world["world_identity"] != entry["world_identity"] or world["source_sequence"] != sequence:
+            raise ValueError("auxiliary world and source identities disagree")
+        total_frames += len(world["frames"])
+        for row in world["frames"]:
+            if row["in_range"] < 0:
+                raise ValueError("auxiliary anomaly counts must be nonnegative")
+            if row["in_range"] == 0:
+                continue
+            band = int(np.searchsorted([4, 20, 100], row["in_range"]))
+            buckets[band].append(dict(world=entry["world_identity"], frame=int(row["frame"]),
+                delta=str(folder / "frames" / f"{row['frame']:06d}.npz"),
+                recorded_anomalies=int(row["in_range"]), recorded_range=float(row["range"])))
+    available = np.array([len(rows) for rows in buckets], dtype=np.int64)
+    positive = int(available.sum())
+    if not positive:
+        raise ValueError("the supplied pool has no in-range anomaly observations")
+    if total_frames != subset["samples"]:
+        raise ValueError("auxiliary world frame counts disagree with the source pool")
+    budget = min(samples, positive)
+    quota = np.minimum(available, budget // 4)
+    remaining = budget - int(quota.sum())
+    # Redistribute unavailable stratum slots, retaining distinct source frames.
+    while remaining:
+        active = np.flatnonzero(quota < available)
+        share = max(1, remaining // len(active))
+        for band in active:
+            add = min(share, int(available[band]-quota[band]), remaining)
+            quota[band] += add
+            remaining -= add
+    rng = np.random.default_rng(sequence)
+    records = [rows[index] for rows, count in zip(buckets, quota)
+               for index in rng.choice(len(rows), int(count), replace=False)]
+    records.sort(key=lambda r: (r["frame"], r["world"]))
+    for row in records:
+        row["delta_sha256"] = file_sha256(row["delta"])
+    result = dict(pool=str(path), pool_sha256=file_sha256(path), worlds=len(subset["worlds"]),
+        split=split, source_sequence=sequence, available_frames=total_frames, records=records,
+        requested_frames=samples, selected_frames=len(records), seed=sequence,
+        positive_frames=positive, zero_anomaly_frames_excluded=total_frames-positive,
+        count_strata=[dict(anomaly_points=name, available=int(n), selected=int(k))
+                      for name, n, k in zip(("1-4", "5-20", "21-100", ">100"), available, quota)],
+        selection="equal frame quotas for anomaly counts 1-4, 5-20, 21-100 and >100; redistribute shortages; seeded sampling without replacement; no shape or distance balancing; zero-anomaly frames and val19 excluded")
+    result["sha256"] = identity(result)
+    return result
+
+
+class AuxiliaryScans:
+    """Keep every synthetic anomaly and original semantic labels on normal returns."""
+
+    def __init__(self, manifest, full=False):
+        from .data import STUSequence, DATA_ROOT, normal_records
+        self.sequence_id = manifest["source_sequence"]
+        if self.sequence_id not in (206, 201) or manifest["split"] != ("train" if self.sequence_id == 206 else "validation"):
+            raise ValueError("auxiliary source must be train206 or validation201")
+        self.records = manifest["records"]
+        self.full = full
+        self.sequence = (STUSequence(DATA_ROOT) if self.sequence_id == 206 else
+                         {row["frame"]: row for row in normal_records("201", development=True)})
+        self.previous = None
+
+    def __len__(self):
+        return len(self.records)
+
+    def __getitem__(self, index):
+        from .data import Frame, STU_NORMAL_SEMANTICS, restore_delta, point_targets
+        from .model import voxelize
+        from .normal import support_conditions
+        row = self.records[index]
+        if self.previous is None or self.previous.frame_id != row["frame"]:
+            original = self.sequence[row["frame"]]
+            self.previous = (original if self.sequence_id == 206 else
+                Frame(row["frame"], np.fromfile(original["scan"], dtype="<f4").reshape(-1, 4),
+                      np.asarray(original["pose"], dtype=np.float64),
+                      np.fromfile(original["label"], dtype="<u4"), sequence_id=201, partition="train"))
+        if file_sha256(row["delta"]) != row["delta_sha256"]:
+            raise ValueError("supplied auxiliary observation changed after selection")
+        restored = restore_delta(row["delta"], self.previous, row["world"])
+        slots = restored.return_slots
+        raw = dict(xyzi=restored.xyzi[slots], slots=slots, targets=point_targets(restored)[slots])
+        labels = restored.semantic[slots]
+        semantic = np.full(len(labels), -1, np.int64)
+        for label, category in STU_NORMAL_SEMANTICS.items():
+            semantic[labels == label] = category
+        normal = np.flatnonzero((raw["targets"] == 0) & (semantic >= 0))
+        anomaly = np.flatnonzero(raw["targets"] == 1)
+        if not len(anomaly) or len(anomaly) != row["recorded_anomalies"]:
+            raise ValueError("restored auxiliary anomaly count disagrees with its source record")
+        if self.full:
+            chosen = np.flatnonzero(raw["targets"] >= 0)
+        else:
+            rng = np.random.default_rng(np.random.SeedSequence([self.sequence_id, index, 314]))
+            normal = rng.choice(normal, min(512, len(normal)), replace=False)
+            chosen = np.sort(np.r_[normal, anomaly]).astype(np.int64)
+        semantic[raw["targets"] != 0] = -1
+        sample = voxelize(raw["xyzi"], official=True)
+        sample.update(queries=torch.from_numpy(chosen), targets=torch.from_numpy(raw["targets"][chosen]),
+                      conditions=torch.from_numpy(support_conditions(raw["xyzi"], chosen, range_only=True)),
+                      semantic=torch.from_numpy(semantic[chosen]),
+                      slots=torch.from_numpy(raw["slots"][chosen].astype(np.int64)),
+                      index=index, frame=int(self.records[index]["frame"]))
+        return sample
+
+
+def auxiliary_cache(manifest, output, device, workers):
+    """Encode training queries or complete development observations once."""
+    from .model import FrozenPerception
+    development = manifest.get("source_sequence") == 201
+    if manifest.get("source_sequence") not in (206, 201):
+        raise ValueError("auxiliary data must use STU206 training or STU201 development")
+    output.mkdir(parents=True, exist_ok=True)
+    expected = sum(row["recorded_anomalies"] for row in manifest["records"])
+    capacity = (350_000 if development else 512) * len(manifest["records"]) + expected
+    disk_check(capacity * 1100 + 200_000_000)
+    perception = FrozenPerception().to(device).eval()
+    loader = DataLoader(AuxiliaryScans(manifest, full=development), batch_size=None,
+        num_workers=workers, pin_memory=True, generator=torch.Generator().manual_seed(206),
+        **({"prefetch_factor": 1} if workers else {}))
+    values = {key: [] for key in ("features", "targets", "semantic", "frame", "slot", "view")}
+    paths = []
+    anomalies = normals = 0
+    started = time.perf_counter()
+    with torch.inference_mode():
+        for number, sample in enumerate(loader, 1):
+            batch = to_device(sample, device)
+            encoded = perception.encode(batch, indices=batch["queries"])["features"]
+            if not bool(torch.isfinite(encoded).all()):
+                raise ValueError("nonfinite auxiliary frozen features")
+            anomalies += int((sample["targets"] == 1).sum())
+            normals += int((sample["targets"] == 0).sum())
+            if development:
+                path = output / f"{number-1:04d}.npz"
+                np.savez(path, features=encoded.cpu().numpy(), targets=sample["targets"].numpy(),
+                    semantic=sample["semantic"].numpy(), slot=sample["slots"].numpy(),
+                    conditions=sample["conditions"].numpy(),
+                    predicted=perception.seg_head(encoded[:, 180:]).argmax(-1).cpu().numpy())
+                paths.append(str(path))
+                if number % 20 == 0:
+                    disk_check(200_000_000)
+            else:
+                values["features"].append(encoded.cpu().numpy())
+                for key in ("targets", "semantic"):
+                    values[key].append(sample[key].numpy())
+                values["frame"].append(np.full(len(encoded), sample["frame"], np.int64))
+                values["slot"].append(sample["slots"].numpy())
+                values["view"].append(np.full(len(encoded), number-1, np.int64))
+            if number == 1 or number % 25 == 0 or number == len(manifest["records"]):
+                elapsed = time.perf_counter() - started
+                print(f"auxiliary features {number}/{len(manifest['records'])}: "
+                      f"remaining {(len(manifest['records'])-number)*elapsed/number:.0f}s", flush=True)
+            del batch, encoded
+    if anomalies != expected:
+        raise ValueError("restored auxiliary anomaly counts disagree with the selected pool")
+    if development:
+        result = dict(frames=paths, manifest=manifest["sha256"], anomalies=anomalies, normals=normals,
+            seconds=time.perf_counter()-started, source_sequence=201,
+            scope="all valid normal and anomaly returns in selected synthetic development scans, including 1-4-anomaly-point scans; not val19")
+        write_json(output / "features.json", result)
+        del perception, loader, sample
+        torch.cuda.empty_cache()
+        return result
+    values = {key: np.concatenate(rows) for key, rows in values.items()}
+    actual_anomalies = int((values["targets"] == 1).sum())
+    if (not actual_anomalies or np.any(values["semantic"][values["targets"] == 1] != -1)
+            or np.any(values["semantic"][values["targets"] == 0] < 0)):
+        raise ValueError("auxiliary anomaly and normal semantic identities disagree")
+    np.savez(output / "auxiliary.npz", **values)
+    write_json(output / "auxiliary.json", dict(manifest=manifest["sha256"], frames=len(manifest["records"]),
+        anomalies=actual_anomalies, source_recorded_anomalies=expected,
+        normals=int((values["targets"] == 0).sum()),
+        initial_sha256=WEIGHTS_SHA256, seconds=time.perf_counter()-started,
+        role="all actual in-range synthetic anomalies in selected supplied STU206 views plus at most 512 true-semantic normal returns per modified scan"))
+    del perception, loader, sample
+    torch.cuda.empty_cache()
+    return {key: torch.as_tensor(value, device=device) for key, value in values.items()}
+
+
+@torch.no_grad()
+def auxiliary_development(scorer, cache, device):
+    """Exact pooled scores over every valid point in the fixed synthetic dev scans."""
+    from .evaluate import rank_metrics
+    scorer.eval()
+    normal, anomaly, eligible_normal, eligible_anomaly = [], [], [], []
+    for path in cache["frames"]:
+        with np.load(path) as values:
+            features = values["features"]
+            conditions, predicted, targets = values["conditions"], values["predicted"], values["targets"]
+            scores = []
+            for start in range(0, len(features), 4096):
+                stop = start + 4096
+                scores.append(scorer(torch.as_tensor(features[start:stop], device=device),
+                    torch.as_tensor(conditions[start:stop], device=device),
+                    torch.as_tensor(predicted[start:stop], device=device)).cpu().numpy())
+            scores = np.concatenate(scores)
+            normal.append(scores[targets == 0])
+            anomaly.append(scores[targets == 1])
+            if len(anomaly[-1]) >= 5:
+                eligible_normal.append(normal[-1])
+                eligible_anomaly.append(anomaly[-1])
+    return dict(metrics=rank_metrics(np.concatenate(eligible_normal), np.concatenate(eligible_anomaly)),
+        all_positive_frame_metrics=rank_metrics(np.concatenate(normal), np.concatenate(anomaly)),
+        frames=len(cache["frames"]), normal_points=sum(map(len, normal)),
+        anomaly_points=sum(map(len, anomaly)), eligible_frames=len(eligible_normal),
+        scope="synthetic STU201; primary metrics require at least five valid anomalies per frame; all_positive_frame_metrics also retain 1-4-point observations")
+
+
+def auxiliary_loss(scorer, data, positive, negative):
+    """The deployed normal-support distances learn rejection and normal semantics together."""
+    indices = torch.cat((negative, positive))
+    energy = scorer.class_energy(data["features"][indices],
+        source=torch.ones_like(indices), frame=data["frame"][indices])
+    score = energy.amin(-1) / scorer.temperature
+    n = len(negative)
+    if len(positive) != n or not n or not bool(torch.isfinite(score).all()):
+        raise ValueError("auxiliary ranking requires equal nonempty pairs with finite normal support")
+    ranking = F.softplus(1. + score[:n] - score[n:]).mean()
+    labels = data["semantic"][negative]
+    if bool((labels < 0).any()) or bool((labels >= scorer.classes).any()):
+        raise ValueError("auxiliary background requires genuine normal semantic labels")
+    # A rare class may have no independent anchor after temporal exclusion.
+    valid = torch.isfinite(energy[:n].gather(1, labels[:, None]).squeeze(1))
+    normal = F.cross_entropy(-energy[:n][valid] / scorer.temperature, labels[valid]) if bool(valid.any()) else score[:n].sum() * 0
+    return .5 * (ranking + normal), ranking, normal, int((~valid).sum())
+
+
 def support_records():
     """Use normal training sources and official normal development sources only."""
     from .data import normal_records, attach_normal_annotations, NORMAL_ANNOTATIONS
@@ -2210,7 +2450,7 @@ def normal_main():
     """Learn a bounded multilevel metric after the frozen official perception network."""
     from threadpoolctl import threadpool_limits
     from .model import FrozenSupport
-    from .normal import InstanceSupport, select_score_calibration, INSTANCE_VERSION
+    from .normal import InstanceSupport, ScoreCalibration, select_score_calibration, INSTANCE_VERSION
     parser=argparse.ArgumentParser(description=normal_main.__doc__)
     parser.add_argument("--normal",action="store_true")
     parser.add_argument("--output",type=Path,required=True)
@@ -2219,14 +2459,19 @@ def normal_main():
     parser.add_argument("--workers",type=int,default=16)
     parser.add_argument("--epochs",type=int,default=12)
     parser.add_argument("--deadline",type=float,required=True)
+    parser.add_argument("--reserve-seconds",type=int,default=2700)
+    parser.add_argument("--auxiliary-manifest",type=Path)
+    parser.add_argument("--initial-module",type=Path)
     args=parser.parse_args()
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("use an empty output directory")
     # Measured full inference is about 22 minutes; retain 45 minutes for
     # normal checks, any authorized final inference, and independent arithmetic.
-    reserve_seconds=2700
+    reserve_seconds=args.reserve_seconds
+    if reserve_seconds < 0:
+        raise ValueError("time reserve must be nonnegative")
     if time.time()>=args.deadline-reserve_seconds:
-        raise TimeoutError("reserve 45 minutes for normal checks, inference and arithmetic verification")
+        raise TimeoutError("insufficient time after the declared evaluation reserve")
     threadpool_limits(limits=args.threads);torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1);torch.backends.cuda.matmul.allow_tf32=False
     seed_all(206)
@@ -2244,16 +2489,32 @@ def normal_main():
     config=dict(version=INSTANCE_VERSION,architecture="frozen_litept_normal_instance_support",
         score_version="bounded_full_rank_multilevel_nearest_real_normal",features=str(args.features),
         initial_sha256=WEIGHTS_SHA256,seed=206,training_points=cache["count"],development_points=dev_cache["count"],
-        memory_size=16384,batch_size=1024,epochs=args.epochs,learning_rate=.001,
+        memory_size=16384,batch_size=1024,epochs=args.epochs,learning_rate=.0002 if args.initial_module else .001,
         coordinate_source="STU206 only",data_scope="STU206_STU201",
         training="STU206 only; equal normal-class loss mass; no nuScenes training, reference or development points",
         selection="STU201 odd contiguous 64-frame blocks only; mean IoU over ground-truth-present normal classes, then available-class cross-entropy; absent training classes retain zero recall and IoU",
         calibration="STU201 even blocks only; existing normal class/range tail rule",
-        calibration_bandwidths=[0.,.25,.5,1.],backbone_frozen=True,no_synthetic_anomalies=True,
-        val19_used_for_selection=False,evaluation="repeated val19 evaluation after normal-only selection",
+        calibration_bandwidths=[0.,.25,.5,1.],backbone_frozen=True,
+        no_synthetic_anomalies=args.auxiliary_manifest is None,
+        val19_used_for_selection=False,evaluation="repeated val19 evaluation after development selection",
         deadline=args.deadline,reserve_seconds=reserve_seconds)
     write_json(args.output/"config.json",config);write_json(args.output/"resources.json",resources)
     started=time.perf_counter()
+    auxiliary = synthetic_dev = None
+    if args.auxiliary_manifest is not None:
+        manifest = auxiliary_records(args.auxiliary_manifest)
+        write_json(args.output/"auxiliary_views.json", manifest)
+        config.update(auxiliary_manifest=str(args.auxiliary_manifest.resolve()),
+            auxiliary_identity=manifest["sha256"],
+            auxiliary_objective="normal class CE plus 0.5 times synthetic-background class CE and pairwise softplus(1 + normal distance - anomaly distance); distances divided by normal-only temperature",
+            auxiliary_pairs_per_batch=128,
+            auxiliary_sampling="four anomaly-count strata select frames; uniform selected views and uniform anomaly/normal points within the same view",
+            selection="synthetic STU201 AP, then AUROC, then negative FPR95, subject to no decline in real normal STU201 mean IoU from initialization; val19 unused")
+        write_json(args.output/"config.json", config)
+        auxiliary = auxiliary_cache(manifest, args.output, torch.device("cuda"), args.workers)
+        dev_manifest = auxiliary_records(args.auxiliary_manifest, split="validation", samples=80)
+        write_json(args.output/"synthetic_development.json", dev_manifest)
+        synthetic_dev = auxiliary_cache(dev_manifest, args.output/"synthetic_development", torch.device("cuda"), args.workers)
     chosen,groups,location,whitener,initialization=instance_memory(cache,config["memory_size"])
     config["memory_size"]=len(chosen)
     device=torch.device("cuda")
@@ -2268,6 +2529,18 @@ def normal_main():
         getattr(scorer,key).copy_(value)
     del groups,chosen,at
     count=len(data["semantic"])
+    if auxiliary is not None:
+        positives = (auxiliary["targets"] == 1).nonzero().flatten()
+        negatives = (auxiliary["targets"] == 0).nonzero().flatten()
+        if not len(positives) or not len(negatives):
+            raise ValueError("auxiliary learning requires genuine anomaly and normal supervision")
+        view_count = len(manifest["records"])
+        positive_counts = torch.bincount(auxiliary["view"][positives], minlength=view_count)
+        negative_counts = torch.bincount(auxiliary["view"][negatives], minlength=view_count)
+        if bool((positive_counts == 0).any()) or bool((negative_counts == 0).any()):
+            raise ValueError("each auxiliary training view must contain anomaly and normal supervision")
+        positive_offsets = positive_counts.cumsum(0) - positive_counts
+        negative_offsets = negative_counts.cumsum(0) - negative_counts
     weights=torch.zeros(count,device=device)
     codes=(data["allowed"].long()*(1<<torch.arange(19,device=device))).sum(1)
     mass_rows=[]
@@ -2292,6 +2565,21 @@ def normal_main():
             nearest.append(v[torch.isfinite(v)&(v>0)])
         scorer.temperature.copy_(torch.cat(nearest).median().clamp_min(1e-6))
     initialization["temperature"]=float(scorer.temperature)
+    if args.initial_module is not None:
+        initial = torch.load(args.initial_module, map_location=device, weights_only=False)
+        if initial["config"]["initial_sha256"] != WEIGHTS_SHA256 or initial["config"].get("data_scope") != "STU206_STU201":
+            raise ValueError("module initialization must use the current official-feature STU-only model")
+        for key in ("location", "whitener", "memory", "memory_allowed", "memory_source", "memory_frame"):
+            if not torch.equal(getattr(scorer,key), initial["model"]["scorer."+key]):
+                raise ValueError("module initialization has different normal references or coordinates")
+        with torch.no_grad():
+            scorer.transform.copy_(initial["model"]["scorer.transform"])
+            scorer.temperature.copy_(initial["model"]["scorer.temperature"])
+        initialization["module_initialization"] = dict(path=str(args.initial_module), sha256=file_sha256(args.initial_module),
+            role="reuse only the previously learned STU-normal distance transform and its fixed temperature")
+        config["module_initialization"] = initialization["module_initialization"]
+        initialization["temperature"] = float(scorer.temperature)
+        del initial
     scorer.train()
     probe=probe[:config["batch_size"]]
     tick=time.perf_counter()
@@ -2300,6 +2588,15 @@ def normal_main():
     valid=(torch.isfinite(energy)|~allowed).all(1)
     logits=-energy[valid]/scorer.temperature
     loss=(torch.logsumexp(logits,-1)-torch.logsumexp(logits.masked_fill(~allowed[valid],-torch.inf),-1)).mean()
+    if auxiliary is not None:
+        views = torch.linspace(0, view_count-1, 128, device=device).long()
+        extra, ranking, _, _ = auxiliary_loss(scorer, auxiliary,
+            positives[positive_offsets[views]], negatives[negative_offsets[views]])
+        auxiliary_gradient = torch.autograd.grad(ranking, scorer.transform, retain_graph=True)[0]
+        if not bool(torch.isfinite(auxiliary_gradient).all()) or not bool(auxiliary_gradient.abs().sum() > 0):
+            raise ValueError("real auxiliary labels must update the deployed metric")
+        initialization["anomaly_ranking_gradient_norm"] = float(auxiliary_gradient.norm())
+        loss = loss + extra
     loss.backward()
     if not bool(torch.isfinite(loss)) or any(p.grad is None or not bool(torch.isfinite(p.grad).all()) for p in scorer.parameters()):
         raise ValueError("real normal metric preflight has nonfinite loss or gradient")
@@ -2313,10 +2610,25 @@ def normal_main():
     calibration=((dev["source"]==1)&((dev["frame"]//64)%2==0)).nonzero().flatten()
     baseline=instance_development(scorer,dev,selected)
     best=dict(epoch=0,development=baseline,trained_metric=False)
+    model=FrozenSupport(scorer=scorer).to(device).eval()
+    with torch.no_grad():
+        predicted=model.perception.seg_head(dev["features"][:,180:]).argmax(-1)
+    def fit_current_calibration():
+        holdout,hold_scores=instance_development(scorer,dev,selected,retain=True)
+        reference,ref_scores=instance_development(scorer,dev,calibration,retain=True)
+        scorer.calibration, report = select_score_calibration(
+            (ref_scores,predicted[calibration].cpu(),dev["conditions"][calibration].cpu()),
+            (hold_scores,predicted[selected].cpu(),dev["conditions"][selected].cpu()),
+            config["calibration_bandwidths"],device)
+        return dict(report,reference=reference,holdout=holdout)
+    if synthetic_dev is not None:
+        best["calibration"] = fit_current_calibration()
+        best["synthetic"] = auxiliary_development(scorer, synthetic_dev, device)
+        print("synthetic development initial "+json.dumps(best["synthetic"]),flush=True)
     atomic_save(args.output/"selected.pt",dict(scorer=scorer.state_dict(),selection=best))
-    write_json(args.output/"development.json",dict(identity=baseline,selected=best))
-    print(f"normal identity metric: class recall={baseline['class_recall']:.4f}, CE={baseline['class_ce']:.4f}",flush=True)
-    optimizer=torch.optim.AdamW(scorer.parameters(),lr=.001,weight_decay=0.)
+    write_json(args.output/"development.json",dict(initial=baseline,selected=best))
+    print(f"initial normal metric: class recall={baseline['class_recall']:.4f}, CE={baseline['class_ce']:.4f}",flush=True)
+    optimizer=torch.optim.AdamW(scorer.parameters(),lr=config["learning_rate"],weight_decay=0.)
     stale=0
     for epoch in range(1,args.epochs+1):
         if time.time()>=args.deadline-reserve_seconds:
@@ -2325,8 +2637,9 @@ def normal_main():
         generator=torch.Generator(device=device).manual_seed(206+epoch)
         order=torch.randperm(count,generator=generator,device=device)
         for group in optimizer.param_groups:
-            group["lr"]=.001*(.1+.9*.5*(1+math.cos(math.pi*(epoch-1)/args.epochs)))
+            group["lr"]=config["learning_rate"]*(.1+.9*.5*(1+math.cos(math.pi*(epoch-1)/args.epochs)))
         total_loss=0.;skipped=0;processed=0
+        auxiliary_ranking=0.;auxiliary_ce=0.;auxiliary_skipped=0;updates=0
         for start in range(0,count,config["batch_size"]):
             at=order[start:start+config["batch_size"]]
             energy=scorer.class_energy(data["features"][at],source=data["source"][at],frame=data["group"][at])
@@ -2338,11 +2651,24 @@ def normal_main():
             logits=-energy[valid]/scorer.temperature
             supported=torch.logsumexp(logits.masked_fill(~allowed[valid],-torch.inf),-1)
             loss=((torch.logsumexp(logits,-1)-supported)*weights[at][valid]).sum()/len(at)
+            if auxiliary is not None:
+                # Equal view mass prevents dense nearby objects dominating the anomaly gradient.
+                views = torch.randint(view_count, (128,), generator=generator, device=device)
+                offsets = (torch.rand(128, generator=generator, device=device)*positive_counts[views]).long()
+                p = positives[positive_offsets[views]+offsets]
+                offsets = (torch.rand(128, generator=generator, device=device)*negative_counts[views]).long()
+                q = negatives[negative_offsets[views]+offsets]
+                extra, ranking, augmented_ce, missing = auxiliary_loss(scorer, auxiliary, p, q)
+                loss = loss + extra
+                auxiliary_ranking += float(ranking.detach())
+                auxiliary_ce += float(augmented_ce.detach())
+                auxiliary_skipped += missing
             optimizer.zero_grad(set_to_none=True);loss.backward()
             nn.utils.clip_grad_norm_(scorer.parameters(),5.,error_if_nonfinite=True)
             optimizer.step();scorer.project_metric()
             total_loss+=float(loss.detach())*len(at)
             processed+=len(at)
+            updates+=1
             if processed//config["batch_size"]%500==0:
                 elapsed=time.perf_counter()-epoch_start
                 print(f"normal metric epoch {epoch}/{args.epochs}: {processed}/{count} points, "
@@ -2352,8 +2678,22 @@ def normal_main():
         measured=instance_development(scorer,dev,selected)
         quality=(measured["semantics"]["mean_iou_gt"],-measured["class_ce"])
         improved=quality>(best["development"]["semantics"]["mean_iou_gt"],-best["development"]["class_ce"])
-        row=dict(epoch=epoch,development=measured,training_loss=total_loss/count,
+        synthetic = calibration_report = None
+        if synthetic_dev is not None:
+            calibration_report = fit_current_calibration()
+            synthetic = auxiliary_development(scorer, synthetic_dev, device)
+            metrics, previous = synthetic["metrics"], best["synthetic"]["metrics"]
+            quality = (metrics["AP"], metrics["AUROC"], -metrics["FPR95"])
+            improved = (measured["semantics"]["mean_iou_gt"] >= baseline["semantics"]["mean_iou_gt"]
+                and quality > (previous["AP"], previous["AUROC"], -previous["FPR95"]))
+            print(f"synthetic development epoch {epoch}: "+json.dumps(synthetic),flush=True)
+        row=dict(epoch=epoch,development=measured,training_loss=total_loss/max(processed,1),
                  processed_points=processed,skipped_without_independent_allowed_anchors=skipped,seconds=time.perf_counter()-epoch_start)
+        if auxiliary is not None:
+            row["auxiliary"] = dict(pairs=128*updates, ranking_loss=auxiliary_ranking/max(updates,1),
+                normal_semantic_loss=auxiliary_ce/max(updates,1),
+                normal_without_independent_class_anchor=auxiliary_skipped)
+            row["synthetic"] = synthetic
         with (args.output/"training.jsonl").open("a") as handle:
             handle.write(json.dumps(row)+"\n")
         print(f"normal metric epoch {epoch}/{args.epochs}: mIoU={measured['semantics']['mean_iou_gt']:.4f}, class recall={measured['class_recall']:.4f}, "
@@ -2361,35 +2701,33 @@ def normal_main():
               f"skipped={skipped}, {row['seconds']:.1f}s",flush=True)
         if improved:
             best=dict(epoch=epoch,development=measured,trained_metric=True)
+            if synthetic is not None:
+                best.update(synthetic=synthetic, calibration=calibration_report)
             atomic_save(args.output/"selected.pt",dict(scorer=scorer.state_dict(),selection=best));stale=0
         else:
             stale+=1
-        write_json(args.output/"development.json",dict(identity=baseline,selected=best,last=row))
+        write_json(args.output/"development.json",dict(initial=baseline,selected=best,last=row))
         if epoch>=4 and stale>=3:
             break
     saved=torch.load(args.output/"selected.pt",map_location=device,weights_only=False)
+    # The selected and final epochs may use different calibration buffer schemas.
+    bandwidth=float(saved["scorer"].get("calibration.range_bandwidth",0.))
+    scorer.calibration=ScoreCalibration(bandwidth).to(device)
     scorer.load_state_dict(saved["scorer"]);scorer.eval()
     training=instance_development(scorer,data,torch.arange(count,device=device),exclude_neighbors=True)
     write_json(args.output/"normal206.json",dict(training,scope="all cached STU206 normal points; adjacent reference frames excluded"))
-    holdout,hold_scores=instance_development(scorer,dev,selected,retain=True)
-    reference,ref_scores=instance_development(scorer,dev,calibration,retain=True)
-    model=FrozenSupport(scorer=scorer).to(device).eval()
-    with torch.no_grad():
-        predicted=model.perception.seg_head(dev["features"][:,180:]).argmax(-1)
-    scorer.calibration, calibration_report = select_score_calibration(
-        (ref_scores,predicted[calibration].cpu(),dev["conditions"][calibration].cpu()),
-        (hold_scores,predicted[selected].cpu(),dev["conditions"][selected].cpu()),
-        config["calibration_bandwidths"],device)
-    write_json(args.output/"calibration.json",dict(calibration_report,reference=reference,holdout=holdout))
+    calibration_report = best.get("calibration") or fit_current_calibration()
+    write_json(args.output/"calibration.json",calibration_report)
     config.update(calibration_bandwidth=calibration_report["range_bandwidth"],calibrated=bool(scorer.calibration.enabled))
     write_json(args.output/"config.json",config)
     atomic_save(args.output/"frozen.pt",dict(version=INSTANCE_VERSION,mode="frozen_support",model=model.state_dict(),
         config=config,frozen=True,selected=True,complete=True,selection=best,final_val19_evaluated=False))
     (args.output/"selected.pt").unlink()
-    result=dict(version=INSTANCE_VERSION,complete=True,selected=best,identity=baseline,
+    result=dict(version=INSTANCE_VERSION,complete=True,selected=best,initial=baseline,
         trainable_parameters=sum(p.numel() for p in scorer.parameters()),training_seconds=time.perf_counter()-started,
         gpu_peak_bytes=torch.cuda.max_memory_allocated(),val19_used_for_selection=False,
-        no_synthetic_anomalies=True,backbone_frozen=True,evaluation_status="not yet repeated")
+        no_synthetic_anomalies=args.auxiliary_manifest is None,backbone_frozen=True,
+        evaluation_status="not yet repeated")
     write_json(args.output/"result.json",result);print(json.dumps(result),flush=True)
 
 

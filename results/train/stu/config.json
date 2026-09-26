@@ -1,0 +1,33 @@
+{
+  "version": "AJAE-instance-support",
+  "architecture": "frozen_litept_normal_instance_support",
+  "score_version": "bounded_full_rank_multilevel_nearest_real_normal",
+  "features": "results/train/normal/features",
+  "initial_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+  "seed": 206,
+  "training_points": 1839104,
+  "development_points": 1313150,
+  "memory_size": 16384,
+  "batch_size": 1024,
+  "epochs": 6,
+  "learning_rate": 0.001,
+  "coordinate_source": "STU206 only",
+  "data_scope": "STU206_STU201",
+  "training": "STU206 only; equal normal-class loss mass; no nuScenes training, reference or development points",
+  "selection": "STU201 odd contiguous 64-frame blocks only; mean IoU over ground-truth-present normal classes, then available-class cross-entropy; absent training classes retain zero recall and IoU",
+  "calibration": "STU201 even blocks only; existing normal class/range tail rule",
+  "calibration_bandwidths": [
+    0.0,
+    0.25,
+    0.5,
+    1.0
+  ],
+  "backbone_frozen": true,
+  "no_synthetic_anomalies": true,
+  "val19_used_for_selection": false,
+  "evaluation": "repeated val19 evaluation after normal-only selection",
+  "deadline": 1790380800.0,
+  "reserve_seconds": 2700,
+  "calibration_bandwidth": 0.5,
+  "calibrated": true
+}
