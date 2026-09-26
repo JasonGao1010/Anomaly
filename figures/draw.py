@@ -148,13 +148,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stu-root", type=Path, default=Path("/home/jasongao/Data/STU"))
     args = parser.parse_args()
-    # Use the actual requested font; never substitute Comic Neue silently.
-    windows = Path("/mnt/c/Windows/Fonts")
-    if (windows / "comic.ttf").is_file():
-        for name in ("comic.ttf", "comicbd.ttf"):
-            font_manager.fontManager.addfont(windows / name)
-    font_manager.findfont("Comic Sans MS", fallback_to_default=False)
-    plt.rcParams.update({"font.family": "Comic Sans MS", "font.size": 7,
+    # Register the actual regular, bold, italic, and bold-italic font files.
+    fonts = Path.home() / ".local/share/fonts/windows-report"
+    for name in ("times.ttf", "timesbd.ttf", "timesi.ttf", "timesbi.ttf"):
+        font_manager.fontManager.addfont(fonts / name)
+    font_manager.findfont("Times New Roman", fallback_to_default=False)
+    plt.rcParams.update({"font.family": "Times New Roman", "font.size": 7,
                          "mathtext.fontset": "cm", "pdf.fonttype": 42,
                          "ps.fonttype": 42, "svg.fonttype": "none",
                          "text.color": INK, "axes.unicode_minus": False})
@@ -289,7 +288,7 @@ def main():
     box(6.04,3.01,1.50,1.09,"Cross\nattention\n+ FFN",TEAL,"#C5E0D4",5.8)
     wire([(5.68,3.40),(6.00,3.40)])
     label(6.80,2.44,"2 layers\n3 heads",5.5)
-    label(7.65,4.48,"class queries",5.3,color=PURPLE)
+    label(8.00,4.58,"class + angle queries",5.3,color=PURPLE)
     box(7.94,3.03,1.30,1.02,"Student-t\nmixture\nhead",TEAL,"#DFEEE7",5.6)
     wire([(7.58,3.40),(7.90,3.40)])
     label(8.59,2.47,"3 components\nper class",5.6)
@@ -317,7 +316,7 @@ def main():
     label(13.47,8.80,"(c) Joint decision",7.6,weight="bold")
     box(11.81,5.18,2.03,1.27,color=PURPLE,fill="#F1ECF6")
     label(12.84,6.16,"Same class",6.3)
-    label(12.84,5.78,r"$v_{ic}=a_{ic}p_{ic}/M$",7.0)
+    label(12.84,5.78,r"$v_{ic}=a_{ic}(p_{ic}/M)^{\kappa_i}$",6.0)
     label(12.84,5.40,r"$E_{ic}=-\log v_{ic}$",7.0)
     box(14.40,6.65,1.40,1.18,"Semantic\nlabel\n"+r"$\arg\min_c E_{ic}$",PURPLE,"#F7F4FA",6.0)
     box(14.40,4.14,1.40,1.18,"Unknown\nscore\n"+r"$\min_c E_{ic}$",PURPLE,"#F7F4FA",6.0)
@@ -332,7 +331,8 @@ def main():
     box(11.99,.23,1.72,.75,"Likelihood loss\n"+r"$\mathcal{L}_{\rm pred}$",RED,"#FCF1EC",5.7)
     wire([(10.84,3.45),(11.06,3.45),(11.06,.61),(11.94,.61)],color=RED,dashed=True)
     wire([(15.03,2.66),(15.03,.61),(13.76,.61)],color=RED,dashed=True)
-    label(3.27,.57,"C: concatenate    Solid: inference    Dashed: training",5.8)
+    label(3.27,.90,"C: concatenate    Solid: inference    Dashed: training",5.8)
+    label(3.27,.42,r"$\kappa_i=0$ without context; otherwise $1$",5.8)
     # Parameters of both branches receive the joint classification gradient.
     label(12.80,1.98,"Joint loss trains\nboth evidence branches",5.8,color=RED)
 
