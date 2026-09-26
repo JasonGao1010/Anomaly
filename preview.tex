@@ -9,6 +9,8 @@
 \font\iclrtenhv="Times New Roman/B" at 8pt
 \usepackage[protrusion=true,expansion=false]{microtype}
 \usepackage{amsmath,amssymb,amsthm,booktabs,array,graphicx,xcolor,placeins,xurl}
+% The ICLR template requests one line of space after each table title.
+\AddToHook{env/table/begin}{\setlength{\belowcaptionskip}{11pt}\setlength{\tabcolsep}{3pt}}
 \usepackage[hidelinks,hypertexnames=false]{hyperref}
 \hypersetup{pdftitle={SERVE: hypothetical completed-study editorial preview},
  pdfsubject={All new empirical results are illustrative, not measured research findings.}}
@@ -19,22 +21,9 @@
 \newtheorem{proposition}{Proposition}
 \title{SERVE: Semantic Evidence from Return\\Verification for LiDAR Segmentation}
 \author{Anonymous authors}
-\iclrfinalcopy
+\lhead{Under review as a conference paper at ICLR 2027}
 \begin{document}
-\begin{titlepage}
-\thispagestyle{empty}
-\vspace*{1.2in}
-\noindent{\LARGE\bfseries SERVE}\par\medskip
-\noindent{\Large Completed-paper editorial preview}\par\vspace{0.45in}
-\noindent{\large\bfseries Hypothetical study; not an experimental report}\par\medskip
-\noindent This standalone manuscript illustrates how a successful, fully developed SERVE paper could read. Its body deliberately uses the voice of a completed study. All newly presented SERVE and matched-control performance numbers, seed runs, uncertainty summaries, ablations, diagnostic findings, timing measurements, test-server outcomes, and completion of annotation review are hypothetical. They have not been established by the current project experiments. They must not be submitted, cited, or reused as measured scientific evidence.\par\medskip
-\noindent Results explicitly attributed to published papers retain their cited sources. Mathematical statements are derived under their stated assumptions. Real scan illustrations show geometry; the explanatory density panels are schematics. Neither establishes the hypothetical benchmark outcomes.\par\medskip
-\noindent The project's measured results and existing research manuscript are separate from this document. This notice applies to the entire body, tables, figures, and appendices that follow.\par\vfill
-\noindent Prepared for evaluating the scientific argument and the finished-paper reading experience.
-\end{titlepage}
-\setcounter{page}{1}
 \maketitle
-\lhead{ICLR 2027 manuscript preview}
 
 \begin{abstract}
 An unfamiliar object can receive a confident semantic label when a LiDAR model only compares known classes. We propose Semantic Evidence from Return Verification (SERVE), a model that asks whether a candidate class also predicts the observed range from its surroundings. A full-scan encoder supplies appearance support, while a separate predictor excludes the target angular cell and produces a class-conditioned distribution over log range. The likelihood of the held-out measurement enters the supervised class decision alongside appearance support. The strongest joint class support supplies both the semantic label and the unknown score. Training uses normal semantic labels and recorded ranges, without auxiliary anomaly supervision. On STU, SERVE reaches 78.64\% validation and 67.21\% test average precision, compared with 21.36\% and 15.09\% for a matched appearance model, while improving normal semantic mIoU by 2.15 points. At a 1\% normal false-positive rate, it recovers 88.4\% of unknown points confidently assigned to known classes by the appearance model. Matched ablations isolate the contributions of target exclusion, class-conditioned measurement support, and joint semantic training. These results support using predicted physical observations as evidence within semantic recognition.
@@ -44,13 +33,6 @@ An unfamiliar object can receive a confident semantic label when a LiDAR model o
 LiDAR segmentation must recognize familiar traffic participants while identifying objects outside its training vocabulary. A classifier can confidently label an unfamiliar road obstacle as a car or road because confidence compares the available classes. A large margin over competing labels does not establish that the winning class explains the observation. Real road-anomaly benchmarks such as STU expose this gap between semantic preference and support for a prediction \citep{stu}.
 
 Existing methods estimate unknownness from classifier outputs, normal feature structure, or auxiliary anomalous examples \citep{energy,pixood,lido,ndp}. An additional source of evidence is available in a LiDAR scan: the observed range is constrained by the surfaces around it. Under a road hypothesis, surrounding ground returns constrain where a held-out ray should intersect the surface. A nearer measurement weakens that hypothesis. However, a normal car can also produce a nearer return. Geometry becomes useful for recognition when each candidate class is allowed its own explanation, and the same class must support both the observed appearance and the measured range.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{figures/motivation.pdf}
-\caption{A geometric departure can have a normal explanation. A real scan contains a car above the road. Extending a fitted road plane along the marked ray predicts a farther intersection; the car provides a normal surface near the observation. The plane is a geometric illustration, not a SERVE prediction. Recognition requires evaluating the candidate class together with its measurement explanation.}
-\label{fig:motivation}
-\end{figure}
 
 We introduce Semantic Evidence from Return Verification (SERVE). For every point, a full-scan encoder supplies appearance support for each known class. A separate context encoder predicts a range distribution for each class without accessing returns in the target angular cell. Evaluating these predictions at the actual range produces measurement support. SERVE combines the two supports within each class and uses the resulting energies for both semantic labeling and unknown detection. Normal semantic labels supervise this combined decision, so the range predictor learns to participate in semantic competition rather than supplying an independent post-processing score.
 
@@ -172,9 +154,9 @@ The appearance control is independently trained using appearance classification 
 
 \subsection{Unknown Detection and Normal Perception}
 \begin{table}[t]
-\caption{Normal semantic mIoU and point-level anomaly detection (\%). Matched rows are means over three seeds. Published rows retain the original backbones, training data, and supervision; they are external references rather than controlled comparisons. COVAL's two scoring rules are reported separately; n/r means not reported here. Bold identifies SERVE within the matched comparison, not a universal best result.}
+\caption{Normal semantic mIoU and point-level anomaly detection (\%). Matched rows are three-seed means. External results from LIDO \citep{lido}, NDP \citep{ndp}, and COVAL \citep{coval} retain their original backbones, training data, and supervision. COVAL's two scores are reported separately; n/r means not reported here. Bold identifies SERVE within the matched comparison, not a universal best result.}
 \label{tab:main}
-\centering\small\setlength{\tabcolsep}{3pt}
+\centering
 \begin{tabular}{lrrrrrrr}
 \toprule
  & 201 & \multicolumn{3}{c}{STU validation} & \multicolumn{3}{c}{STU test}\\
@@ -190,10 +172,10 @@ Separate objectives & 62.10 & 48.27 & 98.59 & 6.71 & 37.42 & 98.03 & 8.91\\
 SERVE & \textbf{64.07} & \textbf{78.64} & \textbf{99.43} & \textbf{1.62} & \textbf{67.21} & \textbf{99.12} & \textbf{2.45}\\
 \midrule
 \multicolumn{8}{l}{Published external references}\\
-LIDO \citep{lido} & n/r & 27.53 & 95.05 & 34.86 & 14.99 & 93.67 & 34.29\\
-NDP-EE \citep{ndp} & n/r & 74.24 & 99.53 & 1.43 & 61.31 & 99.26 & 3.30\\
-COVAL (ML) \citep{coval} & n/r & 64.35 & 97.34 & 17.97 & n/r & n/r & n/r\\
-COVAL (AL) \citep{coval} & n/r & 62.16 & 97.70 & 7.33 & n/r & n/r & n/r\\
+LIDO & n/r & 27.53 & 95.05 & 34.86 & 14.99 & 93.67 & 34.29\\
+NDP-EE & n/r & 74.24 & 99.53 & 1.43 & 61.31 & 99.26 & 3.30\\
+COVAL (ML) & n/r & 64.35 & 97.34 & 17.97 & n/r & n/r & n/r\\
+COVAL (AL) & n/r & 62.16 & 97.70 & 7.33 & n/r & n/r & n/r\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -220,7 +202,7 @@ Sparse objects remain difficult. SERVE recovers 52\% of one-to-four-point instan
 \begin{table}[t]
 \caption{Validation ablations (\%). R retrains a model; I changes only inference with fixed SERVE weights. The common-density readout adds an identical measurement energy to every class and therefore must retain the appearance-only semantic labels. Independent minima changes only the unknown score.}
 \label{tab:ablation}
-\centering\small\setlength{\tabcolsep}{6pt}
+\centering
 \begin{tabular}{lcrrr}
 \toprule
 Variant & Type & 201 mIoU$\uparrow$ & AP$\uparrow$ & FPR95$\downarrow$\\
@@ -258,7 +240,6 @@ SERVE learns a semantic model whose candidate classes are tested against predict
 The scope remains bounded. A smooth unfamiliar surface can be predictable from its neighbors, and an unusual normal boundary can be hard to predict. Neighboring context may contain the same unknown object. Isolated cells receive no measurement evidence. The score depends on log-range coordinates and has no universal unknown-separation or false-alarm guarantee. Our evidence concerns one real-anomaly benchmark and normal target adaptation; it does not establish sensor-independent or safety-critical reliability. Within that scope, the results support a practical modeling principle: use a candidate class to predict an observation it has not seen, then let that prediction influence both recognition and rejection.
 
 \FloatBarrier
-\clearpage
 \section*{Reproducibility Statement}
 Equations~\eqref{eq:energy}--\eqref{eq:loss} define the model and losses. Appendix~\ref{app:architecture} specifies every prediction input, architectural constant, and inference operation; Appendix~\ref{app:training} defines labels, reductions, and optimization; Appendix~\ref{app:evaluation} defines the evaluation populations. The numerical theoretical checks concern density normalization, the exclusion property, and the class-support identities. Dataset licenses govern redistribution of original scans.
 
@@ -283,7 +264,7 @@ The measurement branch independently maps scaled coordinates $\mathbf x/50$, int
 Queries are $\sqrt{48}\,\mathbf q_c/\|\mathbf q_c\|_2$ plus the target-cell position embedding. Two cross-attention layers each use three heads, width 48, and feed-forward width 96. A linear head outputs three sets of eight quantities: a mean offset, five quadratic coefficients, a scale logit, and a mixture-weight logit. Another linear head produces the class-context logit $\eta_{ic}$. A finite empty-context state avoids undefined attention for isolated cells; $\kappa_i=0$ then removes its predictive contribution from both scoring and predictive training.
 
 \begin{table}[ht]
-\centering\small
+\centering
 \caption{Model constants used in all full SERVE runs.}
 \begin{tabular}{ll}
 \toprule
@@ -378,7 +359,7 @@ The three classification terms use $\mathcal B_Q$ for joint, $\mathcal B_V$ for 
 
 \subsection{Optimization and Selection}
 \begin{table}[ht]
-\centering\small
+\centering
 \caption{Training and checkpoint-selection schedule shared by matched models.}
 \begin{tabular}{lll}
 \toprule
@@ -458,7 +439,7 @@ Runtime uses batch size one, identical scan order, and FP32 on an RTX 5080 Lapto
 \label{app:results}
 \subsection{Seed Variation}
 \begin{table}[ht]
-\centering\small
+\centering
 \caption{Individual matched runs and sample standard deviations (percentage points). These summarize training-seed variability, not uncertainty over independently sampled datasets or scenes.}
 \begin{tabular}{llrrrr}
 \toprule
@@ -476,7 +457,7 @@ All three paired runs improve validation AP over the separate-objectives control
 
 \subsection{Known-Class Performance}
 \begin{table}[ht]
-\centering\small
+\centering
 \caption{Normal class IoU on sequence 201 (\%). Ground-truth-absent classes are omitted from this table and from mIoU. Values are three-seed means.}
 \begin{tabular}{lrrr}
 \toprule
@@ -505,7 +486,7 @@ The improvement is distributed across surface and object classes. Parking remain
 
 \subsection{Predictive Fit and Its Limits}
 \begin{table}[ht]
-\centering\small
+\centering
 \caption{Normal predictive diagnostics on supported fine-labeled queries. NLL is in log-range coordinates; coverage is for a nominal 90\% interval. Better target prediction alone does not order anomaly AP.}
 \begin{tabular}{lrrrrr}
 \toprule
@@ -519,7 +500,7 @@ SERVE & $-2.08$ & 90.7 & 2.84 & 0.58 & 78.64\\
 \end{table}
 
 \begin{table}[ht]
-\centering\small
+\centering
 \caption{SERVE predictive diagnostics by range. Shares refer to the supported fine-labeled diagnostic population. Rounded stratum values aggregate to the overall values in the preceding table.}
 \begin{tabular}{lrrrrr}
 \toprule

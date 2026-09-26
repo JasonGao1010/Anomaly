@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 from matplotlib.colors import LinearSegmentedColormap, Normalize
-from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Rectangle
+from matplotlib.patches import Ellipse, FancyArrowPatch, FancyBboxPatch, Rectangle
 import numpy as np
 
 OUT = Path(__file__).resolve().parent
@@ -179,13 +179,26 @@ def main():
                  metadata={"Source":"STU/train/206/velodyne/000224.bin",
                            "Description":"Original returns; display range 2.5–35 m, height -3–8 m; no model output."})
     plt.close(view)
-    fig = plt.figure(figsize=(5.5, 3.42))
+    # Only the method diagram uses the explicitly requested handwriting typeface.
+    comic_fonts = Path("/mnt/c/Windows/Fonts")
+    for name in ("comic.ttf", "comicbd.ttf", "comici.ttf", "comicz.ttf"):
+        font_manager.fontManager.addfont(comic_fonts / name)
+        if font_manager.FontProperties(fname=comic_fonts / name).get_name() != "Comic Sans MS":
+            raise RuntimeError("The required Comic Sans MS font is unavailable")
+    font_manager.findfont("Comic Sans MS", fallback_to_default=False)
+    plt.rcParams["font.family"] = "Comic Sans MS"
+    # At the paper's 5.5-inch width this is 2.54 inches high; retain print-size text.
+    width, height = 7.4, 3.42
+    print_scale = width / 5.5
+    cell_aspect = (width / 16) / (height / 10)
+    fig = plt.figure(figsize=(width, height))
     ax = fig.add_axes([.008, .008, .984, .984])
     ax.set(xlim=(0, 16), ylim=(0, 10))
     ax.set_axis_off()
 
     def label(x, y, value, size=6.6, **kw):
-        ax.text(x, y, value, ha=kw.pop("ha", "center"), va="center", fontsize=size, **kw)
+        ax.text(x, y, value, ha=kw.pop("ha", "center"), va="center",
+                fontsize=size * print_scale, linespacing=1.0, **kw)
 
     def box(x, y, w, h, value="", color=BLUE, fill="#F0F6FA", size=6.5, **kw):
         ax.add_patch(FancyBboxPatch((x, y), w, h,
@@ -223,8 +236,8 @@ def main():
     label(2.23, 4.69, "(b) Return evidence", 7.8, ha="left", weight="bold")
 
     center = (uv.min(0) + uv.max(0)) / 2
-    scale = min(1.68 / np.ptp(uv[:, 0]), 1.77 / np.ptp(uv[:, 1]))
-    inset = (uv - center) * scale + [.87, 5.76]
+    scale = min(1.68 / np.ptp(uv[:, 0]), 1.77 / (np.ptp(uv[:, 1]) * cell_aspect))
+    inset = (uv - center) * [scale, scale * cell_aspect] + [.87, 5.76]
     ax.scatter(*inset.T, s=.016, c=colors, linewidths=0, rasterized=True)
     label(.88, 6.93, "Single scan", 7.2, weight="bold")
     label(.88, 4.76, r"$X$", 9)
@@ -239,12 +252,12 @@ def main():
         wire([(start,7.78),(end,7.78)])
     label(3.41, 8.60, "LitePT-S", 7.2)
     label(3.41, 7.00, "voxel to point", 5.7)
-    box(2.38, 6.25, 1.97, .57, "Point detail\nMLP", size=5.8)
+    box(2.38, 6.25, 1.97, .57, "Point detail MLP", size=5.8)
     wire([(1.85,6.54),(2.36,6.54)])
-    ax.add_patch(Circle((4.87,7.76),.20,ec=BLUE,fc="white",lw=.65))
+    ax.add_patch(Ellipse((4.87,7.76),.40,.40*cell_aspect,ec=BLUE,fc="white",lw=.65))
     label(4.87,7.76,"C",6.3)
     wire([(4.48,7.76),(4.66,7.76)])
-    wire([(4.36,6.55),(4.87,6.55),(4.87,7.55)])
+    wire([(4.36,6.55),(4.87,6.55),(4.87,7.48)])
     tensor(5.38,7.28,.39,.85,planes=3)
     wire([(5.08,7.76),(5.36,7.76)])
     label(5.68,8.63,r"$\mathbf{h}_i$",8.5)
@@ -254,7 +267,8 @@ def main():
     box(6.43,7.10,2.13,1.19,color=BLUE,fill="white")
     for row,col in enumerate((BLUE,TEAL,PURPLE)):
         for k in range(4):
-            ax.add_patch(Circle((6.77+.47*k,7.34+.32*row),.085,ec=col,fc=col,lw=.3))
+            ax.add_patch(Ellipse((6.77+.47*k,7.34+.32*row),.17,.17*cell_aspect,
+                                ec=col,fc=col,lw=.3))
     label(7.50,8.79,"Class centers",6.8)
     label(7.50,8.42,"4 modes / class",5.4)
     wire([(5.98,7.76),(6.40,7.76)])
@@ -285,11 +299,11 @@ def main():
     wire([(4.83,3.40),(5.01,3.40)])
     label(5.36,2.39,"Target\nexcluded",5.2,color=RED)
     box(6.13,3.10,1.50,1.09,color=TEAL,fill="#DFEEE7")
-    box(6.04,3.01,1.50,1.09,"Cross\nattention\n+ FFN",TEAL,"#C5E0D4",5.8)
+    box(6.04,3.01,1.50,1.09,"Cross-attn\n+ FFN",TEAL,"#C5E0D4",5.8)
     wire([(5.68,3.40),(6.00,3.40)])
     label(6.80,2.44,"2 layers\n3 heads",5.5)
-    label(8.00,4.58,"class + angle queries",5.3,color=PURPLE)
-    box(7.94,3.03,1.30,1.02,"Student-t\nmixture\nhead",TEAL,"#DFEEE7",5.6)
+    label(8.00,4.70,"class + angle queries",5.3,color=PURPLE)
+    box(7.94,3.03,1.30,1.02,"Student-t\nmixture",TEAL,"#DFEEE7",5.6)
     wire([(7.58,3.40),(7.90,3.40)])
     label(8.59,2.47,"3 components\nper class",5.6)
     label(8.59,4.27,r"$\mu,\sigma,w$",7.5)
@@ -314,28 +328,30 @@ def main():
     wire([(9.86,7.76),(11.60,7.76),(11.60,6.05),(11.76,6.05)])
     wire([(10.84,3.45),(11.40,3.45),(11.40,5.56),(11.76,5.56)])
     label(13.47,8.80,"(c) Joint decision",7.6,weight="bold")
-    box(11.81,5.18,2.03,1.27,color=PURPLE,fill="#F1ECF6")
-    label(12.84,6.16,"Same class",6.3)
-    label(12.84,5.78,r"$v_{ic}=a_{ic}(p_{ic}/M)^{\kappa_i}$",6.0)
-    label(12.84,5.40,r"$E_{ic}=-\log v_{ic}$",7.0)
-    box(14.40,6.65,1.40,1.18,"Semantic\nlabel\n"+r"$\arg\min_c E_{ic}$",PURPLE,"#F7F4FA",6.0)
-    box(14.40,4.14,1.40,1.18,"Unknown\nscore\n"+r"$\min_c E_{ic}$",PURPLE,"#F7F4FA",6.0)
+    box(11.81,5.05,2.03,1.42,color=PURPLE,fill="#F1ECF6")
+    label(12.84,6.18,"Same class",6.3)
+    label(12.84,5.79,r"$v_{ic}=a_{ic}(p_{ic}/M)^{\kappa_i}$",6.0)
+    label(12.84,5.34,r"$E_{ic}=-\log v_{ic}$",7.0)
+    box(14.40,6.65,1.40,1.18,"Class label\n"+r"$\arg\min_c E_{ic}$",PURPLE,"#F7F4FA",6.0)
+    box(14.25,4.14,1.55,1.18,"Unknown score\n"+r"$\min_c E_{ic}$",PURPLE,"#F7F4FA",5.2)
     wire([(13.88,5.96),(14.13,5.96),(14.13,7.23),(14.35,7.23)])
-    wire([(14.13,5.96),(14.13,4.73),(14.35,4.73)])
+    wire([(14.13,5.96),(14.13,4.73),(14.21,4.73)])
 
     # Dashed paths are normal-data training objectives, retained in the caption.
-    box(11.99,2.70,1.72,.66,"Class loss\n"+r"$\mathcal{L}_{\rm joint}$",RED,"#FCF1EC",6.0)
-    wire([(12.84,5.15),(12.84,3.40)],color=RED,dashed=True)
-    box(14.27,2.70,1.52,.66,"Normal label\n"+r"$Y_i$",RED,"#FCF1EC",5.5)
+    box(11.99,2.62,1.72,.78,"Class loss\n"+r"$\mathcal{L}_{\rm joint}$",RED,"#FCF1EC",6.0)
+    wire([(12.84,5.02),(12.84,3.44)],color=RED,dashed=True)
+    box(14.27,2.62,1.52,.78,"Normal label\n"+r"$Y_i$",RED,"#FCF1EC",5.5)
     wire([(14.23,3.03),(13.76,3.03)],color=RED,dashed=True)
-    box(11.99,.23,1.72,.75,"Likelihood loss\n"+r"$\mathcal{L}_{\rm pred}$",RED,"#FCF1EC",5.7)
+    box(11.99,.20,1.72,.88,"Likelihood loss\n"+r"$\mathcal{L}_{\rm pred}$",RED,"#FCF1EC",5.7)
     wire([(10.84,3.45),(11.06,3.45),(11.06,.61),(11.94,.61)],color=RED,dashed=True)
-    wire([(15.03,2.66),(15.03,.61),(13.76,.61)],color=RED,dashed=True)
+    wire([(15.03,2.58),(15.03,.61),(13.76,.61)],color=RED,dashed=True)
     label(3.27,.90,"C: concatenate    Solid: inference    Dashed: training",5.8)
     label(3.27,.42,r"$\kappa_i=0$ without context; otherwise $1$",5.8)
     # Parameters of both branches receive the joint classification gradient.
     label(12.80,1.98,"Joint loss trains\nboth evidence branches",5.8,color=RED)
 
+    for artist in (*ax.patches, *ax.lines):
+        artist.set_linewidth(artist.get_linewidth() * print_scale)
     fig.savefig(OUT / "method.pdf", dpi=900, metadata={"Title":"SERVE network with a real STU input scan",
                                              "Author":"Anonymous authors"})
     plt.close(fig)
