@@ -3,28 +3,21 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 /.venv/
-# Keep metrics and diagnostic reports; exclude checkpoints and intermediate arrays.
+# Keep experiment reports; exclude checkpoints and intermediate arrays.
 /results/train/**
 !/results/train/**/
 !/results/train/**/*.json
-!/results/train/**/diagnostics/**/*.csv
-!/results/train/**/diagnostics/**/*.png
-!/results/train/**/diagnostics/**/*.pdf
-!/results/train/**/diagnostics/**/*.py
-!/results/train/**/errors/**/*.csv
-!/results/train/**/errors/**/*.png
-!/results/train/**/errors/**/*.pdf
-/results/preflight/
-/assets/train.json
 /assets/val.json
 /assets/nuscenes.pth
 /results/data/**
 !/results/data/**/
 !/results/data/**/*.json
-!/results/data/**/*.csv
-!/results/data/**/*.png
-!/results/data/**/*.pdf
-/results/data/train.json
-# Regenerate large sequence indices locally from the tracked source and catalog.
-/results/data/sequence/train.json
-/results/data/sequence/val.json
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.xdv

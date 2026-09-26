@@ -1,4 +1,4 @@
-"""Official pooled-point validation, raw-slot inference and inference timing."""
+"""SERVE pooled-point validation, paired comparisons and original-slot inference."""
 
 import argparse
 import gc
@@ -10,285 +10,34 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .data import (Scans, VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION,
-                   load_manifest, make_real_manifest, point_targets, read_scan, read_nuscenes, write_json)
-from .model import Segmentor, prepare_scan, scatter_scores, to_device
-from .normal import angular_observation, prediction_metrics, SCALES
+from .data import Scans, load_manifest, make_real_manifest, read_scan, write_json
+from .model import NormalHypothesis, prepare_scan, scatter_scores, to_device
+from .normal import hypothesis_observation
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
-
 
 STU_COMMIT = "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
 
 
-def normal_record(record):
-    return (record.get("source") in ("nuscenes", "normal_stu")
-            and record.get("group") in ("normal_nuscenes", "normal_stu")
-            and not record.get("anomaly", 0) and not record.get("delta") and not record.get("augmented", False))
-
-
 class PreparedScans(Scans):
-    def __init__(self, manifest, *, relations=False, normal=False, voxel=True, normal_reference=True, hypotheses=False,
-                 frozen=False, range_only=False):
-        super().__init__(manifest)
-        self.relations = relations
-        self.normal, self.voxel = normal, voxel
-        self.normal_reference = normal_reference
-        self.hypotheses = hypotheses
-        self.frozen = frozen
-        self.range_only = range_only
-
     def __getitem__(self, index):
         sample = super().__getitem__(index)
-        result = (prepare_scan(sample, relations=self.relations, official=self.frozen) if self.voxel else
-                  {key: torch.from_numpy(value) if isinstance(value, np.ndarray) else value
-                   for key, value in sample.items()})
-        if self.frozen:
-            from .normal import support_conditions
-            result["conditions"] = torch.from_numpy(support_conditions(sample["xyzi"], range_only=self.range_only))
-        if self.hypotheses:
-            from .normal import hypothesis_observation
-            result["observation"] = hypothesis_observation(sample["xyzi"])
-        if self.manifest["version"] == SOURCE_VERSION and self.manifest["kind"] == "train":
-            record = self.records[index]
-            control = np.zeros(len(sample["targets"]), dtype=bool)
-            if record.get("group") == "control_nuscenes":
-                # Delta slots identify actual inserted returns, not the surrounding
-                # normal background or occluded/ignored replacement points.
-                with np.load(record["delta"], allow_pickle=False) as delta:
-                    inserted = delta["slots"][delta["labels"] == 1]
-                control = np.isin(sample["slots"], inserted) & (sample["targets"] == 0)
-                if int(control.sum()) != record["inserted_points"]:
-                    raise ValueError("decoded normal-control points differ from manifest")
-            result["control_mask"] = torch.from_numpy(control)
-        if self.normal:
-            result["observation"] = angular_observation(sample["xyzi"])
-            # Only unmodified real-normal sources anchor the auxiliary task.
-            record = self.records[index]
-            source_only = self.manifest["version"] == SOURCE_VERSION
-            result["normal_training"] = not bool(record.get("delta")) if source_only else normal_record(record)
-            original = None
-            if self.normal_reference and self.manifest["version"] == NDP_VERSION:
-                original = self._source(record["frame"])
-            elif self.normal_reference and source_only and record.get("delta"):
-                original = read_nuscenes({key: value for key, value in record.items() if key != "delta"},
-                                        self.manifest["mapping"])
-            if original is not None:
-                # The auxiliary target is the unchanged source, never a pasted
-                # point relabeled as normal. Original ignored classes stay ignored.
-                result["normal_reference"] = dict(normal_training=True,
-                    observation=angular_observation(original.xyzi[original.actual]),
-                    targets=torch.from_numpy(point_targets(original)[original.actual].copy()))
+        result = prepare_scan(sample)
+        result["observation"] = hypothesis_observation(sample["xyzi"])
         return result
 
 
-@torch.no_grad()
-def evaluate_normal(model, manifest, device, workers=2):
-    if model.normal is None:
-        raise ValueError("this checkpoint has no normal return field")
-    indices = [i for i, row in enumerate(manifest["records"])
-               if normal_record(row) or manifest["version"] in (NDP_VERSION, SOURCE_VERSION)]
-    if not indices:
-        raise ValueError("manifest has no reliable unmodified normal scans")
-    data = PreparedScans(manifest, normal=True, voxel=False)
-    loader = DataLoader(data, batch_size=None, sampler=indices, num_workers=workers,
-        pin_memory=device.type == "cuda", generator=torch.Generator().manual_seed(0),
-        **({"prefetch_factor": 1} if workers else {}))
-    totals = {str(size): dict(mae_m=0., coverage90=0., width90_m=0., joint_nll=0.) for size in SCALES}
-    model.eval()
-    points, start = 0, time.perf_counter()
-    for sample in loader:
-        sample = sample.get("normal_reference", sample)
-        measured = prediction_metrics(model.normal, to_device(sample, device))
-        points += measured["points"]
-        for size, values in measured["scales"].items():
-            for key, value in values.items():
-                totals[size][key] += value * (1 if key == "joint_nll" else measured["points"])
-    for values in totals.values():
-        for key in values:
-            values[key] /= len(indices) if key == "joint_nll" else points
-    return dict(scales=totals, scans=len(indices), points=points, seconds=time.perf_counter() - start,
-                manifest_sha256=manifest["sha256"], role="normal prediction diagnostic; not anomaly detection accuracy")
+def evaluation_indices(manifest):
+    """Use the official per-scan five-anomaly rule."""
+    return [i for i, row in enumerate(manifest["records"]) if row["eligible"]]
 
 
-@torch.no_grad()
-def evaluate_instance_normal(scorer, saved, device):
-    """Compare learned and identity metrics on the same normal 201 points and bank."""
-    from .normal import InstanceSupport, INSTANCE_VERSION, ScoreCalibration
-    from .train import normal_cache, instance_development, target_normal_cache
-
-    if saved.get("version") != INSTANCE_VERSION:
-        raise ValueError("instance-support diagnostics require the current checkpoint version")
-    metadata_path = Path(saved["config"]["features"]) / "development_features.json"
-    cache = json.loads(metadata_path.read_text())
-    if saved["config"].get("data_scope") == "STU206_STU201":
-        cache = target_normal_cache(cache, "201")
-    if (cache.get("labels") != "normal_candidate_sets_v1"
-            or not 0 < cache["count"] <= cache["capacity"]
-            or cache["count"] != saved["config"]["development_points"]):
-        raise ValueError("normal development cache disagrees with the checkpoint")
-    # Confirm the source population before loading feature tensors: normal 201
-    # supplies the diagnostic; normal nuScenes supplementation is excluded.
-    cursor = 0
-    expected = 0
-    selected_frames = []
-    for index, row in enumerate(cache["frames"]):
-        if (row["index"] != index or row["begin"] != cursor
-                or not cursor <= row["end"] <= cache["count"]
-                or row["source"] not in ("normal_stu", "nuscenes")):
-            raise ValueError("normal cache frame identities do not cover its actual population")
-        if row["source"] == "normal_stu":
-            if str(row["scene"]) != "201":
-                raise ValueError("normal target development must identify sequence 201")
-            if index // 64 % 2 == 1:
-                expected += row["end"] - row["begin"]
-                selected_frames.append(index)
-        cursor = row["end"]
-    if cursor != cache["count"] or not expected:
-        raise ValueError("normal cache lacks a complete odd-block 201 population")
-    data = normal_cache(cache, device)
-    selected = (data["source"] == 1) & ((data["frame"] // 64) % 2 == 1)
-    indices = selected.nonzero().flatten()
-    allowed, labels = data["allowed"][indices], data["semantic"][indices]
-    if (len(indices) != expected or not bool((allowed.sum(1) == 1).all())
-            or not torch.equal(labels, allowed.long().argmax(1))
-            or data["frame"][indices].unique().cpu().tolist() != selected_frames):
-        raise ValueError("normal 201 points must preserve their frame and singleton class identities")
-    scorer = scorer.to(device).eval()
-    started = time.perf_counter()
-    learned = instance_development(scorer, data, indices, retain=False)
-    # A fresh module avoids stale projected-bank caches and leaves the actual
-    # scorer untouched. Its sole changed parameter is the metric transform.
-    identity = InstanceSupport(memory_size=saved["config"]["memory_size"]).to(device)
-    identity.calibration = ScoreCalibration(
-        range_bandwidth=saved["config"]["calibration_bandwidth"]).to(device)
-    identity.load_state_dict(scorer.state_dict(), strict=True)
-    identity.transform.copy_(torch.eye(252, device=device, dtype=identity.transform.dtype))
-    identity.eval()
-    baseline = instance_development(identity, data, indices, retain=False)
-    bank, norms = scorer._bank()
-    support_counts = torch.zeros(19, 3, dtype=torch.long, device=device)
-    for start in range(0, len(indices), scorer.point_chunk):
-        at = indices[start:start + scorer.point_chunk]
-        distances = scorer._distance(scorer.encode(data["features"][at]), bank, norms)
-        nearest = distances.masked_fill(~scorer.memory_allowed.any(1)[None], torch.inf).argmin(1)
-        source = scorer.memory_source[nearest]
-        coarse = scorer.memory_allowed[nearest].sum(1) > 1
-        support_counts.index_add_(0, data["semantic"][at],
-            torch.stack((source == 1, source == 0, coarse), -1).long())
-    support_rows = [dict(category=c, target=int(row[0]), auxiliary=int(row[1]), coarse=int(row[2]))
-                    for c, row in enumerate(support_counts.cpu().tolist()) if row[0] + row[1]]
-    gain = {}
-    for key, sign in (("class_recall", 1), ("far_class_recall", 1), ("class_ce", -1)):
-        if learned.get(key) is not None and baseline.get(key) is not None:
-            gain[key] = sign * (learned[key] - baseline[key])
-    return dict(version=INSTANCE_VERSION, points=len(indices), scans=len(selected_frames),
-        learned=learned, identity=baseline, metric_gain=gain, support_sources=support_rows,
-        support_source_meaning="exact nearest complete normal instance: STU206 target or nuScenes auxiliary; coarse is a subset of either source",
-        seconds=time.perf_counter() - started, cache=str(metadata_path.resolve()),
-        cache_actual_count=cache["count"],
-        population="all cached singleton normal 201 points in odd contiguous 64-frame blocks; no subsampling or source supplementation",
-        comparison="identical normal memory, preprocessing and queries; identity baseline changes only the 252-dimensional metric transform",
-        metric_gain_definition="learned minus identity for recall; identity minus learned for cross-entropy",
-        role="normal semantic and support diagnostic; not anomaly-detection accuracy")
-
-
-@torch.no_grad()
-def calibrate_instance_normal(model, saved, checkpoint, output, device, workers):
-    """Expand normal references to all real 201 returns without changing learned weights."""
-    from .data import normal_records, identity
-    from .normal import INSTANCE_VERSION, select_score_calibration, normal_semantic_metrics
-    from .train import SupportScans, disk_check, runtime_snapshot, atomic_save
-    if saved.get("version") != INSTANCE_VERSION or not saved.get("frozen"):
-        raise ValueError("full normal calibration requires a completed instance-support checkpoint")
-    records = normal_records("201", development=True)
-    if any(row["source"] != "normal_stu" or str(row["scene"]) != "201" for row in records):
-        raise ValueError("full calibration may only read the normal STU201 sequence")
-    paths = [output, output.with_suffix(".npy"), output.with_suffix(".pt")]
-    if any(path.exists() for path in paths):
-        raise ValueError("full calibration preserves existing observations and checkpoints")
-    record_type = np.dtype([("score", "<f4"), ("log_range", "<f4"), ("predicted", "u1"),
-                           ("normal_prediction", "u1"), ("semantic", "u1"),
-                           ("frame", "<u2"), ("slot", "<u4")])
-    capacity = sum(Path(row["scan"]).stat().st_size // 16 for row in records)
-    resources = runtime_snapshot()
-    disk_check(capacity * record_type.itemsize + 200_000_000)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    observations = np.lib.format.open_memmap(paths[1], mode="w+", dtype=record_type, shape=(capacity,))
-    loader = DataLoader(SupportScans(records, development=True, full=True), batch_size=None,
-        num_workers=workers, pin_memory=device.type == "cuda", generator=torch.Generator().manual_seed(206),
-        **({"prefetch_factor": 1} if workers else {}))
-    cursor, frames, started = 0, [], time.perf_counter()
-    confusion = torch.zeros(2, 19, 19, device=device, dtype=torch.long)
-    fine_memory = bool((model.scorer.memory_allowed.sum(1) == 1).all())
-    for number, sample in enumerate(loader, 1):
-        if not bool((sample["allowed"].sum(1) == 1).all()):
-            raise ValueError("normal STU201 calibration must preserve its actual singleton labels")
-        batch = to_device(sample, device)
-        encoded = model.perception.encode(batch, indices=batch["queries"])
-        energy = model.scorer.class_energy(encoded["features"])
-        # With singleton normal references, minimum class distance is exactly
-        # minimum reference distance; reuse it for semantics and anomaly support.
-        score = energy.amin(-1) if fine_memory else model.scorer.raw_score(encoded["features"])
-        prediction = energy.argmin(-1)
-        partition = (int(sample["index"]) // 64) % 2
-        confusion[partition] += torch.bincount(batch["semantic"] * 19 + prediction,
-                                               minlength=361).reshape(19, 19)
-        if not bool(torch.isfinite(score).all()):
-            raise ValueError("nonfinite full normal scores")
-        stop = cursor + len(score)
-        block = observations[cursor:stop]
-        block["score"] = score.cpu().numpy()
-        block["log_range"] = sample["conditions"][:, 0].numpy()
-        block["predicted"] = encoded["logits"].argmax(-1).cpu().numpy()
-        block["normal_prediction"] = prediction.cpu().numpy()
-        block["semantic"] = sample["semantic"].numpy()
-        block["frame"], block["slot"] = int(sample["index"]), sample["slots"].numpy()
-        if len(block) and (np.any(np.diff(block["slot"].astype(np.int64)) <= 0)
-                           or np.any(block["semantic"] >= 19)):
-            raise ValueError("full normal output must preserve distinct original slots and normal classes")
-        frames.append(dict(index=int(sample["index"]), begin=cursor, end=stop,
-                           scan=records[int(sample["index"])]["scan"]))
-        cursor = stop
-        del batch, encoded, energy, score, prediction, block
-        if number % 25 == 0 or number == len(records):
-            elapsed = time.perf_counter() - started
-            print(f"full normal 201 {number}/{len(records)} scans, {cursor} points, "
-                  f"remaining {(len(records)-number)*elapsed/number/60:.1f} min", flush=True)
-            disk_check()
-    observations.flush()
-    del loader, sample
-    # Retain the same contiguous-block split. The expansion changes coverage,
-    # never uses unknown labels, and never combines fitting and held-out points.
-    actual = observations[:cursor]
-    odd = (actual["frame"] // 64) % 2 == 1
-    if not bool(odd.any()) or bool(odd.all()):
-        raise ValueError("full normal calibration requires both frame partitions")
-    subsets = []
-    for mask in (~odd, odd):
-        selected = actual[mask]
-        conditions = np.column_stack((selected["log_range"], np.zeros(len(selected), dtype=np.float32)))
-        subsets.append((selected["score"].copy(), selected["predicted"].astype(np.int64), conditions))
-        del selected
-    candidate, calibration = select_score_calibration(*subsets,
-        saved["config"]["calibration_bandwidths"], device, current=model.scorer.calibration)
-    model.scorer.calibration = candidate
-    config = dict(saved["config"], calibration_bandwidth=calibration["range_bandwidth"],
-        calibrated=calibration["enabled"], calibration_population="all trusted in-range original STU201 returns",
-        calibration_points=cursor, calibration_reference_points=len(subsets[0][0]),
-        calibration_holdout_points=len(subsets[1][0]))
-    atomic_save(paths[2], dict(saved, model=model.state_dict(), config=config,
-        calibration_selection=calibration, parent_checkpoint=str(checkpoint.resolve())))
-    return dict(points=cursor, capacity=capacity, scans=len(records), frames=frames,
-        reference_points=len(subsets[0][0]), holdout_points=len(subsets[1][0]),
-        calibration=calibration, selected_checkpoint=str(paths[2].resolve()),
-        semantics=dict(reference=normal_semantic_metrics(confusion[0]),
-                       development=normal_semantic_metrics(confusion[1]),
-                       all=normal_semantic_metrics(confusion.sum(0))),
-        source_checkpoint=str(checkpoint.resolve()), records_identity=identity(records),
-        resources=resources, seconds=time.perf_counter()-started,
-        weights="original frozen perception and selected learned metric unchanged; calibration only",
-        point_records="score, measured log range, frozen 16-class prediction, normal support STU19 prediction, true STU19 class, original frame and slot; use only the first points entries",
-        role="normal-only calibration development; no anomaly labels or val19 model selection")
+def load_model(path, device):
+    saved = torch.load(path, map_location="cpu", weights_only=False)
+    # Shape-compatible historical weights still represent a different model.
+    NormalHypothesis.validate_checkpoint(saved, require_calibrated=True)
+    model = NormalHypothesis(variant=saved["config"]["variant"])
+    model.load_state_dict(saved["model"], strict=True)
+    return model.to(device).eval(), saved
 
 
 def precision(device):
@@ -315,21 +64,12 @@ def better(metrics, previous):
         previous["AP"], -previous["FPR95"], previous["AUROC"])
 
 
-def evaluation_indices(manifest):
-    """Keep reference selection separate from the official five-point rule."""
-    reference = manifest.get("version") == SOURCE_VERSION and manifest.get("evaluation_role") == "reference"
-    return [i for i, row in enumerate(manifest["records"])
-            if row["eligible"] and (not reference or row.get("role") == "reference")]
-
-
 @torch.no_grad()
 def evaluate(model, manifest, device, workers=4, score_path=None, record_points=False):
     """Call the pinned official implementation once across the complete valid set."""
     if manifest["kind"] not in ("val", "test"):
         raise ValueError("evaluation requires a held-out validation or test manifest")
     indices = evaluation_indices(manifest)
-    selection = (dict(evaluation_role="reference")
-                 if manifest.get("version") == SOURCE_VERSION and manifest.get("evaluation_role") == "reference" else {})
     count = sum(manifest["records"][i]["normal"] + manifest["records"][i]["anomaly"] for i in indices)
     if not count:
         raise ValueError("no eligible evaluation points")
@@ -337,12 +77,7 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
     required = 64 * count + 1_000_000_000
     if memory_available() < required:
         raise RuntimeError(f"official metrics require about {required / 1e9:.1f} GB free RAM")
-    from .normal import FeatureEvidence, InstanceSupport
-    dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
-                            normal=getattr(model, "normal", None) is not None, normal_reference=False,
-                            hypotheses=getattr(model, "mode", None) == "normal_hypothesis",
-                            frozen=getattr(model, "mode", None) == "frozen_support",
-                            range_only=isinstance(getattr(model, "scorer", None), (InstanceSupport, FeatureEvidence)))
+    dataset = PreparedScans(manifest)
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),
@@ -414,8 +149,7 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
         identities.flush()
         write_json(score_path.parent / "val.json", dict(manifest_sha256=manifest["sha256"], frames=frames,
             points=raw_count, metric_points=count, identities="val_points.npy",
-            scope="Each val*.npy is the exact selected metric population; its *_all.npy companion preserves every actual return, including ignored context, in the selected eligible full scans. Source reference selection, when declared, also excludes coverage and control roles.",
-            **selection))
+            scope="Each val*.npy is the exact selected metric population; its *_all.npy companion preserves every actual return, including ignored context, in the selected eligible full scans. "))
         del raw_scores, identities
     del batch, sample, dataset, loader
     gc.collect()
@@ -425,54 +159,7 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
     better(metrics, None)
     return dict(metrics=metrics, scans=len(indices), points=count,
                 seconds=time.perf_counter() - start, manifest_sha256=manifest["sha256"],
-                official_commit=STU_COMMIT, **selection)
-
-
-def load_model(path, device):
-    saved = torch.load(path, map_location="cpu", weights_only=False)
-    historical={"AJAE-cross-evidence":"6ad0371", "AJAE-class-evidence":"5d6fbbf",
-                "AJAE-observation-evidence":"e9f81f3"}
-    if saved.get("version") in historical:
-        raise ValueError("historical evidence checkpoints require their recorded code revision ("
-                         +historical[saved["version"]]+")")
-    from .model import NormalHypothesis, NORMAL_VERSION
-    from .normal import (FeatureSupport, InstanceSupport, FeatureEvidence, ScoreCalibration,
-                         SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION)
-    if saved.get("version") in (SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION):
-        from .model import FrozenSupport
-        if (not saved.get("frozen") or not saved.get("complete") or not saved.get("selected")
-                or saved["config"]["initial_sha256"] != "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"):
-            raise ValueError("frozen perception requires completed model selection with the official initial weights")
-        if saved["version"] == EVIDENCE_VERSION:
-            if saved["config"].get("version") != EVIDENCE_VERSION or type(saved["config"].get("residual")) is not bool:
-                raise ValueError("feature-evidence checkpoint must specify its version and residual capacity")
-            competition = saved["config"].get("semantic_competition", False)
-            if type(competition) is not bool:
-                raise ValueError("feature-evidence semantic-competition score mode must be boolean")
-            scorer = FeatureEvidence(residual=saved["config"]["residual"], semantic_competition=competition)
-        else:
-            scorer = (InstanceSupport(memory_size=saved["config"]["memory_size"])
-                      if saved["version"] == INSTANCE_VERSION else FeatureSupport(modes=saved["config"]["modes"]))
-        model = FrozenSupport(scorer=scorer)
-        if saved["version"] == INSTANCE_VERSION:
-            model.scorer.calibration = ScoreCalibration(
-                range_bandwidth=saved["config"].get("calibration_bandwidth", 0.))
-        model.load_state_dict(saved["model"], strict=True)
-        torch.backends.cuda.matmul.allow_tf32 = False
-        return model.to(device).eval(), saved
-    if saved.get("version") in (NORMAL_VERSION, "AJAE-normal-hypothesis"):
-        # Shape-compatible historical weights still represent a different model.
-        NormalHypothesis.validate_checkpoint(saved, require_calibrated=True)
-        model = NormalHypothesis(variant=saved["config"]["variant"])
-        model.load_state_dict(saved["model"], strict=True)
-        return model.to(device).eval(), saved
-    if saved.get("version") not in (VERSION, PILOT_VERSION, CONTINUATION_VERSION, NATIVE_VERSION, NDP_VERSION, SOURCE_VERSION):
-        raise ValueError("checkpoint does not belong to a supported V4 experiment")
-    if saved["mode"] == "field" and "compatibility.tokens.0.weight" in saved["model"]:
-        raise ValueError("checkpoint uses the retired kernel readout; use its recorded code revision for historical evaluation")
-    model = Segmentor(saved["mode"])
-    model.load_state_dict(saved["model"], strict=True)
-    return model.to(device).eval(), saved
+                official_commit=STU_COMMIT)
 
 
 def rank_metrics(normal_scores, anomaly_scores):
@@ -761,7 +448,7 @@ def compare(checkpoints, manifest, output, device, *, workers=4, fprs=(.01, .05)
                for name in models}
     identities = np.lib.format.open_memmap(output / "returns.npy", mode="w+", dtype=identity_type, shape=(returns,))
     labels = np.lib.format.open_memmap(output / "labels.npy", mode="w+", dtype=np.int8, shape=(count,))
-    dataset = PreparedScans(manifest, hypotheses=True, normal_reference=False)
+    dataset = PreparedScans(manifest)
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda", generator=torch.Generator().manual_seed(0),
                         **({"prefetch_factor": 1} if workers else {}))
@@ -831,9 +518,8 @@ def compare(checkpoints, manifest, output, device, *, workers=4, fprs=(.01, .05)
 
 @torch.no_grad()
 def infer(model, scan, device, *, return_semantics=False):
-    mode = getattr(model, "mode", None)
-    if return_semantics and mode not in ("normal_hypothesis", "frozen_support"):
-        raise ValueError("semantic export requires a normal perception model")
+    if getattr(model, "mode", None) != "normal_hypothesis":
+        raise ValueError("inference requires a SERVE normal perception model")
     if device.type == "cuda":
         torch.cuda.synchronize(device)
         torch.cuda.reset_peak_memory_stats(device)
@@ -846,35 +532,14 @@ def infer(model, scan, device, *, return_semantics=False):
         xyzi = frame.xyzi[frame.actual].copy()
         sample = prepare_scan(dict(xyzi=xyzi, slots=frame.return_slots,
                                    targets=np.full(int(frame.actual.sum()), -1, np.int8),
-                                   slot_count=len(frame.xyzi), index=frame.frame_id),
-                              relations=getattr(model, "relation", None) is not None,
-                              official=mode == "frozen_support")
-        if getattr(model, "normal", None) is not None:
-            sample["observation"] = angular_observation(xyzi)
-        elif mode == "normal_hypothesis":
-            from .normal import hypothesis_observation
-            sample["observation"] = hypothesis_observation(xyzi)
-        elif mode == "frozen_support":
-            from .normal import FeatureEvidence, InstanceSupport, support_conditions
-            sample["conditions"] = torch.from_numpy(support_conditions(
-                xyzi, range_only=isinstance(model.scorer, (InstanceSupport, FeatureEvidence))))
+                                   slot_count=len(frame.xyzi), index=frame.frame_id))
+        sample["observation"] = hypothesis_observation(xyzi)
         sample = to_device(sample, device)
         with autocast(device):
             if return_semantics:
-                if mode == "frozen_support":
-                    from .normal import FeatureEvidence, InstanceSupport
-                    encoded = model.perception.encode(sample)
-                    if isinstance(model.scorer, FeatureEvidence):
-                        outputs = model.scorer.components(encoded["features"])
-                        prediction, classes, count = outputs["score"], outputs["logits"].argmax(-1), 19
-                    else:
-                        classes, count = encoded["logits"].argmax(-1), 16
-                        options = dict(predicted=classes) if isinstance(model.scorer, InstanceSupport) else {}
-                        prediction = model.scorer(encoded["features"], sample["conditions"], **options)
-                else:
-                    outputs = model.predict(sample)
-                    prediction, classes, count = outputs["score"], outputs["semantic"], 19
-                if classes.shape != prediction.shape or classes.is_floating_point() or bool(((classes < 0) | (classes >= count)).any()):
+                outputs = model.predict(sample)
+                prediction, classes = outputs["score"], outputs["semantic"]
+                if classes.shape != prediction.shape or classes.is_floating_point() or bool(((classes < 0) | (classes >= 19)).any()):
                     raise ValueError("semantic outputs must follow the model's class vocabulary in original return order")
                 semantic[frame.return_slots] = classes.to(torch.int16).cpu().numpy()
             else:
@@ -894,166 +559,31 @@ def infer(model, scan, device, *, return_semantics=False):
                             real_points=int(frame.actual.sum()), slots=len(frame.xyzi))
 
 
-def summarize(output, split="val"):
-    """Report the fixed seed-0 comparison without invented repeat uncertainty."""
-    output = Path(output)
-    report = {}
-    identities = set()
-    for method in ("base", "attention", "continue", "fusion"):
-        path = output / "0" / method / ("result.json" if split == "val" else "test.json")
-        if not path.is_file():
-            raise ValueError(f"incomplete seed-0 comparison: {path}")
-        row = json.loads(path.read_text())
-        if row.get("version") != VERSION or row["seed"] != 0 or row["method"] != method:
-            raise ValueError(f"incorrect experiment identity: {path}")
-        if not row.get("complete"):
-            raise ValueError(f"unfinished experiment: {path}")
-        identities.add(row["val_manifest_sha256"] if split == "val" else row["manifest_sha256"])
-        metrics = row["best_metrics"] if split == "val" else row["metrics"]
-        better(metrics, None)
-        epoch = row["best_epoch"] if split == "val" else row["checkpoint_epoch"]
-        report[method] = dict(seed=0, epoch=epoch, **metrics)
-        if split == "val":
-            report[method]["validation_improved_from_epoch0"] = row["validation_improved_from_epoch0"]
-    if len(identities) != 1:
-        raise ValueError("results use different evaluation sets")
-    write_json(output / ("summary.json" if split == "val" else "test_summary.json"),
-               dict(version=VERSION, seeds=[0], repeat_uncertainty_estimated=False,
-                    split=split, methods=report))
-
-
-def mining_indices(manifest):
-    """Bounded training-source inspection, chosen before seeing model scores."""
-    groups = {}
-    for index, row in enumerate(manifest["records"]):
-        if row.get("subset") != "train":
-            raise ValueError("hard-example mining must exclude internal checks and validation")
-        key = (row["group"], row.get("scene", row.get("geometry", row.get("world", "206"))))
-        groups.setdefault(key, []).append(index)
-    indices = []
-    for (group, _), rows in sorted(groups.items()):
-        count = {"base": 1, "targeted": 3, "normal_nuscenes": 3, "normal_stu": 31}[group]
-        key = "anomaly" if group == "targeted" else "frame"
-        rows.sort(key=lambda i: (manifest["records"][i][key], manifest["records"][i]["frame"]))
-        positions = [len(rows) // 2] if count == 1 else np.linspace(0, len(rows) - 1, min(count, len(rows))).round().astype(int)
-        indices.extend(rows[int(p)] for p in positions)
-    return sorted(set(indices))
-
-
-@torch.no_grad()
-def mine(model, manifest, checkpoint, output, device, workers=4):
-    """Store both ranking tails as candidates; never modify training supervision."""
-    from collections import Counter
-    if manifest["kind"] != "train":
-        raise ValueError("mining requires training sources")
-    indices = mining_indices(manifest)
-    dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
-                            normal=getattr(model, "normal", None) is not None)
-    loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
-                        pin_memory=device.type == "cuda",
-                        **({"prefetch_factor": 1} if workers else {}),
-                        generator=torch.Generator().manual_seed(0))
-    model.eval()
-    candidates, scans = [], []
-    for number, sample in enumerate(loader, 1):
-        index = int(sample["index"])
-        row = manifest["records"][index]
-        batch = to_device(sample, device)
-        with autocast(device):
-            prediction = model(batch)
-        scores = prediction.float().cpu().numpy()
-        if not np.isfinite(scores).all():
-            raise ValueError("nonfinite mining scores")
-        xyz, labels, slots = sample["xyzi"][:, :3].numpy(), sample["targets"].numpy(), sample["slots"].numpy()
-        summary = dict(index=index, group=row["group"], frame=row["frame"])
-        for label, name in ((0, "high_normal"), (1, "low_anomaly")):
-            selected = np.flatnonzero(labels == label)
-            if not len(selected):
-                continue
-            values = scores[selected]
-            summary[name] = dict(points=len(selected), quantiles=np.quantile(values, [0, .1, .5, .9, 1]).tolist())
-            center = selected[np.argmax(values) if label == 0 else np.argmin(values)]
-            local = selected[np.linalg.norm(xyz[selected] - xyz[center], axis=1) <= .35]
-            candidate = dict(index=index, source=row, kind=name, score=float(scores[center]),
-                             center_slot=int(slots[center]), sensor_xyz=xyz[center].tolist(),
-                             radius_m=.35, slots=slots[local].tolist(), scores=scores[local].tolist(),
-                             patch_median=float(np.median(scores[local])))
-            if row.get("source") == "nuscenes":
-                raw = np.fromfile(row["label"], np.uint8)
-                category = manifest["mapping"][int(raw[slots[center]])]
-                candidate.update(raw_semantic=category["raw"], semantic_name=category["name"])
-            else:
-                original = dataset._source(row["frame"])
-                candidate.update(raw_semantic=int(original.semantic[slots[center]]) if label == 0 else 2,
-                                 world_xyz=(xyz[center] @ original.pose[:3, :3].T + original.pose[:3, 3]).tolist())
-            candidates.append(candidate)
-        scans.append(summary)
-        if number % 50 == 0 or number == len(indices):
-            print(f"training-source inspection {number}/{len(indices)} scans", flush=True)
-        del batch, prediction
-    kept = []
-    for kind in ("high_normal", "low_anomaly"):
-        for group in ("base", "targeted", "normal_nuscenes", "normal_stu"):
-            chosen = []
-            pool = sorted((r for r in candidates if r["kind"] == kind and r["source"]["group"] == group),
-                          key=lambda r: r["score"], reverse=kind == "high_normal")
-            for row in pool:
-                source = row["source"]
-                if kind == "low_anomaly":
-                    same = lambda old: source.get("geometry", source.get("world")) == old["source"].get("geometry", old["source"].get("world"))
-                elif source.get("source") == "nuscenes":
-                    same = lambda old: source["scene"] == old["source"]["scene"]
-                else:
-                    same = lambda old: np.linalg.norm(np.array(row["world_xyz"]) - old["world_xyz"]) < 1.
-                if any(same(old) for old in chosen):
-                    continue
-                chosen.append(row)
-                if len(chosen) == 8:
-                    break
-            kept.extend(chosen)
-    output = Path(output)
-    write_json(output / "candidates.json", dict(checkpoint=str(Path(checkpoint).resolve()),
-        train_manifest=manifest["sha256"], inspected_scans=dict(Counter(r["group"] for r in scans)),
-        score="raw anomaly logit; larger means more anomalous", scans=scans, candidates=kept,
-        scope="Training-source candidates only; no validation threshold, new supervision, or claim of cross-scene anomaly generalization."))
-    print(json.dumps(dict(inspected=len(indices), candidates=dict(Counter(r["kind"] for r in kept)))), flush=True)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
-    for name in ("validate", "test", "infer", "benchmark", "mine", "normal"):
+    for name in ("validate", "test", "infer", "benchmark"):
         command = sub.add_parser(name)
         command.add_argument("--checkpoint", type=Path, required=True)
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("--device", default="cuda")
         if name == "validate":
             command.add_argument("--manifest", type=Path, default=Path("assets/val.json"))
-        if name == "mine":
-            command.add_argument("--manifest", type=Path, default=Path("results/data/train.json"))
-        if name == "normal":
-            command.add_argument("--manifest", type=Path,
-                help="required for earlier field models; class evidence uses its recorded normal cache and rejects this option")
-            command.add_argument("--full-calibration", action="store_true",
-                help="use all normal STU201 points for calibration; preserve learned weights and the original checkpoint")
         if name == "test":
             command.add_argument("--data", type=Path, required=True)
         if name in ("validate", "test"):
             command.add_argument("--record-points", action="store_true",
                 help="retain exact metric and full-return scores with original point identities")
-        if name in ("validate", "test", "mine", "normal"):
+        if name in ("validate", "test"):
             command.add_argument("--workers", type=int, default=4)
         else:
             command.add_argument("--scans", type=Path, nargs="+", required=True)
             if name == "infer":
                 command.add_argument("--semantic-output", action="store_true",
-                    help="also save *.semantic.npy: feature evidence uses its learned STU19 head; earlier frozen support uses nuScenes16; empty slots are -1")
+                    help="also save *.semantic.npy with STU19 classes; empty slots are -1")
             if name == "benchmark":
                 command.add_argument("--warmup", type=int, default=5)
                 command.add_argument("--repeats", type=int, default=20)
-    summary = sub.add_parser("summarize")
-    summary.add_argument("--output", type=Path, required=True)
-    summary.add_argument("--split", choices=("val", "test"), default="val")
     comparison = sub.add_parser("compare", help="paired normal-only variants on the identical official point population")
     comparison.add_argument("--semantic", type=Path, required=True, help="independently trained semantic baseline checkpoint")
     comparison.add_argument("--joint", type=Path, required=True)
@@ -1067,9 +597,6 @@ def main():
     comparison.add_argument("--confidence", type=float, default=.9)
     comparison.add_argument("--exploratory", action="store_true", help="report unmatched training conditions explicitly")
     args = parser.parse_args()
-    if args.action == "summarize":
-        summarize(args.output, args.split)
-        return
     device = torch.device(args.device)
     torch.set_num_threads(2)
     torch.set_num_interop_threads(1)
@@ -1080,31 +607,9 @@ def main():
                 confidence=args.confidence, exploratory=args.exploratory)
         return
     model, saved = load_model(args.checkpoint, device)
-    from .model import NORMAL_VERSION
-    from .normal import SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION
-    if saved.get("version") in (SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION):
-        torch.backends.cuda.matmul.allow_tf32 = False
-    normal_run = saved.get("version") in (NORMAL_VERSION, SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION)
-    if args.action == "infer" and args.semantic_output and not normal_run:
-        parser.error("--semantic-output requires a joint normal-evidence checkpoint")
-    if normal_run and (args.action == "mine" or (args.action == "normal" and saved.get("version") != INSTANCE_VERSION)):
-        parser.error("this action belongs to earlier field or instance models; feature-evidence normal development is recorded during training")
-    if args.action == "normal":
-        if saved.get("version") == INSTANCE_VERSION:
-            if args.manifest is not None:
-                parser.error("instance-support normal diagnostics use the checkpoint's normal cache; do not supply --manifest")
-            result = (calibrate_instance_normal(model, saved, args.checkpoint, args.output, device, args.workers)
-                      if args.full_calibration else evaluate_instance_normal(model.scorer, saved, device))
-        else:
-            if args.manifest is None:
-                parser.error("earlier normal-field diagnostics require --manifest")
-            result = evaluate_normal(model, load_manifest(args.manifest, "train"), device, args.workers)
-        write_json(args.output, dict(checkpoint=str(args.checkpoint.resolve()), **result))
-    elif args.action == "mine":
-        mine(model, load_manifest(args.manifest, "train"), args.checkpoint, args.output, device, args.workers)
-    elif args.action in ("validate", "test"):
+    if args.action in ("validate", "test"):
         if args.action == "test":
-            if not (saved.get("frozen") if normal_run else saved.get("selected") and saved.get("complete")):
+            if not saved.get("frozen"):
                 raise ValueError("test requires a selected checkpoint from a completed fixed budget")
             manifest = make_real_manifest(args.data, partition="test", workers=args.workers)
             if manifest["directory"] == saved["config"].get("val_directory"):
@@ -1121,14 +626,11 @@ def main():
             score_path = args.output.with_suffix(".npy")
         result = evaluate(model, manifest, device, args.workers,
                           score_path=score_path, record_points=args.record_points)
-        metadata = (dict(version=saved["version"], complete=saved.get("frozen", False),
-                         seed=saved["config"]["seed"], mode=saved["mode"], method=saved["mode"],
-                         architecture=saved["config"]["architecture"], score_version=saved["config"]["score_version"],
-                         evaluation_role=saved["config"].get("evaluation", "recorded checkpoint evaluation"),
-                         checkpoint_update=saved.get("stages", {}).get("target", {}).get("selected_update"))
-                    if normal_run else dict(version=saved["version"], complete=saved["complete"], seed=saved["seed"],
-                                            mode=saved["mode"], method=saved["method"], checkpoint_epoch=saved["epoch"],
-                                            checkpoint_update=saved.get("successful_updates")))
+        metadata = dict(version=saved["version"], complete=saved.get("frozen", False),
+                        seed=saved["config"]["seed"], mode=saved["mode"], method=saved["mode"],
+                        architecture=saved["config"]["architecture"], score_version=saved["config"]["score_version"],
+                        evaluation_role=saved["config"].get("evaluation", "recorded checkpoint evaluation"),
+                        checkpoint_update=saved.get("stages", {}).get("target", {}).get("selected_update"))
         write_json(args.output, dict(**metadata, checkpoint=str(args.checkpoint.resolve()), **result))
     elif args.action == "infer":
         from .train import disk_check
