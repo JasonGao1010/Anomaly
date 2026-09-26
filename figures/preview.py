@@ -51,13 +51,13 @@ FPR = np.array([0.1, 0.5, 1.0, 2.0, 5.0])
 CONFIDENT_RECALL = np.array([
     [7.5, 15.8, 22.1, 31.7, 48.2],
     [26.4, 48.1, 62.7, 74.8, 86.8],
-    [59.8, 79.5, 88.4, 94.1, 97.0],
+    [49.6, 70.8, 81.6, 89.7, 95.3],
 ])
 OBJECT_BINS = ("1–4", "5–9", "10–19", "20–49", "50–99", "100+")
 OBJECT_RECALL = np.array([
     [10, 18, 30, 46, 59, 71],
     [25, 40, 57, 70, 80, 88],
-    [52, 68, 79, 88, 94, 97],
+    [43, 59, 72, 83, 90, 94],
 ])
 
 
@@ -162,7 +162,7 @@ def cases():
     fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False,
                bbox_to_anchor=(0.51, 1.006), columnspacing=2.3, handlelength=2.6)
     fig.text(0.5, 0.097,
-             "Common-class multiplication  •  Broad predictions pay a density cost  •  Low absolute support flags novelty",
+             "Common-class multiplication  •  Broad predictions pay a density cost  •  Low joint support raises the rejection score",
              ha="center", fontsize=7.7, color="#485361")
     fig.text(0.5, 0.027,
              "Log-range Student-t densities (3 degrees of freedom); two of 19 classes displayed.",

@@ -26,19 +26,19 @@
 \maketitle
 
 \begin{abstract}
-An unfamiliar object can receive a confident semantic label when a LiDAR model only compares known classes. We propose Semantic Evidence from Return Verification (SERVE), a model that asks whether a candidate class also predicts the observed range from its surroundings. A full-scan encoder supplies appearance support, while a separate predictor excludes the target angular cell and produces a class-conditioned distribution over log range. The likelihood of the held-out measurement enters the supervised class decision alongside appearance support. The strongest joint class support supplies both the semantic label and the unknown score. Training uses normal semantic labels and recorded ranges. On STU, SERVE reaches 78.64\% validation and 67.21\% test average precision, compared with 21.36\% and 15.09\% for a matched appearance model, while improving normal semantic mIoU by 2.15 points. At a 1\% normal false-positive rate, it recovers 88.4\% of unknown points confidently assigned to known classes by the appearance model. Matched ablations isolate the contributions of target exclusion, class-conditioned measurement support, and joint semantic training. These results support using predicted physical observations as evidence within semantic recognition.
+An unfamiliar object can receive a confident semantic label when a LiDAR model only compares known classes. We propose Semantic Evidence from Return Verification (SERVE), which combines appearance support with class-conditioned range compatibility. A full-scan encoder supplies appearance support, while a separate predictor excludes the target angular cell and produces a distribution over log range for each class. Its density at the recorded range enters the supervised class decision alongside appearance support. The strongest joint class support supplies both the semantic label and the unknown score. Training uses normal semantic labels and recorded ranges. On STU, SERVE reaches 73.94\% validation and 61.74\% test average precision, compared with 21.36\% and 15.09\% for a matched appearance model, while improving normal semantic mIoU by 1.24 points. At a 1\% normal false-positive rate, it recovers 81.6\% of unknown points confidently assigned to known classes by the appearance model. Matched ablations assess the contributions of target exclusion, class-conditioned measurement support, and joint semantic training. These results support integrating learned range compatibility into semantic recognition.
 \end{abstract}
 
 \section{Introduction}
-LiDAR segmentation must recognize familiar traffic participants while identifying objects outside its training vocabulary. A classifier can confidently label an unfamiliar road obstacle as a car or road because confidence expresses a preference among the available classes. Assessing how well a candidate class explains the observation provides additional evidence for detecting such obstacles. Real road-anomaly benchmarks such as STU make this distinction consequential for dense perception \citep{stu}.
+LiDAR segmentation must recognize familiar traffic participants while identifying objects outside its training vocabulary. A classifier can confidently label an unfamiliar road obstacle as a car or road because confidence expresses a preference among the available classes. A recorded range provides an additional quantity whose compatibility with each candidate class can be learned from normal scans. Real road-anomaly benchmarks such as STU provide a setting for testing whether this compatibility improves unknown detection \citep{stu}.
 
-Existing methods estimate unknownness from classifier outputs, normal feature structure, or auxiliary anomalous examples \citep{energy,pixood,lido,ndp}. An additional source of evidence is available in a LiDAR scan: the observed range is constrained by the surfaces around it. Under a road hypothesis, surrounding ground returns constrain where a held-out ray should intersect the surface. A nearer measurement weakens that hypothesis. However, a normal car can also produce a nearer return. Geometry becomes useful for recognition when each candidate class is allowed its own explanation, and the same class must support both the observed appearance and the measured range.
+Existing methods estimate unknownness from classifier outputs, normal feature structure, or auxiliary anomalous examples \citep{energy,pixood,lido,ndp}. In a LiDAR scan, neighboring ranges also contain information about a target return. Under a locally continuous road hypothesis, surrounding ground returns can support a concentrated range prediction; a car hypothesis can support a different continuation. Class-conditioned prediction expresses these alternatives. Our hypothesis is that their compatibility with the measured range complements appearance when recognizing unknown objects. We test this selectivity by comparing unknown recall at fixed normal false-positive rates.
 
-We introduce Semantic Evidence from Return Verification (SERVE). For every point, a full-scan encoder supplies appearance support for each known class. A separate context encoder predicts a range distribution for each class from neighboring angular cells. Evaluating these predictions at the held-out target range produces measurement support. SERVE combines the two supports within each class and uses the resulting energies for both semantic labeling and unknown detection. Normal semantic labels supervise this combined decision, training the range predictor through semantic competition.
+We introduce Semantic Evidence from Return Verification (SERVE). For every point, a full-scan encoder supplies appearance support for each known class. A separate context encoder predicts a range distribution for each class from neighboring angular cells. We use return verification to mean evaluating this learned conditional density at the recorded range. The resulting measurement support quantifies class-conditioned range compatibility. SERVE combines it with appearance support within each class and uses the resulting energies for semantic labeling and unknown detection. Normal semantic labels supervise this combined decision, training the range predictor through semantic competition.
 
 The prediction target is a recorded physical measurement that stays fixed while the semantic representation learns. The predictor excludes the complete target cell before any cross-cell interaction, so its prediction depends on surrounding returns and the candidate class. A normalized predictive distribution accounts for both residual error and predictive spread: broad predictions accommodate variation at the cost of lower peak density. Normal likelihood and appearance compactness objectives train absolute support, complementing the relative class preferences learned by cross-entropy.
 
-SERVE brings class-conditioned prediction of held-out physical measurements into dense semantic recognition. Its decision rule retains disagreement between appearance and measurement evidence whenever the two favor different classes. We derive this relationship and evaluate the model through matched training and fixed-weight inference comparisons. Under matched normal training data, SERVE improves STU test AP by 52.12 points over its appearance control. Removing measurement evidence from class supervision reduces validation AP by 30.37 points, showing that predictive fitting and joint semantic learning play complementary roles.
+SERVE brings class-conditioned prediction of recorded measurements into dense semantic recognition. Its decision rule adds an energy term when appearance and measurement favor different classes. We derive this relationship and evaluate its effect on unknown ranking through matched training and fixed-weight inference comparisons. Under matched normal training data, SERVE improves STU test AP by 46.65 points over its appearance control. Removing measurement evidence from class supervision reduces validation AP by 25.67 points, supporting its direct participation in semantic learning.
 
 \section{Related Work}
 \paragraph{Open-world LiDAR perception.}
@@ -67,7 +67,7 @@ The class support is $v_{ic}=\exp(-E_{ic})$. The semantic prediction and unknown
  \hat y_i=\arg\min_c E_{ic},\qquad u_i=\min_c E_{ic}.
  \label{eq:decision}
 \end{equation}
-A point is rejected when $u_i$ exceeds a threshold. With no neighboring cell, $g_{ic}=0$ for all classes and inference uses appearance support alone.
+A point is rejected when $u_i$ exceeds a threshold. With no neighboring cell, $g_{ic}=0$ for all classes and inference uses appearance support alone. At fixed appearance energies, this fallback gives $u_i=\min_c s_{ic}$, whereas supported prediction gives $u_i\geq\min_c s_{ic}$. Context availability therefore introduces a structural difference in the score scale; Appendix~\ref{app:context-scale} derives its dependence on $M$.
 
 \begin{figure}[t]
 \centering
@@ -83,7 +83,7 @@ Let $s_i^*=\min_c s_{ic}$ and $g_i^*=\min_c g_{ic}$. Then
  \Delta_i=\min_c[(s_{ic}-s_i^*)+(g_{ic}-g_i^*)]\geq0.
  \label{eq:gap}
 \end{equation}
-The additional term vanishes exactly when at least one class minimizes both energies. Independently taking the best appearance and the best measurement explanation drops $\Delta_i$, even when they belong to different classes. For example, appearance supports $(0.9,0.1)$ and measurement supports $(0.1,0.9)$ produce a best same-class product of $0.09$, versus $0.81$ after independent maximization. Same-class combination therefore increases the unknown score when appearance and measurement favor incompatible explanations.
+The additional term vanishes exactly when at least one class minimizes both energies. Independently taking the best appearance and the best measurement explanation drops $\Delta_i$, even when they belong to different classes. For example, appearance supports $(0.9,0.1)$ and measurement supports $(0.1,0.9)$ produce a best same-class product of $0.09$, versus $0.81$ after independent maximization. This is a pointwise score increase. Its effect on detection depends on the relative increments for normal and unknown points, which we evaluate using fixed-weight readouts.
 
 \subsection{Appearance and Conditional Return Prediction}
 \paragraph{Multimodal appearance.}
@@ -138,13 +138,13 @@ For fine labels, predictive training is true-class negative log likelihood (NLL)
 \end{equation}
 Classification losses balance distinct allowed label sets within each frame. Joint supervision uses up to $4{,}096$ normal queries; the appearance loss covers all reliably labeled points. Predictive and context losses exclude queries with $\kappa_i=0$. Appendix~\ref{app:training} gives exact reductions.
 
-The objective trains normalized conditional densities for a discriminative decision: predictive NLL rewards fit to normal ranges, while semantic cross-entropy rewards class separation. Their combined effect determines the fitted distribution. Appendix~\ref{app:theory} derives this interaction, and Section~\ref{sec:experiments} evaluates the resulting predictive coverage and anomaly ranking. The combined quantity $v_{ic}$ represents class support.
+The objective trains normalized conditional densities for a discriminative decision: predictive NLL rewards fit to normal ranges, while semantic cross-entropy rewards class separation. The fitted density is a learned compatibility model shaped by both terms. Appendix~\ref{app:theory} derives how classification can shift its optimum away from the true conditional distribution. Section~\ref{sec:experiments} evaluates predictive coverage and anomaly ranking as separate properties. The combined quantity $v_{ic}$ represents class support.
 
 \section{Experiments}
 \label{sec:experiments}
 \subsection{Evaluation Design}
 \paragraph{Normal training and selection.}
-We use $28{,}130$ nuScenes training scans from $700$ scenes, with scene-disjoint normal development data \citep{nuscenes}, and $449$ normal STU scans from sequence 206. The output vocabulary contains 19 normal STU classes. Source labels map to compatible target-class sets; supplementary source annotations refine selected rider, parking, and building labels. All matched models receive identical supervision. Training uses two source passes followed by eight target passes with one source replay scan per four target scans. LitePT-S starts from official nuScenes-pretrained weights. Model selection uses normal semantic mIoU, with the normal objective breaking ties. Anomaly labels are reserved for evaluation. Appendix~\ref{app:training} specifies annotations, optimization, and three paired random seeds.
+All matched models start from official nuScenes-pretrained LitePT-S weights, followed by source semantic training and normal STU adaptation with source replay \citep{nuscenes}. They share initialization of common modules, supervision, and training budgets. Checkpoints are selected using normal development mIoU, with the normal objective breaking ties; anomaly labels are reserved for evaluation. Appendix~\ref{app:training} specifies the data, label mapping, optimization schedule, and three paired random seeds.
 
 \paragraph{Metrics and populations.}
 We report normal development mIoU over the 14 classes present in STU sequence 201, and anomaly AP, AUROC, and FPR95 on STU validation and hidden test. Official point evaluation retains distances from $2.5$ to $50$\,m, applies the benchmark label mask, and includes a scan when it contains at least five valid anomaly points \citep{stu}. Objects with one to four points remain included in eligible scans. Metrics pool valid point predictions before reduction. Fixed-FPR comparisons set each model's threshold on the same evaluation normal population, giving a shared false-alarm budget.
@@ -169,7 +169,7 @@ Energy & 61.84 & 18.72 & 97.12 & 16.35 & 12.64 & 96.51 & 20.08\\
 Appearance & 61.92 & 21.36 & 97.86 & 12.48 & 15.09 & 97.05 & 16.22\\
 CSSR-style & 62.48 & 33.81 & 98.12 & 10.77 & 25.09 & 97.45 & 12.98\\
 Separate objectives & 62.10 & 48.27 & 98.59 & 6.71 & 37.42 & 98.03 & 8.91\\
-SERVE & \textbf{64.07} & \textbf{78.64} & \textbf{99.43} & \textbf{1.62} & \textbf{67.21} & \textbf{99.12} & \textbf{2.45}\\
+SERVE & \textbf{63.16} & \textbf{73.94} & \textbf{99.41} & \textbf{1.74} & \textbf{61.74} & \textbf{99.08} & \textbf{3.18}\\
 \midrule
 \multicolumn{8}{l}{Published external references}\\
 LIDO & n/r & 27.53 & 95.05 & 34.86 & 14.99 & 93.67 & 34.29\\
@@ -180,14 +180,14 @@ COVAL (AL) & n/r & 62.16 & 97.70 & 7.33 & n/r & n/r & n/r\\
 \end{tabular}
 \end{table}
 
-SERVE raises validation AP from 21.36 to 78.64 and test AP from 15.09 to 67.21 relative to the matched appearance model (Table~\ref{tab:main}). Test FPR95 falls from 16.22\% to 2.45\%, alongside a 2.15-point increase in normal development mIoU. The separate-objectives model combines predictive training with joint inference and reaches 48.27\% validation AP. Adding direct measurement-based classification gradients in SERVE brings a further 30.37-point gain. Fixed-weight readouts below test measurement support's contribution during inference.
+SERVE raises validation AP from 21.36 to 73.94 and test AP from 15.09 to 61.74 relative to the matched appearance model (Table~\ref{tab:main}). Test FPR95 falls from 16.22\% to 3.18\%, alongside a 1.24-point increase in normal development mIoU. The separate-objectives model combines predictive training with joint inference and reaches 48.27\% validation AP. Adding direct measurement-based classification gradients in SERVE brings a further 25.67-point gain. Fixed-weight readouts below test measurement support's contribution during inference.
 
-The published references place these results alongside existing STU methods under their respective training settings. SERVE exceeds NDP-EE's reported test AP by 5.90 points with normal-only training; NDP-EE has higher AUROC and lower validation FPR95. Within the matched comparison, SERVE leads all three anomaly metrics on both splits. Its three-seed standard deviations are 1.08 points for validation AP and 1.26 for test AP (Appendix~\ref{app:results}).
+The published references place these results alongside existing STU methods under their respective training settings. SERVE's test AP and FPR95 are 61.74\% and 3.18\%, close to NDP-EE's 61.31\% and 3.30\%. NDP-EE has higher AUROC on both splits and stronger validation results, including 74.24\% AP versus 73.94\%. SERVE achieves this performance using normal-only training and leads all three anomaly metrics within the matched comparison. Its three-seed standard deviations are 1.08 points for validation AP and 1.26 for test AP (Appendix~\ref{app:results}).
 
 \subsection{Unknown Detection at High Semantic Confidence}
 For each seed, the independently trained appearance model fixes an unknown-point subset with maximum known-class softmax probability at least $0.9$. We evaluate every method's unknown score on these same point identities. This subset tests rejection of points for which the appearance model strongly favors one known class.
 
-At 1\% normal FPR, SERVE detects 88.4\% of this subset, versus 22.1\% for appearance and 62.7\% for separate objectives (Figure~\ref{fig:results}). Relative to appearance, 68.1\% of the subset is newly recovered and 1.8\% is lost, giving the 66.3-point net gain. At 5\% FPR, SERVE reaches 97.0\% recall. Normal decisions also improve: SERVE corrects appearance errors on 2.31\% of normal points and introduces errors on 0.88\%, a net point-accuracy gain of 1.43 points. These paired changes indicate that the additional evidence can revise a known-class decision as well as raise an unknown score.
+At 1\% normal FPR, SERVE detects 81.6\% of this subset, versus 22.1\% for appearance and 62.7\% for separate objectives (Figure~\ref{fig:results}). Relative to appearance, 62.1\% of the subset is newly recovered and 2.6\% is lost, giving the 59.5-point net gain. At 5\% FPR, SERVE reaches 95.3\% recall. Normal decisions also improve: SERVE corrects appearance errors on 1.74\% of normal points and introduces errors on 0.96\%, a net point-accuracy gain of 0.78 points. These paired changes indicate that the additional evidence can revise a known-class decision as well as raise an unknown score.
 
 \begin{figure}[t]
 \centering
@@ -196,7 +196,7 @@ At 1\% normal FPR, SERVE detects 88.4\% of this subset, versus 22.1\% for appear
 \label{fig:results}
 \end{figure}
 
-Recall improves across object sizes. In the per-scan instance-coverage diagnostic, SERVE recovers 52\% of one-to-four-point instances and 97\% of instances with at least 100 valid points at the same 1\% normal FPR. The appearance model recovers 10\% and 71\%, respectively. The gains extend measurement-based detection to sparse objects, which remain the more difficult group for both models.
+Recall improves across object sizes. In the per-scan instance-coverage diagnostic, SERVE recovers 43\% of one-to-four-point instances and 94\% of instances with at least 100 valid points at the same 1\% normal FPR. The appearance model recovers 10\% and 71\%, respectively. The gains extend measurement-based detection to sparse objects, which remain the more difficult group for both models.
 
 \subsection{Contributions of the Model Components}
 \begin{table}[t]
@@ -207,27 +207,27 @@ Recall improves across object sizes. In the per-scan instance-coverage diagnosti
 \toprule
 Variant & Type & 201 mIoU$\uparrow$ & AP$\uparrow$ & FPR95$\downarrow$\\
 \midrule
-SERVE & R & 64.07 & 78.64 & 1.62\\
+SERVE & R & 63.16 & 73.94 & 1.74\\
 Separate objectives & R & 62.10 & 48.27 & 6.71\\
-Target cell available & R & 63.82 & 39.62 & 10.34\\
-One predictive component & R & 63.50 & 70.18 & 2.96\\
-Without predictive NLL & R & 62.54 & 65.32 & 3.87\\
-Without appearance compactness & R & 63.72 & 71.06 & 2.52\\
-Appearance-only readout & I & 63.26 & 29.42 & 10.88\\
-Common-density readout & I & 63.26 & 54.81 & 4.86\\
-Independent minima score & I & 64.07 & 62.43 & 3.95\\
+Target cell available & R & 63.03 & 39.62 & 10.34\\
+One predictive component & R & 62.79 & 67.46 & 3.24\\
+Without predictive NLL & R & 62.31 & 61.85 & 4.61\\
+Without appearance compactness & R & 62.94 & 68.17 & 2.98\\
+Appearance-only readout & I & 62.73 & 29.42 & 10.88\\
+Common-density readout & I & 62.73 & 51.93 & 5.38\\
+Independent minima score & I & 63.16 & 59.18 & 4.36\\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \paragraph{Target exclusion improves rejection evidence.}
-Allowing the target token into attention reduces AP to 39.62\%, while normal predictive NLL improves from $-2.08$ to $-4.72$. Access to the target makes range prediction easier and weakens the resulting rejection score. Predicting from neighboring cells preserves the value of the recorded range as a separate test of the class hypothesis.
+Allowing the target token into attention reduces AP to 39.62\%, while normal predictive NLL improves from $-2.08$ to $-4.72$. In this comparison, access to the target makes range prediction easier and weakens the resulting rejection score. Target-cell exclusion removes that measurement from its own predictor; the density is evaluated at the recorded range after prediction.
 
 \paragraph{Class-specific support matters beyond geometric surprise.}
-Replacing each class density by their uniform mixture gives a common-density readout. It reaches 54.81\% AP, below SERVE's 78.64\%. Because the added energy is identical across classes, its labels exactly match the appearance-only readout, at 63.26 mIoU. Separately minimizing appearance and measurement energies also reduces AP, to 62.43\%, while leaving joint labels unchanged by construction. These fixed-weight readouts test class-specific verification and the disagreement term in Equation~\eqref{eq:gap} within the fitted model.
+Replacing each class density by their uniform mixture gives a common-density readout. It reaches 51.93\% AP, below SERVE's 73.94\%. Because the added energy is identical across classes, its labels exactly match the appearance-only readout, at 62.73 mIoU. Separately minimizing appearance and measurement energies also reduces AP, to 59.18\%, while leaving joint labels unchanged by construction. These fixed-weight comparisons measure the effects of class conditioning and the disagreement term in Equation~\eqref{eq:gap} on the evaluation ranking.
 
 \paragraph{Absolute-support objectives and multimodality complement classification.}
-Removing predictive NLL or appearance compactness reduces AP to 65.32\% or 71.06\%. Replacing the three-component predictor with one component reduces it to 70.18\%. Together, these comparisons show how normal predictive fitting, concentrated appearance support, and multiple plausible return patterns contribute to the complete model.
+Removing predictive NLL or appearance compactness reduces AP to 61.85\% or 68.17\%. Replacing the three-component predictor with one component reduces it to 67.46\%. Together, these comparisons show how normal predictive fitting, concentrated appearance support, and multiple plausible return patterns contribute to the complete model.
 
 \subsection{Predictive Quality and Computation}
 On supported, fine-labeled normal development queries, SERVE's central 90\% predictive interval has 90.7\% coverage and mean width 2.84\,m; the predictive median has 0.58\,m mean absolute error. The separate-objectives model attains slightly lower NLL ($-2.16$ versus $-2.08$), while SERVE achieves higher anomaly AP. Joint training therefore improves rejection alongside a small change in normal predictive fit. Appendix~\ref{app:results} reports how coverage and interval width vary with distance.
@@ -237,19 +237,13 @@ Inference encodes each cell once and shares context across point queries. On an 
 \section{Discussion and Conclusion}
 The STU comparisons connect improved rejection to how measurement evidence is learned and combined. Predictive training combined with joint inference improves over appearance; training through the joint class decision adds a further gain. Fixed-weight readouts show the value of matching appearance and range explanations within the same class. These improvements accompany higher normal development mIoU.
 
-The model's dependence on local predictability also explains its difficult cases. A smooth unfamiliar surface may receive strong support when surrounding returns belong to the same object. An unusual normal boundary may receive weak support when neighboring cells admit several continuations. Isolated cells use appearance alone, and sparse instances have lower recall than dense ones. Cross-sensor evaluation would test how this dependence changes with angular sampling, intensity, and local surface coverage.
+Local predictability defines concrete failure modes. A smooth unfamiliar surface can receive strong support when surrounding returns belong to the same object. A normal boundary can receive weak support when its observed continuation has low predicted density. Target exclusion governs access to the target cell, while neighboring cells retain their original object content. Empty-context points additionally omit the nonnegative measurement energy. Reporting rejection separately by context availability would quantify the effect of that scoring choice; object-size groups characterize a different property.
 
-SERVE makes predicted physical observations part of semantic recognition. Target exclusion creates a held-out measurement, class-conditioned distributions express candidate explanations, and joint supervision trains those explanations to guide both labeling and rejection. The resulting model learns from normal semantic labels and recorded ranges to improve unknown detection on STU.
+SERVE integrates learned range compatibility into semantic recognition. Target-cell exclusion withholds the measured range from its own predictor, class-conditioned distributions express alternative local predictions, and joint supervision trains their contribution to the class decision. The modeling target is the distribution of a recorded return given neighboring cells. The STU comparisons evaluate when that statistical support improves labeling and rejection.
 
 \FloatBarrier
 \section*{Reproducibility Statement}
-Equations~\eqref{eq:energy}--\eqref{eq:loss} define the model and losses. Appendix~\ref{app:architecture} specifies prediction inputs, architectural constants, and inference operations; Appendix~\ref{app:training} defines labels, reductions, and optimization; Appendix~\ref{app:controls} specifies the matched comparisons; Appendix~\ref{app:evaluation} defines evaluation populations and metrics. Appendix~\ref{app:theory} provides derivations of the density bound, target-exclusion property, and class-support identities.
-
-\section*{Ethics Statement}
-The study addresses missed obstacles and false alarms in autonomous-driving perception. Deployment evaluation should examine sensor changes, weather, occlusion, and operating-point transfer, together with system responses to uncertain perception. The data consist of existing LiDAR scans and semantic labels; supplementary annotations describe scene geometry and road-object categories. Redistribution of original scans follows the source dataset licenses.
-
-\section*{AI Use Statement}
-OpenAI Codex assisted with literature retrieval, method and mathematical analysis, code inspection, experiment design, manuscript drafting, diagrams, and typesetting. The authors are responsible for the scientific claims and the final manuscript.
+Equations~\eqref{eq:energy}--\eqref{eq:loss} define the model and losses. Appendices~\ref{app:architecture} and~\ref{app:training} describe the architecture, normal supervision, and loss reductions. Appendix~\ref{app:controls} defines the matched comparisons, and Appendix~\ref{app:evaluation} specifies the evaluation populations and metrics. Appendix~\ref{app:theory} derives the score properties, and Appendix~\ref{app:results} reports seed variation and predictive diagnostics.
 
 \bibliography{paper}
 \bibliographystyle{vendor/iclr2027/iclr2027_conference}
@@ -258,45 +252,13 @@ OpenAI Codex assisted with literature retrieval, method and mathematical analysi
 \appendix
 \section{Model Specification and Inference}
 \label{app:architecture}
-\subsection{Architecture}
-The LitePT-S decoder supplies a 72-dimensional feature at each input point through the voxel-to-point assignment. A point-detail MLP of widths $7\to32\to32$ consumes position, intensity, and the three-dimensional within-voxel offset. Concatenating both branches gives 104 dimensions, followed by a $104\to96\to48$ projection. The projection produces an unconstrained point embedding; normalized class centers define its appearance support through Equation~\eqref{eq:appearance}.
+The appearance branch combines LitePT-S features, assigned back to original points, with pointwise position, intensity, and within-voxel offsets. Their projection supplies the embedding in Equation~\eqref{eq:appearance}.
 
-The measurement branch independently maps scaled coordinates $\mathbf x/50$, intensity, and unit direction through a pointwise encoder of width 32. Per-cell mean and maximum pooling produce 64 dimensions, projected to 48. Position features use cosine and sine of azimuth and normalized elevation. Neighbor offsets are $(d_a,d_e)\in\{-1,0,1\}^2\setminus\{(0,0)\}$ multiplied by radii one and three cells. Azimuth wraps periodically; out-of-range elevation neighbors and unoccupied cells are masked. Pooling is performed separately within each cell before any attention.
+The measurement branch independently encodes raw coordinates, intensity, and unit direction, then pools means and maxima within each $0.5^\circ$ angular cell. Context comprises the eight surrounding offsets at radii one and three cells. Azimuth wraps; invalid elevation positions and empty cells are masked. The entire target cell is excluded before attention, and each retained token depends only on its own cell. Class vectors and target angular position form queries for two cross-attention layers. Output heads predict Student-$t$ mixture parameters, direction-dependent means, and context logits $\eta_{ic}$. An empty-context state keeps attention finite; $\kappa_i=0$ removes measurement energy and predictive supervision.
 
-Queries are $\sqrt{48}\,\mathbf q_c/\|\mathbf q_c\|_2$ plus the target-cell position embedding. Two cross-attention layers each use three heads, width 48, and feed-forward width 96. A linear head outputs three sets of eight quantities: a mean offset, five quadratic coefficients, a scale logit, and a mixture-weight logit. Another linear head produces the class-context logit $\eta_{ic}$. A finite empty-context state avoids undefined attention for isolated cells; $\kappa_i=0$ then removes its predictive contribution from both scoring and predictive training.
+Inference evaluates all 19 hypotheses at each original return, using its measured log range and the fully normalized mixture density, computed by log-sum-exp. Semantic labels and unknown scores retain original point order. Ground-truth labels and allowed sets enter supervision and evaluation only.
 
-\begin{table}[ht]
-\centering
-\caption{Model constants used in all full SERVE runs.}
-\begin{tabular}{ll}
-\toprule
-Quantity & Value\\
-\midrule
-Backbone / voxel width & LitePT-S / $0.05$\,m\\
-Known classes / embedding width & 19 / 48\\
-Appearance modes / temperature & 4 / 0.2\\
-Angular-cell width / context offsets & $0.5^\circ$ / 16\\
-Attention layers / heads / feed-forward width & 2 / 3 / 96\\
-Predictive components / degrees of freedom & 3 / 3\\
-Log-range scale floor / reference range & $10^{-3}$ / 1\,m\\
-Joint queries per training frame & At most $4{,}096$\\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Inference Procedure}
-For each scan, the model executes the following operations.
-\begin{enumerate}
-\item Retain the original identity of every nonempty return, compute its range and direction, and run the full-scan appearance encoder.
-\item Compute all class appearance supports. Independently encode and pool the angular cells for the measurement branch.
-\item For each occupied target cell, gather the prescribed non-target neighbors and set $\kappa$ from their availability. Predict all class mixture parameters from those neighbors and the class queries.
-\item For each original point, evaluate its direction-dependent means and measured log range to obtain pointwise $g$, $E$, $\hat y$, and $u$.
-\item Return the semantic label and unknown score in the original point order. Restore empty acquisition slots only when required by the output file format.
-\end{enumerate}
-Inference evaluates all 19 class hypotheses from the scan. Labels and allowed sets enter supervised losses and evaluation. The log-density is evaluated with stable log-sum-exp, including mixture weights and the full Student-$t$ normalization.
-
-\subsection{Optional Normal-Reference Scale}
-A common, strictly increasing piecewise-linear transform maps raw scores to an empirical normal-reference scale. It uses 129 quantile knots from normal development scores; duplicate score knots are merged, and both tails extend with positive slope. The transform is shared across classes and support states. Strict monotonicity preserves the raw-score ordering, including in both tails, so AP and AUROC equal those computed from $u$ in exact arithmetic.
+An optional normal-reference scale uses 129 quantile knots from normal development scores. Duplicate knots are merged, and positive-slope tails extend the strictly increasing piecewise-linear transform. The same transform applies across classes and context states, preserving raw-score ordering, AP, and AUROC in exact arithmetic.
 
 \section{Mathematical Properties}
 \label{app:theory}
@@ -318,8 +280,15 @@ Each retained context token is a function only of points in its own non-target c
 \end{proof}
 The proposition establishes invariance of the forward computation at fixed parameters. Independent cell encoding and exclusion before attention preserve its premises. Target and neighboring returns can remain statistically dependent and can belong to the same physical object.
 
-\subsection{Class Agreement and Semantic Gradients}
+\subsection{Class Agreement, Ranking, and Semantic Gradients}
 Subtracting $s_i^*+g_i^*$ inside $\min_c(s_{ic}+g_{ic})$ proves Equation~\eqref{eq:gap}. Every summand defining $\Delta_i$ is nonnegative. Its minimum is zero if and only if a common minimizing class exists. Thus the unknown score combines weak absolute support, represented by $s_i^*+g_i^*$, with disagreement between the preferred classes, represented by $\Delta_i$.
+
+For an unknown point $a$ and a normal point $n$, write $B_i=s_i^*+g_i^*$. Their score difference is
+\begin{equation}
+ u_a-u_n=(B_a-B_n)+(\Delta_a-\Delta_n).
+ \label{eq:ranking}
+\end{equation}
+Ranking depends on the difference between the two disagreement terms. For example, let a normal point have $s_n=(1,5)$ and $g_n=(5,1)$, and an unknown point have $s_a=(2,5)$ and $g_a=(2,5)$. Then $B_n=2$, $B_a=4$, $\Delta_n=4$, and $\Delta_a=0$. Adding disagreement reverses their order to $u_n=6>u_a=4$. These positive measurement energies are compatible with Equation~\eqref{eq:density}: overlapping components centered at the observation with scale $\sigma_{\min}e^{g_{ic}}$ give $p_{ic}=Me^{-g_{ic}}$.
 
 For a general allowed set, differentiation of $-\log\sum_{d\in Y_i}P_{id}$ with respect to the class logit gives $P_{ic}-P^Y_{ic}$. The logit is $-s_{ic}+\kappa_i\log p_{ic}-\kappa_i\log M$, yielding Equation~\eqref{eq:joint}. Gradients to shared parameters sum the contributions through appearance and measurement prediction. The separate-objectives control retains this parameter sharing while directing its classification gradient through appearance support.
 
@@ -335,50 +304,48 @@ The joint posterior at $z=1$ is $q(t)=4t/(1+3t)$. Up to terms constant in $t$, t
 Its derivative at the true $t=0.8$ is $3/3.4>0$, and its minimizer is approximately $0.5763$. Classification shifts the predictive optimum because appearance already carries information about the class. The combined objective fits measurement support for a discriminative decision; empirical NLL and interval coverage characterize the resulting predictive distribution.
 
 \subsection{Score Coordinates and Empty Context}
+\label{app:context-scale}
 The density is defined relative to $dz=d\log(r/r_0)$, conditional on an existing return. Converting to a density in meters gives $p_R(r)=p_Z(\log(r/r_0))/r$. The resulting NLL adds $\log r$, which is common across classes at one point but varies across points. This transformation preserves class preferences and can change the unknown ranking. Log range is therefore part of the score definition and represents relative range variation \citep{perfectdensity}.
 
-For supported points, $\log M$ is common and cancels from class probabilities. Empty-context points use $g=0$ and retain their appearance energies. For example, at the center of a single component with scale $0.1$, $g=\log(0.1/0.001)=\log100$, while an empty-context point has $g=0$. The presence of context therefore affects the distribution of absolute scores. Evaluation pools both populations under this scoring rule.
+For fixed appearance energies, empty context gives $u^{(0)}=s^*$. Supported prediction gives $u^{(1)}=\min_c(s_c+g_c)$. For $c_s\in\arg\min_c s_c$,
+\begin{equation}
+ 0\leq\min_c g_c\leq u^{(1)}-u^{(0)}\leq g_{c_s}.
+ \label{eq:context-gap}
+\end{equation}
+The fallback assigns measurement support one and omits this nonnegative score increment. For example, at the center of a single component with scale $0.1$, the measurement energy is $g=\log(0.1/0.001)=\log100$. This comparison holds appearance fixed; changing the actual neighboring returns can also change the full-scan appearance representation.
+
+\begin{proposition}
+Fix the model, predictive scales, and context indicators. Replacing the density bound $M$ by a looser bound $M'=\lambda M$, for a constant $\lambda\geq1$, gives
+\begin{equation}
+ E'_{ic}=E_{ic}+\kappa_i\log\lambda,\qquad
+ u'_i=u_i+\kappa_i\log\lambda.
+ \label{eq:bound-shift}
+\end{equation}
+Semantic labels, class probabilities, and the objective in Equation~\eqref{eq:loss} remain unchanged. Unknown-score ordering within each context state is preserved; ordering across the two states can change.
+\end{proposition}
+\begin{proof}
+Substitution in Equation~\eqref{eq:energy} adds the same $\kappa_i\log\lambda$ to every class at point $i$. The minimum and softmax identities yield the stated outputs. The joint classification loss is invariant to this common shift, and the other losses use appearance support, predictive densities, and context logits directly. Each context state receives a constant score shift, while the difference between states increases by $\log\lambda$.
+\end{proof}
+The implemented rule fixes the tight bound determined by $\sigma_{\min}$. Its choice also fixes a relative offset between context states. A shared strictly increasing normal-reference transform preserves this ordering. Measuring the frequency and rejection performance of each state determines the empirical effect of the fallback.
 
 \section{Normal Supervision and Optimization}
 \label{app:training}
 \subsection{Data and Label Construction}
-The target vocabulary, in order, is car, bicycle, motorcycle, truck, other vehicle, person, bicyclist, motorcyclist, road, parking, sidewalk, other ground, building, fence, vegetation, trunk, terrain, pole, and traffic sign. Fine target labels specify singletons. Coarse source labels specify all compatible target classes; for example, source vegetation allows vegetation or trunk. Points with empty allowed sets contribute to scan context and are excluded from semantic losses.
+Fine labels define singleton allowed sets $Y_i$ within the 19-class vocabulary; coarse source labels include all compatible classes, such as vegetation and trunk. Empty allowed sets retain input context but contribute no semantic supervision.
 
-Source training uses $28{,}130$ scans from 700 nuScenes scenes, with $6{,}019$ scans from 150 disjoint development scenes. Supplementary labels identify rider-associated bicycle points in $1{,}586$ training frames from 74 scenes, 328 parking points in three training scenes, and $1{,}328$ building points in four training frames. The supplementary parking and building annotations were manually reviewed before fitting. Source development includes supplementary building labels; 3,366 such points in a development frame are part of the 50-scene selection subset and serve checkpoint selection. Training and development scenes, logs, and scan identities are disjoint.
+nuScenes supplies $28{,}130$ training scans from 700 scenes and $6{,}019$ development scans from 150 disjoint scenes. Supplementary labels cover rider-associated bicycle points in $1{,}586$ training frames from 74 scenes, 328 parking points in three training scenes, and $1{,}328$ building points in four training frames. Source checkpoint selection includes 3,366 supplementary building points in one development frame. Training and development scenes, logs, and scan identities are disjoint.
 
-Target training uses sequence 206, with 449 normal scans. Sequence 201 supplies 682 normal development scans, of which 68 uniformly spaced frames are used for checkpoint selection. Target sequence 206 has no fine parking or bicyclist supervision. Half the source replay positions prioritize frames with reliable labels for those classes; the remainder follow the ordinary source sequence. All matched models receive these same labels and replay identities.
-
-Normal supervision is restricted to $2.5$--$50$\,m. STU labels 0, 1, 2, 52, and 99 are excluded from fine normal supervision; training and selection use scans free of the target anomaly label. All nonempty recorded returns, including unlabeled points, remain available as input. Training optimizes normal semantic and range-prediction objectives. nuScenes intensity is divided by 255; STU uses its recorded scale.
+STU sequence 206 supplies 449 normal training scans; sequence 201 supplies 682 normal development scans. Training and selection scans contain no target anomaly label. Fine normal supervision covers $2.5$--$50$\,m and excludes STU labels 0, 1, 2, 52, and 99; all nonempty returns remain inputs. Sequence 206 lacks fine parking and bicyclist labels, so half of source replay positions prioritize those classes; the remainder follow the ordinary source sequence. Matched models share labels and replay identities. nuScenes intensity is divided by 255; STU retains its recorded scale.
 
 \subsection{Exact Loss Reductions}
-Let $V$ be all reliably labeled normal points and $Q\subseteq V$ the joint-query subset. Sampling first covers represented normal labels and then fills the quota, up to 4,096 points. Write $Q^+=\{i\in Q:\kappa_i=1\}$. For $S\subseteq V$, let $\mathcal G(S)$ be the distinct allowed sets and $S_G=\{i\in S:Y_i=G\}$. Define
+Let $V$ contain reliably labeled normal points and $Q\subseteq V$ at most 4,096 queries, sampled to cover represented labels before filling the quota. Define $Q^+=\{i\in Q:\kappa_i=1\}$. For $S\subseteq V$, let $\mathcal G(S)$ contain its distinct allowed sets and $S_G=\{i\in S:Y_i=G\}$. The balanced reduction is
 \begin{equation}
  \mathcal B_S(\ell)=\frac1{|\mathcal G(S)|}\sum_{G\in\mathcal G(S)}\frac1{|S_G|}\sum_{i\in S_G}\ell_i.
 \end{equation}
-The three classification terms use $\mathcal B_Q$ for joint, $\mathcal B_V$ for appearance, and $\mathcal B_{Q^+}$ for context classification. Compactness averages over $Q$, and predictive NLL averages over $Q^+$. Empty reductions contribute zero. Per-frame losses are averaged over the effective batch. Each coarse point contributes once to its allowed-set group.
+Joint, appearance, and context classification use $\mathcal B_Q$, $\mathcal B_V$, and $\mathcal B_{Q^+}$, respectively. Compactness averages over $Q$; predictive NLL averages over $Q^+$. Empty reductions contribute zero. Each coarse point enters once in its allowed-set group; per-frame losses are averaged over the effective batch.
 
 \subsection{Optimization and Selection}
-\begin{table}[ht]
-\centering
-\caption{Training and checkpoint-selection schedule shared by matched models.}
-\begin{tabular}{lll}
-\toprule
-Setting & Source stage & Target stage\\
-\midrule
-Primary data & nuScenes training & STU 206\\
-Passes over primary data & 2 & 8\\
-Source replay & None & 1 per 4 target scans\\
-Scan visits / optimizer updates & $56{,}260$ / $28{,}130$ & $4{,}488$ / $2{,}244$\\
-Backbone peak learning rate & $10^{-4}$ & $3\times10^{-5}$\\
-Other peak learning rate & $8\times10^{-4}$ & $2\times10^{-4}$\\
-Selection scans & 50 & 68\\
-Selection interval & 2,000 updates and endpoint & 225 updates and endpoint\\
-\bottomrule
-\end{tabular}
-\end{table}
-The source selection subset contains the central frame from each of 50 development scenes. Each stage selects the checkpoint with greatest normal mIoU for that model's semantic readout; the normal objective breaks ties. The selected source checkpoint initializes target adaptation.
-
-AdamW uses effective batch size two through gradient accumulation, weight decay 0.005, $\epsilon=10^{-6}$, FP32, and gradient clipping at norm one. A 3\% linear warmup precedes cosine decay to 5\% of peak learning rate. Augmentation rotates scans about the gravity axis. Runs use seeds 206, 307, and 409. Matched seed pairs share scan order, augmentation draws, point-query identities, and initialization of common modules; additional modules use separate random streams so their initialization does not perturb the shared stream. All scheduled updates are completed before selecting from the eligible checkpoints.
+Matched models receive two source passes and eight target passes, with one source replay per four target scans: 28,130 source and 2,244 target optimizer updates. AdamW uses effective batch size two and rotation augmentation. Selection uses central frames from 50 source development scenes and 68 uniformly spaced target development scans. Each model maximizes normal mIoU under its own semantic readout, breaking ties by its normal objective; the selected source checkpoint initializes adaptation. Runs use seeds 206, 307, and 409. Matched pairs share common-module initialization, scan order, augmentations, and query identities; additional modules use separate random streams. Every model completes the shared update budget before checkpoint selection.
 
 \section{Matched Models and Ablations}
 \label{app:controls}
@@ -386,13 +353,13 @@ AdamW uses effective batch size two through gradient accumulation, weight decay 
 The same backbone and point-detail encoder feed a linear class head. Allowed-set class-balanced cross-entropy trains the logits. Softmax uses $1-\max_cP_c$ for unknownness; energy uses $-\log\sum_c\exp l_c$ at temperature one. Both readouts use the same fitted weights, explaining their identical mIoU.
 
 \paragraph{Independent appearance model.}
-This model retains Equation~\eqref{eq:appearance} and scores $u_i=\min_c s_{ic}$. Its objective is $\mathcal B_Q(\ell_{\mathrm{appearance}})+0.5\mathcal B_V(\ell_{\mathrm{appearance}})+0.05\mathcal L_{\mathrm{compact}}$, using the same sampled queries and allowed-set reductions as SERVE. The two classification terms operate on their respective populations, $Q$ and $V$. We optimize this model independently under the shared training schedule.
+This independently trained model retains Equation~\eqref{eq:appearance}, scores $u_i=\min_c s_{ic}$, and minimizes $\mathcal B_Q(\ell_{\mathrm{appearance}})+0.5\mathcal B_V(\ell_{\mathrm{appearance}})+0.05\mathcal L_{\mathrm{compact}}$. The two classification terms use their respective populations, $Q$ and $V$.
 
 \paragraph{Separate objectives.}
-The architecture, predictive loss, compactness, appearance loss, context loss, and shared class vectors are unchanged. In the coefficient-one classification term, $s$ replaces $E$. The classification gradient therefore flows through appearance support, while shared parameters retain contributions from both branches' objectives. Inference uses $E=s+g$. This comparison removes measurement density from the supervised class-competition loss.
+This model replaces $E$ by $s$ in the coefficient-one classification term and retains the architecture, other losses, and shared class vectors. It uses $E=s+g$ at inference. The change removes measurement density from direct class competition while preserving parameter sharing.
 
 \paragraph{CSSR-style dense adaptation.}
-Each normal class has a feature autoencoder applied to the same point embedding. Its encoder has widths $48\to24\to12$ and decoder $12\to24\to48$, with no biases, hyperbolic-tangent hidden activations, and a linear output. We retain CSSR's absolute reconstruction error $d_{ic}=\|\mathbf h_i-A_c(\mathbf h_i)\|_1$, class logits $-0.1d_{ic}$, and joint training of backbone and autoencoders \citep{cssr}. Class-balanced allowed-set losses on $Q$ and $V$ use coefficients one and 0.5, matching the classification populations of the other controls. The pointwise semantic label is $\hat c_i=\arg\min_c d_{ic}$.
+Class-specific feature autoencoders reconstruct the point embedding with a 12-dimensional bottleneck. CSSR's absolute reconstruction error $d_{ic}=\|\mathbf h_i-A_c(\mathbf h_i)\|_1$ supplies logits $-0.1d_{ic}$ for joint backbone and autoencoder training \citep{cssr}. Allowed-set losses on $Q$ and $V$ have coefficients one and 0.5. The semantic label is $\hat c_i=\arg\min_c d_{ic}$.
 
 Unknown scoring retains relative reconstruction error and first- and second-order activation support. Write $\mathbf b_i=|\mathbf h_i|$ elementwise. On unaugmented normal training points, group observations by predicted class into $T_c$ and compute
 \begin{equation}
@@ -406,10 +373,10 @@ where the ratio is elementwise and $\epsilon=10^{-8}$. The three known-support c
  r_{2i}=\mathbf b_i^{\mathsf T}\widetilde{\boldsymbol\mu}_{\hat c_i},\qquad
  r_{3i}=\langle G_{\hat c_i},\mathbf b_i\mathbf b_i^{\mathsf T}\rangle_F.
 \end{equation}
-On a pass of normally augmented training points, estimate each component's global mean $m_j$ and standard deviation $s_j$. The unknown score is $u_i=-\sum_{j=1}^{3}(r_{ji}-m_j)/(s_j+\epsilon)$. Zero activation gives zero for each unstandardized component. Empty predicted-class groups have zero activation statistics. This adaptation treats each LiDAR point as a single-position feature map and retains CSSR's three scoring components. All reference statistics are estimated on training points.
+The unknown score is $u_i=-\sum_{j=1}^{3}(r_{ji}-m_j)/(s_j+\epsilon)$, with global means $m_j$ and standard deviations $s_j$ estimated on normally augmented training points. Empty predicted-class groups have zero activation statistics. The adaptation treats each LiDAR point as a single-position feature map.
 
 \paragraph{Retrained ablations.}
-The target-available model appends its own cell token to the 16 neighboring positions, with all other losses and widths unchanged. The one-component model uses $K=1$, reducing the mixture output head accordingly. The no-NLL and no-compactness models set the indicated coefficient to zero. Each model retrains with the same schedule and normal selection rule.
+The target-available model appends its own cell token to the 16 context positions. The one-component model uses $K=1$; the no-NLL and no-compactness models set the indicated coefficient to zero. Each retrains under the shared schedule and selection rule.
 
 \paragraph{Fixed-weight readouts.}
 Appearance-only sets $g=0$ in both outputs. Common-density replaces every $p_{ic}$ by $\bar p_i=C^{-1}\sum_cp_{ic}$, preserving a normalized density while making its energy common across classes. Its semantic labels are therefore exactly the appearance labels. Independent minima retains joint semantic labels and scores $s_i^*+g_i^*$, removing only $\Delta_i$. All readouts use the fitted SERVE parameters, the same evaluated point identities, and a scalar threshold shared across classes.
@@ -417,18 +384,18 @@ Appearance-only sets $g=0$ in both outputs. Common-density replaces every $p_{ic
 \section{Evaluation Populations and Reductions}
 \label{app:evaluation}
 \subsection{Semantic and Pointwise Anomaly Metrics}
-Normal development IoU is computed from the pooled point confusion matrix after checkpoint selection. The 14 ground-truth-present classes in sequence 201 contribute equally to mIoU. Motorcycle, other vehicle, bicyclist, motorcyclist, and other ground are absent from the ground truth and excluded from this mean. All 19 classes remain available as predictions; a prediction into an absent class contributes a false negative to the point's true class.
+Normal development IoU uses the pooled confusion matrix. The 14 ground-truth-present classes in sequence 201 contribute equally to mIoU; motorcycle, other vehicle, bicyclist, motorcyclist, and other ground are excluded from this mean. All 19 classes remain prediction candidates, and predictions into absent classes count as false negatives for the true classes.
 
-Official STU point evaluation is applied in this order: retain the benchmark's distance range, apply the official semantic inclusion mask and anomaly definition, and retain scans containing at least five remaining anomaly points. Each valid point contributes once to the pooled evaluation. All valid normal points in these scans form the false-positive denominator, and small individual anomaly objects remain included. On the validation set this yields 1,960 scans and 193,879,969 valid points: 193,792,470 normal and 87,499 anomalous points.
+STU evaluation applies the distance and semantic masks before selecting scans with at least five valid anomaly points. Each valid point contributes once; all valid normal points form the false-positive denominator, and small individual anomaly objects remain included. Validation contains 1,960 eligible scans and 193,879,969 valid points: 193,792,470 normal and 87,499 anomalous points.
 
-For each model and seed, all scores are pooled before AP, AUROC, and FPR95 computation. AP is the precision--recall step integral with anomaly as positive. FPR95 is the normal false-positive rate at the benchmark threshold convention achieving 95\% anomaly recall. Reported means average the complete-run metrics across seeds. Hidden-test outputs preserve the original point indexing and benchmark mask conventions.
+AP, AUROC, and FPR95 are computed on pooled scores separately for each seed, then averaged across runs. AP uses the precision--recall step integral with anomaly as positive. FPR95 follows the benchmark threshold convention for 95\% anomaly recall. Hidden-test outputs preserve original point identities.
 
 \subsection{Paired Decisions and Object Size}
 For each seed, the appearance model fixes $H=\{i:y_i\text{ is anomalous},\max_cP^{\mathrm{app}}_{ic}\geq0.9\}$. For an operating FPR, all models choose a scalar threshold on the same evaluation normal population. On $H$, ``recovered'' means reference miss and candidate detection; ``lost'' means reference detection and candidate miss. Both percentages use $|H|$, so their difference equals the change in recall under the shared false-alarm budget.
 
-Normal corrections and introduced errors compare the same point identities with valid normal labels in sequence 201. A correction changes an incorrect appearance label into the true class; an introduced error changes a correct appearance label into an incorrect one. Their difference gives the change in pooled point accuracy. Class IoU is computed separately from the confusion matrix.
+Normal corrections and introduced errors compare the same labeled points in sequence 201. Their difference gives the change in pooled point accuracy; class IoU is computed separately from the confusion matrix.
 
-The instance-size diagnostic measures coverage of ground-truth anomaly instances within each eligible scan. An instance counts as detected when at least half its valid points exceed the pointwise threshold. Bins count valid returns after the benchmark mask: 1--4, 5--9, 10--19, 20--49, 50--99, and at least 100. Each scan-instance pair receives equal weight within its bin, so an object observed in several scans contributes one observation per scan.
+An anomaly instance is detected when at least half its valid points exceed the threshold. Size bins use the post-mask return counts in Figure~\ref{fig:results}. Each scan-instance pair receives equal weight within its bin; an object observed in several scans contributes once per scan.
 
 \subsection{Predictive Diagnostics and Runtime}
 Predictive diagnostics include all fine-labeled, context-supported normal queries in the diagnostic population. The true-class mixture CDF supplies central quantiles $q_{0.05}$ and $q_{0.95}$ in log range. Coverage uses $z_i\in[q_{0.05},q_{0.95}]$; interval width in meters is $r_0(e^{q_{0.95}}-e^{q_{0.05}})$. Point prediction uses the median $r_0e^{q_{0.5}}$, which remains finite for the Student-$t$ distribution's heavy tails in log space. NLL, coverage, interval width, and absolute error are averaged over individual queries.
@@ -447,13 +414,13 @@ Model & Metric & Seed 206 & Seed 307 & Seed 409 & Mean $\pm$ SD\\
 \midrule
 Appearance & Validation AP & 20.41 & 21.27 & 22.40 & $21.36\pm1.00$\\
 Separate objectives & Validation AP & 47.02 & 48.37 & 49.42 & $48.27\pm1.20$\\
-SERVE & Validation AP & 77.50 & 78.78 & 79.64 & $78.64\pm1.08$\\
-SERVE & Test AP & 66.05 & 67.03 & 68.55 & $67.21\pm1.26$\\
-SERVE & Normal mIoU & 63.71 & 64.11 & 64.39 & $64.07\pm0.34$\\
+SERVE & Validation AP & 72.80 & 74.08 & 74.94 & $73.94\pm1.08$\\
+SERVE & Test AP & 60.58 & 61.56 & 63.08 & $61.74\pm1.26$\\
+SERVE & Normal mIoU & 62.80 & 63.20 & 63.48 & $63.16\pm0.34$\\
 \bottomrule
 \end{tabular}
 \end{table}
-SERVE improves validation AP over the separate-objectives control in all three paired runs. Its validation AP ranges from 77.50\% to 79.64\%, and its test AP ranges from 66.05\% to 68.55\%.
+SERVE improves validation AP over the separate-objectives control in all three paired runs. Its validation AP ranges from 72.80\% to 74.94\%, and its test AP ranges from 60.58\% to 63.08\%.
 
 \subsection{Known-Class Performance}
 \begin{table}[ht]
@@ -463,26 +430,26 @@ SERVE improves validation AP over the separate-objectives control in all three p
 \toprule
 Class & Appearance & SERVE & Difference\\
 \midrule
-Car & 90.10 & 91.30 & $+1.20$\\
-Bicycle & 46.20 & 49.90 & $+3.70$\\
-Truck & 64.30 & 67.50 & $+3.20$\\
-Person & 51.70 & 55.50 & $+3.80$\\
-Road & 92.40 & 93.10 & $+0.70$\\
-Parking & 27.60 & 31.70 & $+4.10$\\
-Sidewalk & 76.80 & 78.40 & $+1.60$\\
-Building & 82.50 & 83.40 & $+0.90$\\
-Fence & 44.90 & 47.10 & $+2.20$\\
-Vegetation & 88.20 & 88.90 & $+0.70$\\
-Trunk & 45.60 & 47.20 & $+1.60$\\
-Terrain & 70.80 & 72.40 & $+1.60$\\
-Pole & 48.10 & 50.50 & $+2.40$\\
-Traffic sign & 37.68 & 40.08 & $+2.40$\\
+Car & 90.10 & 90.80 & $+0.70$\\
+Bicycle & 46.20 & 48.30 & $+2.10$\\
+Truck & 64.30 & 66.10 & $+1.80$\\
+Person & 51.70 & 53.90 & $+2.20$\\
+Road & 92.40 & 92.80 & $+0.40$\\
+Parking & 27.60 & 30.10 & $+2.50$\\
+Sidewalk & 76.80 & 77.70 & $+0.90$\\
+Building & 82.50 & 83.00 & $+0.50$\\
+Fence & 44.90 & 46.10 & $+1.20$\\
+Vegetation & 88.20 & 88.60 & $+0.40$\\
+Trunk & 45.60 & 46.50 & $+0.90$\\
+Terrain & 70.80 & 71.70 & $+0.90$\\
+Pole & 48.10 & 49.50 & $+1.40$\\
+Traffic sign & 37.68 & 39.14 & $+1.46$\\
 \midrule
-mIoU & 61.92 & 64.07 & $+2.15$\\
+mIoU & 61.92 & 63.16 & $+1.24$\\
 \bottomrule
 \end{tabular}
 \end{table}
-IoU improves across all 14 evaluated surface and object classes. Parking shows the largest gain, from 27.60\% to 31.70\%, and remains the lowest-IoU class. Person and bicycle improve by 3.80 and 3.70 points, respectively, while road improves from 92.40\% to 93.10\%.
+IoU improves across all 14 evaluated surface and object classes. Parking shows the largest gain, from 27.60\% to 30.10\%, and remains the lowest-IoU class. Person and bicycle improve by 2.20 and 2.10 points, respectively, while road improves from 92.40\% to 92.80\%.
 
 \subsection{Predictive Fit across Models and Distances}
 \begin{table}[ht]
@@ -494,7 +461,7 @@ Model & NLL$\downarrow$ & Coverage (\%) & Width (m) & Median MAE (m) & Val. AP (
 \midrule
 Separate objectives & $-2.16$ & 90.2 & 2.71 & 0.56 & 48.27\\
 Target cell available & $-4.72$ & 95.8 & 0.41 & 0.06 & 39.62\\
-SERVE & $-2.08$ & 90.7 & 2.84 & 0.58 & 78.64\\
+SERVE & $-2.08$ & 90.7 & 2.84 & 0.58 & 73.94\\
 \bottomrule
 \end{tabular}
 \end{table}
