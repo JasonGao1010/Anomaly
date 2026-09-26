@@ -1634,6 +1634,8 @@ def main():
     parser.add_argument("--train-count", type=int, default=256, help="STU normal-control training observations")
     parser.add_argument("--dev-count", type=int, default=64, help="STU normal-control development observations")
     parser.add_argument("--donor-views", type=int, default=1, help="Maximum separate measured views per STU206 normal instance (1-4)")
+    parser.add_argument("--control-range", type=float, nargs=2, metavar=("NEAR", "FAR"),
+                        help="STU206 normal-control placement range; interpolate observed facets only, keep development unchanged")
     parser.add_argument("--background-only", action="store_true", help="nuScenes: split original backgrounds without extracting or inserting objects")
     parser.add_argument("--objects", type=Path, help="nuScenes: reviewed object catalog for one fixed placement per sequence")
     parser.add_argument("--normal-annotations", type=Path, help="nuScenes: reviewed native point labels; unresolved points remain ignored")
@@ -1646,7 +1648,7 @@ def main():
         from .render import generate_normal_controls
         generate_normal_controls(args.output, data_root=args.data_root, pool_root=args.pool_root,
                                  train_count=args.train_count, dev_count=args.dev_count, workers=args.workers,
-                                 donor_views=args.donor_views)
+                                 donor_views=args.donor_views, placement_range=args.control_range)
         return
     if args.background_only and args.operation != "nuscenes":
         parser.error("--background-only is only supported by the nuscenes operation")

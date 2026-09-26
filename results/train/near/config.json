@@ -1,0 +1,194 @@
+{
+  "version": "AJAE-feature-evidence",
+  "architecture": "frozen_litept_shared_feature_evidence",
+  "score_version": "supervised_shared_feature_anomaly_logit",
+  "residual": true,
+  "semantic_competition": false,
+  "initial_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+  "seed": 206,
+  "features": "results/train/hard_features",
+  "data_scope": "STU206_STU201",
+  "backbone_frozen": true,
+  "training_points": 3730377,
+  "real_normal_points": 2298880,
+  "synthetic_normal_points": 983040,
+  "synthetic_anomaly_points": 219804,
+  "auxiliary_identity": "40ec787aede7b3e62d4d68b042f7284153d3f157a269e8152391d38bce22abd1",
+  "synthetic_development_identity": "30704aff7ea6c89241d10a6560d68e89e8c3a94d02d70adbd5228948b6e608a0",
+  "auxiliary_cache": "results/train/auxiliary",
+  "initialization": {
+    "normal_statistics": "results/train/stu/frozen.pt",
+    "normal_head": "results/train/stu/linear_probe.json",
+    "anomaly_head": "results/train/auxiliary/linear_probe.json",
+    "learned_distance_transform_reused": false
+  },
+  "objective": "BCE coefficient mass: inserted normal controls 0.05, all other normal points 0.45, anomalies .5; unchanged equal normal semantic class mass CE; every cached point once per epoch",
+  "anomaly_weighting": "view",
+  "normal_weighting": "point",
+  "binary_loss_mass": {
+    "normal": 0.4999999880498214,
+    "anomaly": 0.5000000088531994,
+    "strata": [
+      {
+        "anomaly_points": "1-4",
+        "views": 480,
+        "points": 1168,
+        "bce_coefficient_mass": 0.12500000441764791,
+        "fraction_of_anomaly_mass": 0.25000000883529583
+      },
+      {
+        "anomaly_points": "5-20",
+        "views": 480,
+        "points": 5065,
+        "bce_coefficient_mass": 0.1250000017977373,
+        "fraction_of_anomaly_mass": 0.2500000035954746
+      },
+      {
+        "anomaly_points": "21-100",
+        "views": 480,
+        "points": 23451,
+        "bce_coefficient_mass": 0.12500000167195702,
+        "fraction_of_anomaly_mass": 0.25000000334391403
+      },
+      {
+        "anomaly_points": ">100",
+        "views": 480,
+        "points": 190120,
+        "bce_coefficient_mass": 0.12500000096585717,
+        "fraction_of_anomaly_mass": 0.25000000193171434
+      }
+    ],
+    "definition": "sum of per-point BCE coefficients divided by training point count; not measured loss or gradient contributions",
+    "inserted_normal_control": 0.050000001459837067,
+    "other_normal": 0.4499999865899843,
+    "ordinary_normal_classes": [
+      {
+        "category": 0,
+        "points": 162218,
+        "bce_coefficient_mass": 0.02138830030209705
+      },
+      {
+        "category": 1,
+        "points": 605,
+        "bce_coefficient_mass": 7.976871668229515e-05
+      },
+      {
+        "category": 2,
+        "points": 4056,
+        "bce_coefficient_mass": 0.0005347800245675846
+      },
+      {
+        "category": 3,
+        "points": 39791,
+        "bce_coefficient_mass": 0.005246408273562415
+      },
+      {
+        "category": 4,
+        "points": 10660,
+        "bce_coefficient_mass": 0.0014055116030302077
+      },
+      {
+        "category": 5,
+        "points": 18680,
+        "bce_coefficient_mass": 0.00246294153326489
+      },
+      {
+        "category": 6,
+        "points": 0,
+        "bce_coefficient_mass": 0.0
+      },
+      {
+        "category": 7,
+        "points": 1731,
+        "bce_coefficient_mass": 0.00022823082409430262
+      },
+      {
+        "category": 8,
+        "points": 667588,
+        "bce_coefficient_mass": 0.08802088930991743
+      },
+      {
+        "category": 9,
+        "points": 0,
+        "bce_coefficient_mass": 0.0
+      },
+      {
+        "category": 10,
+        "points": 144581,
+        "bce_coefficient_mass": 0.019062877399410056
+      },
+      {
+        "category": 11,
+        "points": 20714,
+        "bce_coefficient_mass": 0.0027311226402595844
+      },
+      {
+        "category": 12,
+        "points": 1072170,
+        "bce_coefficient_mass": 0.14136466936406064
+      },
+      {
+        "category": 13,
+        "points": 255788,
+        "bce_coefficient_mass": 0.03372542231856395
+      },
+      {
+        "category": 14,
+        "points": 573211,
+        "bce_coefficient_mass": 0.07557736505483521
+      },
+      {
+        "category": 15,
+        "points": 176034,
+        "bce_coefficient_mass": 0.023209927723060284
+      },
+      {
+        "category": 16,
+        "points": 120253,
+        "bce_coefficient_mass": 0.015855252044952296
+      },
+      {
+        "category": 17,
+        "points": 83895,
+        "bce_coefficient_mass": 0.011061481795142523
+      },
+      {
+        "category": 18,
+        "points": 61017,
+        "bce_coefficient_mass": 0.00804503766248528
+      }
+    ]
+  },
+  "batch_size": 8192,
+  "epochs": 24,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0001,
+  "selection": "expanded synthetic201 including all normal-control points: AP then AUROC then negative FPR95; unchanged normal201 semantic floor; original60 metrics retained",
+  "calibrated": false,
+  "no_synthetic_anomalies": false,
+  "val19_used_for_selection": false,
+  "evaluation": "repeated val19 evaluation after development selection",
+  "deadline": 1790395200.0,
+  "reserve_seconds": 600,
+  "normal_mining": {
+    "source_sequence": 206,
+    "source_records": "8fc210c4c9b84319968522e7fe1e5083c1dcf858c6174cec802c81d13999add7",
+    "miner": {
+      "path": "/home/jasongao/Study/AJAE-v4/results/train/observations/frozen.pt",
+      "sha256": "e643e5075b195d9e757425540d3b1d96a3c32636c8db44e58ab7617795aeaeb4",
+      "epoch": 13
+    },
+    "original_cache": "/home/jasongao/Study/AJAE-v4/results/train/normal/features",
+    "original_training_sha256": "a83456e6dd8e7d694a1c6b95e439de5e05224982130df7742708f4840858c01a",
+    "original_config_sha256": "99c9115a149ed8f69cbefb34bd6debe43205b753d485b337c3f24afa7db8b94b",
+    "maximum_new_points_per_frame": 1024,
+    "selection": "highest fixed-miner scores among previously unqueried voxels; one actual normal point per new voxel; original queries retained",
+    "normal_statistics": "unchanged; downstream initialization retains the supplied original normal statistics and linear probes"
+  },
+  "control_cache": "results/train/near_controls",
+  "normal_control_points": 228653,
+  "inserted_normal_control_points": 97581,
+  "control_identity": "418d0aa1cdeed328408c635b2fe73be4bef1e7bf2c12e35931df1eea2e7d3a95",
+  "control_development_identity": "10dbbdbe746a592a5eaca8f29735648c8d847fda0d8c66b5aca7426242fca1dd",
+  "normal_control_mass": 0.05
+}

@@ -1779,8 +1779,10 @@ def _make_normal_control(task):
     for attempt in range(96):
         category = classes[(number + attempt//16) % len(classes)]
         donor = groups[category][(number//len(classes)+attempt//16) % len(groups[category])]
-        lower = max(5., donor["source_range"])
-        candidates = road[(np.linalg.norm(road, axis=1) >= lower) & (np.linalg.norm(road, axis=1) <= 48.)]
+        placement_range = context.get("placement_range")
+        lower, upper = (max(5., donor["source_range"]), 48.) if placement_range is None else placement_range
+        # Closer scans interpolate only existing measured triangles; holes and backs stay absent.
+        candidates = road[(np.linalg.norm(road, axis=1) >= lower) & (np.linalg.norm(road, axis=1) <= upper)]
         if not len(candidates):
             rejected["no_supported_range"] += 1; continue
         center = candidates[int(rng.integers(len(candidates))), :2]
@@ -1842,7 +1844,7 @@ def _make_normal_control(task):
     return dict(rejected=True, source_sequence=sequence, frame=frame_id, reasons=dict(rejected))
 
 
-def generate_normal_controls(output, *, data_root, pool_root, train_count=256, dev_count=64, workers=4, donor_views=1):
+def generate_normal_controls(output, *, data_root, pool_root, train_count=256, dev_count=64, workers=4, donor_views=1, placement_range=None):
     """Insert actual same-sequence normal surfaces through the calibrated STU ray renderer."""
     import multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor
@@ -1852,6 +1854,10 @@ def generate_normal_controls(output, *, data_root, pool_root, train_count=256, d
     global _NORMAL_CONTROLS
     if Path(data_root).resolve() != DATA_ROOT.resolve() or train_count < 1 or dev_count < 0 or workers < 1 or not 1 <= donor_views <= 4:
         raise ValueError("normal controls require the documented STU source, positive train/workers, nonnegative dev count and 1-4 donor views")
+    if placement_range is not None:
+        placement_range = tuple(map(float, placement_range))
+        if len(placement_range) != 2 or not np.isfinite(placement_range).all() or not 5. <= placement_range[0] < placement_range[1] <= 48. or dev_count:
+            raise ValueError("explicit control range requires 5 <= near < far <= 48 and unchanged development data")
     output, pool_root = Path(output).resolve(), Path(pool_root).resolve()
     if output.exists():
         raise FileExistsError("normal control outputs must use a new directory")
@@ -1876,7 +1882,7 @@ def generate_normal_controls(output, *, data_root, pool_root, train_count=256, d
             value = json.loads((pool_root / row["path"] / "world.json").read_text())["world"]["objects"][0]["material"]
             materials.append(dict(quantile=value["intensity_quantile"], roughness=value["roughness"], return_bias=value["return_bias"]))
         _NORMAL_CONTROLS[sequence] = dict(records=normal_records(str(sequence), development=sequence==201),
-            output=folder, materials=materials)
+            output=folder, materials=materials, placement_range=placement_range)
         donors = _control_donors(sequence, donor_views)
         groups = defaultdict(list)
         for donor in donors:
@@ -1893,6 +1899,7 @@ def generate_normal_controls(output, *, data_root, pool_root, train_count=256, d
                     print(f"normal controls {sequence}: {i}/{count}, accepted {len(records)}, elapsed {time.perf_counter()-started:.1f}s", flush=True)
         manifest = dict(role="normal_control", source_sequence=sequence, split=split, records=records,
             requested_frames=count, selected_frames=len(records), rejected=rejected,
+            placement_range=placement_range,
             donor_instances=coverage["donor_instances"], donor_views=len(donors), donor_coverage=coverage,
             normal_class_counts=dict(Counter(r["normal_semantic"] for r in records)),
             calibration=_NORMAL_CONTROLS["calibration"], semantics="actual labeled normal instances; original size; measured surface sides only; same STU ray response and opaque occlusion; no anomaly shape relabeling")
