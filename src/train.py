@@ -2493,10 +2493,13 @@ def instance_development(scorer, data, indices, *, retain=False, exclude_neighbo
     return (result,torch.cat(scores)) if retain else result
 
 
-def evidence_binary_weights(targets, view, view_counts, weighting="point", control=None, control_mass=.25):
+def evidence_binary_weights(targets, view, view_counts, weighting="point", control=None, control_mass=.25,
+                            semantic=None, normal_weighting="point"):
     """Preserve half the BCE coefficient mass per class; optionally equalize anomaly views."""
     if not math.isfinite(control_mass) or not 0 < control_mass < .5:
         raise ValueError("normal-control BCE mass must be finite and strictly between zero and .5")
+    if normal_weighting not in ("point", "sqrt_class"):
+        raise ValueError("ordinary-normal weighting must be point or sqrt_class")
     if (weighting not in ("point", "view") or targets.ndim != 1 or view.shape != targets.shape
             or view_counts.ndim != 1 or not len(view_counts)
             or bool(((targets != 0) & (targets != 1)).any())
@@ -2514,6 +2517,8 @@ def evidence_binary_weights(targets, view, view_counts, weighting="point", contr
     weights = (len(targets) / (2 * binary_counts.float()))[targets]
     if weighting == "view":
         weights[positive] = len(targets) / (2 * len(view_counts) * actual[view[positive]].float())
+    ordinary = ~positive
+    ordinary_mass = .5
     if control is not None:
         if (control.shape != targets.shape or control.dtype != torch.bool
                 or bool((control & positive).any()) or not bool(control.any())):
@@ -2523,6 +2528,15 @@ def evidence_binary_weights(targets, view, view_counts, weighting="point", contr
             raise ValueError("normal-control training also requires original normal observations")
         weights[control] = len(targets) * control_mass / int(control.sum())
         weights[ordinary] = len(targets) * (.5 - control_mass) / int(ordinary.sum())
+        ordinary_mass = .5 - control_mass
+    if normal_weighting == "sqrt_class":
+        if (semantic is None or semantic.shape != targets.shape or semantic.dtype != torch.long
+                or bool(((semantic[ordinary] < 0) | (semantic[ordinary] >= 19)).any())):
+            raise ValueError("sqrt-class normal weighting requires genuine ordinary-normal semantic labels")
+        counts = torch.bincount(semantic[ordinary], minlength=19).float()
+        roots = counts.sqrt()
+        # Class mass is proportional to sqrt(n_c); absent classes receive no mass.
+        weights[ordinary] = len(targets) * ordinary_mass / (roots.sum() * roots[semantic[ordinary]])
     return weights
 
 
@@ -2580,7 +2594,11 @@ def evidence_training(args, cache, dev_cache, resources):
                 or previous.get("backbone_frozen") is not True or previous.get("auxiliary_identity") != views["sha256"]
                 or previous.get("synthetic_development_identity") != dev_views["sha256"]):
             raise ValueError("tail refinement requires a selected same-source feature model and view-weighted positives")
-    scorer = FeatureEvidence(residual=True if refinement is None else previous["residual"]).to(device)
+        if (type(previous.get("semantic_competition", False)) is not bool
+                or previous.get("semantic_competition", False) != args.semantic_competition):
+            raise ValueError("tail refinement cannot change the recorded semantic-competition score mode")
+    scorer = FeatureEvidence(residual=True if refinement is None else previous["residual"],
+        semantic_competition=args.semantic_competition).to(device)
     location = initial["model"]["scorer.location"].double()
     whitener = initial["model"]["scorer.whitener"].double()
     coefficient = torch.tensor(semantic_probe["coefficient"], dtype=torch.float64)
@@ -2649,7 +2667,7 @@ def evidence_training(args, cache, dev_cache, resources):
     frequencies = torch.bincount(semantic[semantic >= 0], minlength=19)
     semantic_weights = torch.where(frequencies > 0, count / (int((frequencies > 0).sum()) * frequencies.clamp_min(1).float()), 0.)
     binary_weights = evidence_binary_weights(targets, source_views, view_counts, args.anomaly_weighting,
-                                            control_mask, args.normal_control_mass)
+                                            control_mask, args.normal_control_mass, semantic, args.normal_weighting)
     positive = targets == 1
     positive_views = source_views[positive]
     point_mass = binary_weights[positive].double() / count
@@ -2666,10 +2684,18 @@ def evidence_training(args, cache, dev_cache, resources):
     if control_mask is not None:
         loss_mass.update(inserted_normal_control=float(binary_weights[control_mask].double().sum()/count),
             other_normal=float(binary_weights[(~positive)&(~control_mask)].double().sum()/count))
+    ordinary = ~positive if control_mask is None else (~positive)&(~control_mask)
+    class_counts = torch.bincount(semantic[ordinary], minlength=19).cpu().tolist()
+    class_mass = torch.bincount(semantic[ordinary], weights=binary_weights[ordinary].double()/count,
+                               minlength=19).cpu().tolist()
+    loss_mass["ordinary_normal_classes"] = [dict(category=k, points=points, bce_coefficient_mass=mass)
+        for k, (points, mass) in enumerate(zip(class_counts, class_mass))]
+    del ordinary
     del source_views, view_counts, positive, positive_views, point_mass
     holdout = ((dev["frame"] // 64) % 2 == 1).nonzero().flatten()
     config = dict(version=EVIDENCE_VERSION, architecture="frozen_litept_shared_feature_evidence",
-        score_version="supervised_shared_feature_anomaly_logit", residual=True, initial_sha256=WEIGHTS_SHA256,
+        score_version="unknown_vs_normal_semantic_log_odds" if args.semantic_competition else "supervised_shared_feature_anomaly_logit",
+        residual=True, semantic_competition=args.semantic_competition, initial_sha256=WEIGHTS_SHA256,
         seed=206, features=str(args.features), data_scope="STU206_STU201", backbone_frozen=True,
         training_points=count, real_normal_points=real_count, synthetic_normal_points=metadata["normals"],
         synthetic_anomaly_points=metadata["anomalies"], auxiliary_identity=views["sha256"],
@@ -2677,7 +2703,7 @@ def evidence_training(args, cache, dev_cache, resources):
         initialization=dict(normal_statistics=str(args.initial_module), normal_head=str(args.initial_module.parent / "linear_probe.json"),
             anomaly_head=str(auxiliary_path / "linear_probe.json"), learned_distance_transform_reused=False),
         objective="equal binary class mass BCE plus equal normal semantic class mass CE on one shared residual; all cached training points once per epoch",
-        anomaly_weighting=args.anomaly_weighting, binary_loss_mass=loss_mass,
+        anomaly_weighting=args.anomaly_weighting, normal_weighting=args.normal_weighting, binary_loss_mass=loss_mass,
         batch_size=8192, epochs=args.epochs, learning_rate=args.learning_rate, weight_decay=.0001,
         selection="synthetic201 AP then AUROC then negative FPR95; normal201 odd-block mIoU must not fall below initialized linear model; epoch zero eligible",
         calibrated=False, no_synthetic_anomalies=False, val19_used_for_selection=False,
@@ -2706,6 +2732,11 @@ def evidence_training(args, cache, dev_cache, resources):
             tail_fraction=.001, tail_normal_samples=32, tail_margin=1., tail_weight=.1,
             objective="full-point BCE with configured normal/control masses plus .1 view-weighted ranking against the highest-scoring .1% of all training normal points; fixed normal semantics",
             selection="same synthetic201 population: AP then AUROC then negative FPR95; fixed normal semantics; epoch zero eligible")
+    if args.semantic_competition:
+        config["objective"] += "; binary score is unknown logit minus logsumexp of 19 normal logits"
+        config["initialization"]["anomaly_probe_ranking_preserved"] = False
+    if args.normal_weighting == "sqrt_class":
+        config["objective"] += "; ordinary-normal class BCE masses proportional to sqrt of their STU206 cached point counts; semantic CE unchanged"
     args.output.mkdir(parents=True)
     write_json(args.output / "config.json", config); write_json(args.output / "resources.json", resources)
 
@@ -2733,7 +2764,7 @@ def evidence_training(args, cache, dev_cache, resources):
     if refinement is None and abs(baseline["semantics"]["mean_iou_gt"] - expected_normal) > .0001:
         raise ValueError("converted semantic head does not reproduce the independent normal probe")
     initial_comparison = initial_synthetic.get("original60_metrics", initial_synthetic["metrics"])
-    if refinement is None and any(abs(initial_comparison[k] - expected_synthetic[k]) > .01 for k in ("AP", "AUROC", "FPR95")):
+    if refinement is None and not args.semantic_competition and any(abs(initial_comparison[k] - expected_synthetic[k]) > .01 for k in ("AP", "AUROC", "FPR95")):
         raise ValueError("converted anomaly head does not reproduce the independent anomaly probe")
     atomic_save(args.output / "selected.pt", dict(scorer=scorer.state_dict(), selection=best))
     write_json(args.output / "development.json", dict(initial=best, selected=best))
@@ -2777,6 +2808,8 @@ def evidence_training(args, cache, dev_cache, resources):
                 tail_total += float(tail_loss.detach()) * len(at)
             if epoch == 1 and begin == 0:
                 checked = (scorer.anomaly.weight,) if refinement is not None else (scorer.anomaly.weight, scorer.residual[-1].weight)
+                if args.semantic_competition and refinement is None:
+                    checked += (scorer.semantic.weight,)
                 gradients = torch.autograd.grad(anomaly_loss, checked, retain_graph=True)
                 if any(not bool(torch.isfinite(g).all()) or not bool(g.abs().sum() > 0) for g in gradients):
                     raise ValueError("anomaly supervision must update every checked trainable evidence parameter")
@@ -2810,7 +2843,7 @@ def evidence_training(args, cache, dev_cache, resources):
     saved = torch.load(args.output / "selected.pt", map_location=device, weights_only=False)
     if best["epoch"] == 0 and refinement is None:
         # Remove the unused zero residual when development selects the linear initialization.
-        scorer = FeatureEvidence(residual=False).to(device)
+        scorer = FeatureEvidence(residual=False, semantic_competition=args.semantic_competition).to(device)
         saved["scorer"] = {k: v for k, v in saved["scorer"].items() if not k.startswith("residual.")}
         config["residual"] = False
     scorer.load_state_dict(saved["scorer"]); scorer.eval()
@@ -2850,6 +2883,8 @@ def normal_main():
     parser.add_argument("--auxiliary-manifest",type=Path)
     parser.add_argument("--initial-module",type=Path)
     parser.add_argument("--readout",action="store_true")
+    parser.add_argument("--semantic-competition",action="store_true",
+        help="score the unknown logit against the shared 19 normal class logits")
     parser.add_argument("--tail-refine",type=Path,
         help="initialize selected feature evidence and refine only its anomaly head with training-normal tail ranking")
     parser.add_argument("--auxiliary-cache",type=Path)
@@ -2861,17 +2896,18 @@ def normal_main():
         help="extract the specified STU206/STU201 normal controls without training")
     parser.add_argument("--anomaly-weighting",choices=("point","view"),default="point",
         help="feature-evidence anomaly BCE weighting; retain every cached point")
+    parser.add_argument("--normal-weighting",choices=("point","sqrt_class"),default="point",
+        help="ordinary-normal BCE weighting; preserves its total mass and all anomaly/control coefficients")
     parser.add_argument("--learning-rate",type=float,default=.001,
         help="initial learning rate for feature-evidence readout training")
     args=parser.parse_args()
-    if args.tail_refine is not None and not args.readout:
-        raise ValueError("tail refinement requires the existing feature-evidence readout entry")
+    if (args.tail_refine is not None or args.semantic_competition) and not args.readout:
+        raise ValueError("tail refinement and semantic competition require the existing feature-evidence readout entry")
     if not math.isfinite(args.normal_control_mass) or not 0 < args.normal_control_mass < .5:
         raise ValueError("normal-control BCE mass must be finite and strictly between zero and .5")
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("use an empty output directory")
-    # Measured full inference is about 22 minutes; retain 45 minutes for
-    # normal checks, any authorized final inference, and independent arithmetic.
+    # Keep the caller's declared wall-clock reserve for complete final evaluation.
     reserve_seconds=args.reserve_seconds
     if reserve_seconds < 0:
         raise ValueError("time reserve must be nonnegative")

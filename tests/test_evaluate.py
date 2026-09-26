@@ -27,8 +27,8 @@ def evidence_model(monkeypatch):
 
     monkeypatch.setattr(models, "FrozenPerception", Perception)
 
-    def create(residual=False):
-        scorer = FeatureEvidence(residual=residual)
+    def create(residual=False, semantic_competition=False):
+        scorer = FeatureEvidence(residual=residual, semantic_competition=semantic_competition)
         with torch.no_grad():
             scorer.semantic.weight.zero_()
             scorer.semantic.bias.zero_()
@@ -42,19 +42,25 @@ def evidence_model(monkeypatch):
 
 
 @pytest.mark.parametrize("residual", [False, True])
-def test_load_feature_evidence_preserves_capacity_and_rejects_unselected_weights(tmp_path, evidence_model, residual):
-    model = evidence_model(residual)
+@pytest.mark.parametrize("competition", [None, True])
+def test_load_feature_evidence_preserves_capacity_and_rejects_unselected_weights(tmp_path, evidence_model, residual, competition):
+    model = evidence_model(residual, semantic_competition=competition is True)
     saved = dict(version=EVIDENCE_VERSION, mode="frozen_support", frozen=True, selected=True, complete=True,
         config=dict(version=EVIDENCE_VERSION, residual=residual, initial_sha256=models.WEIGHTS_SHA256),
         model=model.state_dict())
+    if competition is not None:
+        saved["config"]["semantic_competition"] = competition
     path = tmp_path / "model.pt"
     torch.save(saved, path)
     loaded, metadata = evaluation.load_model(path, torch.device("cpu"))
     assert isinstance(loaded.scorer, FeatureEvidence)
     assert (loaded.scorer.residual is not None) == residual
+    assert loaded.scorer.semantic_competition == (competition is True)
     assert metadata["version"] == EVIDENCE_VERSION and not loaded.training
     for key, value in model.state_dict().items():
         torch.testing.assert_close(loaded.state_dict()[key], value, rtol=0, atol=0)
+    features = torch.zeros(3, 252)
+    torch.testing.assert_close(loaded.scorer(features), model.scorer(features), rtol=0, atol=0)
     assert not torch.backends.cuda.matmul.allow_tf32
     saved["selected"] = False
     torch.save(saved, path)
@@ -65,17 +71,24 @@ def test_load_feature_evidence_preserves_capacity_and_rejects_unselected_weights
     torch.save(saved, path)
     with pytest.raises(ValueError, match="residual capacity"):
         evaluation.load_model(path, torch.device("cpu"))
+    saved["config"]["residual"] = residual
+    saved["config"]["semantic_competition"] = "true"
+    torch.save(saved, path)
+    with pytest.raises(ValueError, match="score mode must be boolean"):
+        evaluation.load_model(path, torch.device("cpu"))
 
 
-def test_feature_evidence_infer_exports_learned_stu19_in_original_slots(tmp_path, evidence_model):
+@pytest.mark.parametrize("competition", [False, True])
+def test_feature_evidence_infer_exports_learned_stu19_in_original_slots(tmp_path, evidence_model, competition):
     # Two returns cannot support an eight-neighbor density estimate; it is unused.
     points = np.array([[10., 0, 0, .2], [0., 0, 0, 0], [5., 0, 0, .4]], np.float32)
     path = tmp_path / "206" / "velodyne" / "000000.bin"
     path.parent.mkdir(parents=True)
     points.tofile(path)
-    model = evidence_model()
+    model = evidence_model(semantic_competition=competition)
     result, timing = evaluation.infer(model, path, torch.device("cpu"), return_semantics=True)
-    np.testing.assert_array_equal(result["score"], [10., 0., 5.])
+    offset = float(torch.logsumexp(model.scorer.semantic.bias.detach(), 0)) if competition else 0.
+    np.testing.assert_allclose(result["score"], [10.-offset, 0., 5.-offset], rtol=1e-6)
     np.testing.assert_array_equal(result["semantic"], [18, -1, 18])
     assert timing["real_points"] == 2 and timing["slots"] == 3
     score, _ = evaluation.infer(model, path, torch.device("cpu"))

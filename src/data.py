@@ -1627,22 +1627,26 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--nuscenes-root", type=Path, default=NUSCENES_ROOT)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
-    parser.add_argument("--pool-root", type=Path, default=POOL_ROOT)
+    parser.add_argument("--pool-root", type=Path, help="Synthetic material/calibration source; normal-controls defaults to AJAE-v3/samples")
     parser.add_argument("--train", type=Path, default=Path("assets/train.json"))
     parser.add_argument("--val", type=Path, default=Path("assets/val.json"))
     parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
     parser.add_argument("--train-count", type=int, default=256, help="STU normal-control training observations")
     parser.add_argument("--dev-count", type=int, default=64, help="STU normal-control development observations")
+    parser.add_argument("--donor-views", type=int, default=1, help="Maximum separate measured views per STU206 normal instance (1-4)")
     parser.add_argument("--background-only", action="store_true", help="nuScenes: split original backgrounds without extracting or inserting objects")
     parser.add_argument("--objects", type=Path, help="nuScenes: reviewed object catalog for one fixed placement per sequence")
     parser.add_argument("--normal-annotations", type=Path, help="nuScenes: reviewed native point labels; unresolved points remain ignored")
     args = parser.parse_args()
+    if args.pool_root is None:
+        args.pool_root = Path("/home/jasongao/Study/AJAE-v3/samples") if args.operation == "normal-controls" else POOL_ROOT
     if args.operation == "normal-controls":
         if args.output is None:
             parser.error("normal-controls requires an explicit new output directory")
         from .render import generate_normal_controls
         generate_normal_controls(args.output, data_root=args.data_root, pool_root=args.pool_root,
-                                 train_count=args.train_count, dev_count=args.dev_count, workers=args.workers)
+                                 train_count=args.train_count, dev_count=args.dev_count, workers=args.workers,
+                                 donor_views=args.donor_views)
         return
     if args.background_only and args.operation != "nuscenes":
         parser.error("--background-only is only supported by the nuscenes operation")

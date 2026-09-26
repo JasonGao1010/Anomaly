@@ -1661,7 +1661,7 @@ def _control_source(sequence, frame_id):
     return original, canonical, mapping
 
 
-def _control_donors(sequence):
+def _control_donors(sequence, donor_views=1):
     """Use labeled normal instances and adjacent measured rays, without closing surfaces."""
     from .nuscenes import _ground, _basis
     context = _NORMAL_CONTROLS[sequence]
@@ -1672,11 +1672,17 @@ def _control_donors(sequence):
     faces = np.concatenate((np.stack((a, b, c), -1).reshape(-1, 3),
                             np.stack((b, d, c), -1).reshape(-1, 3)))
     donors = {}
+    multiple = sequence == 206 and donor_views > 1
+    frame_ids = range(len(context["records"])) if multiple else np.linspace(0, len(context["records"])-1, 64, dtype=int)
     categories = (10, 11, 15, 18, 20, 30, 31, 32, 252, 254, 255, 258, 259)
-    for frame_id in np.linspace(0, len(context["records"])-1, 64, dtype=int):
+    candidates = 0
+    for frame_id in frame_ids:
         original, frame, _ = _control_source(sequence, int(frame_id))
         eligible = frame.actual & np.isin(frame.semantic, categories) & (frame.instance > 0)
         road = frame.xyzi[frame.actual & np.isin(frame.semantic, (40, 44, 48, 49, 60)), :3].astype(float)
+        xyz = frame.xyzi[:, :3].astype(float)
+        distance = np.linalg.norm(xyz, axis=1)
+        source_identity = None
         for packed in np.unique(frame.labels[eligible]):
             selected = frame.actual & (frame.labels == packed)
             if selected.sum() < 30:
@@ -1684,8 +1690,6 @@ def _control_donors(sequence):
             triangle = faces[selected[faces].all(1)]
             if len(triangle) < 8:
                 continue
-            xyz = frame.xyzi[:, :3].astype(float)
-            distance = np.linalg.norm(xyz, axis=1)
             legal = np.ones(len(triangle), bool)
             for first, second in ((0, 1), (1, 2), (2, 0)):
                 u, v = triangle[:, first], triangle[:, second]
@@ -1708,15 +1712,50 @@ def _control_donors(sequence):
             if local[:, 2].min() < -.15 or local[:, 2].min() > .5:
                 continue
             key = int(packed)
-            if key in donors and len(donors[key]["faces"]) >= len(triangle):
+            candidates += 1
+            if not multiple and key in donors and len(donors[key][0]["faces"]) >= len(triangle):
                 continue
-            donors[key] = dict(vertices=local, faces=inverse.reshape(-1, 3), sensor_local=-origin@basis,
+            if source_identity is None:
+                source_identity = legacy_source_identity(original)
+            donor = dict(vertices=local, faces=inverse.reshape(-1, 3), sensor_local=-origin@basis,
                 source_frame=int(frame_id), raw_semantic=key & 65535, instance=key >> 16,
                 source_slots=slots.tolist(), source_range=float(np.median(distance[slots])),
-                source_identity=legacy_source_identity(original))
+                source_identity=source_identity,
+                sensor_world=frame.pose[:3, 3].tolist(),
+                view_direction_world=(origin@frame.pose[:3, :3].T/np.linalg.norm(origin)).tolist())
+            if multiple:
+                donors.setdefault(key, []).append(donor)
+            else:
+                donors[key] = [donor]
     if not donors:
         raise ValueError(f"STU{sequence} has no qualified observed normal donor surfaces")
-    return sorted(donors.values(), key=lambda d: (d["raw_semantic"], d["instance"]))
+    selected = []
+    for views in donors.values():
+        # Keep separate measured surfaces; diversity selection never completes missing sides.
+        chosen = [max(views, key=lambda view: len(view["faces"]))]
+        while multiple and len(chosen) < donor_views:
+            choices = []
+            for view in views:
+                separation = []
+                for previous in chosen:
+                    if abs(view["source_frame"]-previous["source_frame"]) < 16:
+                        break
+                    angle = np.degrees(np.arccos(np.clip(np.dot(view["view_direction_world"], previous["view_direction_world"]), -1., 1.)))
+                    displacement = np.linalg.norm(np.asarray(view["sensor_world"])-previous["sensor_world"])
+                    ratio = max(view["source_range"], previous["source_range"])/min(view["source_range"], previous["source_range"])
+                    if angle < 10. and (displacement < 3. or ratio < 1.25):
+                        break
+                    separation.append(max(angle/10., np.log(ratio)/np.log(1.25) if displacement >= 3. else 0.))
+                else:
+                    choices.append((min(separation), len(view["faces"]), -view["source_frame"], view))
+            if not choices:
+                break
+            chosen.append(max(choices, key=lambda item: item[:3])[3])
+        selected.extend(chosen)
+    context["donor_coverage"] = dict(scanned_frames=len(frame_ids), qualified_instance_views=candidates,
+        donor_instances=len(donors), donor_views=len(selected), max_views_per_instance=donor_views if multiple else 1,
+        selection="largest measured surface, then farthest supported views; frame gap >=16 and (world viewing angle >=10 degrees or sensor displacement >=3m with range ratio >=1.25)" if multiple else "largest measured surface per packed instance over 64 evenly spaced frames")
+    return sorted(selected, key=lambda d: (d["raw_semantic"], d["instance"], d["source_frame"]))
 
 
 def _make_normal_control(task):
@@ -1796,12 +1835,14 @@ def _make_normal_control(task):
             delta=str(path), delta_sha256=file_sha256(path), recorded_anomalies=0,
             inserted_normal_points=stored_count, unique_inserted_normal_points=normal_count,
             normal_semantic=category, donor=dict(sequence=sequence, frame=donor["source_frame"],
-                semantic=category, instance=donor["instance"], geometry=geometry),
+                semantic=category, instance=donor["instance"], geometry=geometry,
+                source_range=donor["source_range"], sensor_world=donor["sensor_world"],
+                view_direction_world=donor["view_direction_world"]),
             material=material, pose=pose.tolist(), attempts=attempt+1, rejections=dict(rejected))
     return dict(rejected=True, source_sequence=sequence, frame=frame_id, reasons=dict(rejected))
 
 
-def generate_normal_controls(output, *, data_root, pool_root, train_count=256, dev_count=64, workers=4):
+def generate_normal_controls(output, *, data_root, pool_root, train_count=256, dev_count=64, workers=4, donor_views=1):
     """Insert actual same-sequence normal surfaces through the calibrated STU ray renderer."""
     import multiprocessing as mp
     from concurrent.futures import ProcessPoolExecutor
@@ -1809,8 +1850,8 @@ def generate_normal_controls(output, *, data_root, pool_root, train_count=256, d
     from threadpoolctl import threadpool_limits
     from .data import DATA_ROOT, normal_records, file_sha256
     global _NORMAL_CONTROLS
-    if Path(data_root).resolve() != DATA_ROOT.resolve() or min(train_count, dev_count, workers) < 1:
-        raise ValueError("normal controls require the documented local STU source and positive counts")
+    if Path(data_root).resolve() != DATA_ROOT.resolve() or train_count < 1 or dev_count < 0 or workers < 1 or not 1 <= donor_views <= 4:
+        raise ValueError("normal controls require the documented STU source, positive train/workers, nonnegative dev count and 1-4 donor views")
     output, pool_root = Path(output).resolve(), Path(pool_root).resolve()
     if output.exists():
         raise FileExistsError("normal control outputs must use a new directory")
@@ -1827,6 +1868,8 @@ def generate_normal_controls(output, *, data_root, pool_root, train_count=256, d
     pool = json.loads((pool_root / "manifest.json").read_text())
     output.mkdir(parents=True)
     for sequence, split, count in ((206,"train",train_count),(201,"validation",dev_count)):
+        if not count:
+            continue
         folder = output / split; folder.mkdir()
         materials = []
         for row in pool["splits"][split]["worlds"]:
@@ -1834,12 +1877,13 @@ def generate_normal_controls(output, *, data_root, pool_root, train_count=256, d
             materials.append(dict(quantile=value["intensity_quantile"], roughness=value["roughness"], return_bias=value["return_bias"]))
         _NORMAL_CONTROLS[sequence] = dict(records=normal_records(str(sequence), development=sequence==201),
             output=folder, materials=materials)
-        donors = _control_donors(sequence)
+        donors = _control_donors(sequence, donor_views)
         groups = defaultdict(list)
         for donor in donors:
             groups[donor["raw_semantic"]].append(donor)
         _NORMAL_CONTROLS[sequence]["groups"] = dict(groups)
-        print(f"normal controls {sequence}: {len(donors)} real normal donors, classes {dict(Counter(d['raw_semantic'] for d in donors))}", flush=True)
+        coverage = _NORMAL_CONTROLS[sequence]["donor_coverage"]
+        print(f"normal controls {sequence}: {json.dumps(coverage)}; view classes {dict(Counter(d['raw_semantic'] for d in donors))}", flush=True)
         records, rejected = [], []
         tasks = [(sequence, i, count) for i in range(count)]
         with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as executor:
@@ -1849,7 +1893,8 @@ def generate_normal_controls(output, *, data_root, pool_root, train_count=256, d
                     print(f"normal controls {sequence}: {i}/{count}, accepted {len(records)}, elapsed {time.perf_counter()-started:.1f}s", flush=True)
         manifest = dict(role="normal_control", source_sequence=sequence, split=split, records=records,
             requested_frames=count, selected_frames=len(records), rejected=rejected,
-            donor_instances=len(donors), normal_class_counts=dict(Counter(r["normal_semantic"] for r in records)),
+            donor_instances=coverage["donor_instances"], donor_views=len(donors), donor_coverage=coverage,
+            normal_class_counts=dict(Counter(r["normal_semantic"] for r in records)),
             calibration=_NORMAL_CONTROLS["calibration"], semantics="actual labeled normal instances; original size; measured surface sides only; same STU ray response and opaque occlusion; no anomaly shape relabeling")
         manifest["sha256"] = identity(manifest)
         write_json(output / f"{split}.json", manifest)

@@ -446,7 +446,10 @@ def load_model(path, device):
         if saved["version"] == EVIDENCE_VERSION:
             if saved["config"].get("version") != EVIDENCE_VERSION or type(saved["config"].get("residual")) is not bool:
                 raise ValueError("feature-evidence checkpoint must specify its version and residual capacity")
-            scorer = FeatureEvidence(residual=saved["config"]["residual"])
+            competition = saved["config"].get("semantic_competition", False)
+            if type(competition) is not bool:
+                raise ValueError("feature-evidence semantic-competition score mode must be boolean")
+            scorer = FeatureEvidence(residual=saved["config"]["residual"], semantic_competition=competition)
         else:
             scorer = (InstanceSupport(memory_size=saved["config"]["memory_size"])
                       if saved["version"] == INSTANCE_VERSION else FeatureSupport(modes=saved["config"]["modes"]))

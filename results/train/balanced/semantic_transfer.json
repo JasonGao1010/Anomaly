@@ -1,0 +1,1850 @@
+{
+  "role": "Read-only normal-semantic versus anomaly-score comparison on existing STU206/201 caches; no fitting and no val19 access",
+  "cpu_threads": 2,
+  "models": [
+    {
+      "name": "contrast",
+      "checkpoint": "results/train/contrast/frozen.pt",
+      "checkpoint_sha256": "732da9ae63182361e5fd22c00239937da5e07ce1044e381790b945c60edf3507",
+      "epoch": 3,
+      "threshold": -0.6956113576889038
+    },
+    {
+      "name": "balanced",
+      "checkpoint": "results/train/balanced/frozen.pt",
+      "checkpoint_sha256": "dd68474484eb33f5383cbc603bfc6fcd7639be0d9f815be8d81c1ba3a89b4c61",
+      "epoch": 5,
+      "threshold": -0.42726898193359375
+    }
+  ],
+  "source": "results/train/controls/development/features.json",
+  "population": "All 44660 inserted normal points and all 118755 original background normal points of the same car/truck/person ground-truth classes from 76 STU201 control scans; classid null pools only these three classes",
+  "class_mapping": {
+    "0": "car",
+    "3": "truck",
+    "5": "person"
+  },
+  "definitions": {
+    "predicted_anomaly": "score >= own selected expanded synthetic201 FPR95 threshold",
+    "semantic_correct": "argmax of learned 19 normal class logits equals the original mapped STU normal semantic label",
+    "margin": "largest normal class logit minus second largest; quantiles [0.1,0.5,0.9] over false positives",
+    "high_margin": "margin>=2",
+    "high_confidence": "largest conditional19 softmax probability>=0.9; not an absolute normal support probability"
+  },
+  "groups": [
+    {
+      "model": "contrast",
+      "population": "inserted",
+      "classid": null,
+      "points": 44660,
+      "false_positives": 9611,
+      "fp_percent": 21.520376175548588,
+      "semantic_accuracy": 0.4895208240035826,
+      "fp_semantically_correct": 4878,
+      "fp_semantic_accuracy": 0.5075434398085527,
+      "fp_margin_quantiles": [
+        0.35079288482666016,
+        2.0999813079833984,
+        5.294084548950195
+      ],
+      "fp_correct_and_margin_ge2": 2933,
+      "fp_correct_and_confidence_ge90": 2532
+    },
+    {
+      "model": "contrast",
+      "population": "inserted",
+      "classid": 0,
+      "points": 19808,
+      "false_positives": 6703,
+      "fp_percent": 33.83986268174475,
+      "semantic_accuracy": 0.6638226978998385,
+      "fp_semantically_correct": 4337,
+      "fp_semantic_accuracy": 0.6470237207220647,
+      "fp_margin_quantiles": [
+        0.37117099761962896,
+        2.230539321899414,
+        5.450250434875488
+      ],
+      "fp_correct_and_margin_ge2": 2762,
+      "fp_correct_and_confidence_ge90": 2401
+    },
+    {
+      "model": "contrast",
+      "population": "inserted",
+      "classid": 3,
+      "points": 21953,
+      "false_positives": 2724,
+      "fp_percent": 12.408326880153055,
+      "semantic_accuracy": 0.28633899694802534,
+      "fp_semantically_correct": 452,
+      "fp_semantic_accuracy": 0.16593245227606462,
+      "fp_margin_quantiles": [
+        0.29159107208251955,
+        1.7799654006958008,
+        4.385855102539065
+      ],
+      "fp_correct_and_margin_ge2": 100,
+      "fp_correct_and_confidence_ge90": 62
+    },
+    {
+      "model": "contrast",
+      "population": "inserted",
+      "classid": 5,
+      "points": 2899,
+      "false_positives": 184,
+      "fp_percent": 6.347016212487064,
+      "semantic_accuracy": 0.8371852362883753,
+      "fp_semantically_correct": 89,
+      "fp_semantic_accuracy": 0.483695652173913,
+      "fp_margin_quantiles": [
+        0.5834778785705567,
+        3.9472522735595703,
+        10.86886548995972
+      ],
+      "fp_correct_and_margin_ge2": 71,
+      "fp_correct_and_confidence_ge90": 69
+    },
+    {
+      "model": "contrast",
+      "population": "background",
+      "classid": null,
+      "points": 118755,
+      "false_positives": 5047,
+      "fp_percent": 4.249926318891836,
+      "semantic_accuracy": 0.5951075744179193,
+      "fp_semantically_correct": 3197,
+      "fp_semantic_accuracy": 0.6334456112542104,
+      "fp_margin_quantiles": [
+        0.43708343505859376,
+        2.7934560775756836,
+        7.078040504455576
+      ],
+      "fp_correct_and_margin_ge2": 2457,
+      "fp_correct_and_confidence_ge90": 2251
+    },
+    {
+      "model": "contrast",
+      "population": "background",
+      "classid": 0,
+      "points": 44326,
+      "false_positives": 2259,
+      "fp_percent": 5.096331724044579,
+      "semantic_accuracy": 0.9301312999142716,
+      "fp_semantically_correct": 2048,
+      "fp_semantic_accuracy": 0.9065958388667552,
+      "fp_margin_quantiles": [
+        0.9897689819335938,
+        4.3503570556640625,
+        8.173855781555176
+      ],
+      "fp_correct_and_margin_ge2": 1759,
+      "fp_correct_and_confidence_ge90": 1683
+    },
+    {
+      "model": "contrast",
+      "population": "background",
+      "classid": 3,
+      "points": 48225,
+      "false_positives": 966,
+      "fp_percent": 2.0031104199066876,
+      "semantic_accuracy": 0.22125453602903059,
+      "fp_semantically_correct": 197,
+      "fp_semantic_accuracy": 0.2039337474120083,
+      "fp_margin_quantiles": [
+        0.24260854721069336,
+        1.5144093036651611,
+        3.8898701667785645
+      ],
+      "fp_correct_and_margin_ge2": 59,
+      "fp_correct_and_confidence_ge90": 44
+    },
+    {
+      "model": "contrast",
+      "population": "background",
+      "classid": 5,
+      "points": 26204,
+      "false_positives": 1822,
+      "fp_percent": 6.953136925660204,
+      "semantic_accuracy": 0.7164173408639902,
+      "fp_semantically_correct": 952,
+      "fp_semantic_accuracy": 0.5225027442371021,
+      "fp_margin_quantiles": [
+        0.31813549995422363,
+        2.0910329818725586,
+        5.853665590286257
+      ],
+      "fp_correct_and_margin_ge2": 639,
+      "fp_correct_and_confidence_ge90": 524
+    },
+    {
+      "model": "balanced",
+      "population": "inserted",
+      "classid": null,
+      "points": 44660,
+      "false_positives": 9468,
+      "fp_percent": 21.200179131213613,
+      "semantic_accuracy": 0.46446484549932826,
+      "fp_semantically_correct": 4910,
+      "fp_semantic_accuracy": 0.5185889311364597,
+      "fp_margin_quantiles": [
+        0.4102396965026856,
+        2.528874635696411,
+        6.024651145935059
+      ],
+      "fp_correct_and_margin_ge2": 3234,
+      "fp_correct_and_confidence_ge90": 2958
+    },
+    {
+      "model": "balanced",
+      "population": "inserted",
+      "classid": 0,
+      "points": 19808,
+      "false_positives": 6541,
+      "fp_percent": 33.0220113085622,
+      "semantic_accuracy": 0.6932047657512116,
+      "fp_semantically_correct": 4517,
+      "fp_semantic_accuracy": 0.6905671915609234,
+      "fp_margin_quantiles": [
+        0.4185314178466797,
+        2.624142646789551,
+        6.383728981018066
+      ],
+      "fp_correct_and_margin_ge2": 3076,
+      "fp_correct_and_confidence_ge90": 2824
+    },
+    {
+      "model": "balanced",
+      "population": "inserted",
+      "classid": 3,
+      "points": 21953,
+      "false_positives": 2800,
+      "fp_percent": 12.754521022183756,
+      "semantic_accuracy": 0.2162802350476017,
+      "fp_semantically_correct": 366,
+      "fp_semantic_accuracy": 0.13071428571428573,
+      "fp_margin_quantiles": [
+        0.40218067169189453,
+        2.3211512565612793,
+        5.2528137207031245
+      ],
+      "fp_correct_and_margin_ge2": 146,
+      "fp_correct_and_confidence_ge90": 124
+    },
+    {
+      "model": "balanced",
+      "population": "inserted",
+      "classid": 5,
+      "points": 2899,
+      "false_positives": 127,
+      "fp_percent": 4.380820972749224,
+      "semantic_accuracy": 0.7809589513625388,
+      "fp_semantically_correct": 27,
+      "fp_semantic_accuracy": 0.2125984251968504,
+      "fp_margin_quantiles": [
+        0.3955154418945313,
+        2.338038444519043,
+        4.998314285278322
+      ],
+      "fp_correct_and_margin_ge2": 12,
+      "fp_correct_and_confidence_ge90": 10
+    },
+    {
+      "model": "balanced",
+      "population": "background",
+      "classid": null,
+      "points": 118755,
+      "false_positives": 5716,
+      "fp_percent": 4.813271020167572,
+      "semantic_accuracy": 0.5698202180960802,
+      "fp_semantically_correct": 3625,
+      "fp_semantic_accuracy": 0.634184744576627,
+      "fp_margin_quantiles": [
+        0.45751190185546875,
+        3.122896194458008,
+        8.196128845214844
+      ],
+      "fp_correct_and_margin_ge2": 2869,
+      "fp_correct_and_confidence_ge90": 2689
+    },
+    {
+      "model": "balanced",
+      "population": "background",
+      "classid": 0,
+      "points": 44326,
+      "false_positives": 3000,
+      "fp_percent": 6.768036818120291,
+      "semantic_accuracy": 0.9543383116004152,
+      "fp_semantically_correct": 2727,
+      "fp_semantic_accuracy": 0.909,
+      "fp_margin_quantiles": [
+        1.1487351417541505,
+        4.604188919067383,
+        9.401889610290526
+      ],
+      "fp_correct_and_margin_ge2": 2359,
+      "fp_correct_and_confidence_ge90": 2281
+    },
+    {
+      "model": "balanced",
+      "population": "background",
+      "classid": 3,
+      "points": 48225,
+      "false_positives": 1142,
+      "fp_percent": 2.368066355624676,
+      "semantic_accuracy": 0.15921202695697254,
+      "fp_semantically_correct": 221,
+      "fp_semantic_accuracy": 0.19352014010507881,
+      "fp_margin_quantiles": [
+        0.2712200164794922,
+        1.676076889038086,
+        5.408928203582766
+      ],
+      "fp_correct_and_margin_ge2": 74,
+      "fp_correct_and_confidence_ge90": 44
+    },
+    {
+      "model": "balanced",
+      "population": "background",
+      "classid": 5,
+      "points": 26204,
+      "false_positives": 1574,
+      "fp_percent": 6.006716531827202,
+      "semantic_accuracy": 0.675049610746451,
+      "fp_semantically_correct": 677,
+      "fp_semantic_accuracy": 0.4301143583227446,
+      "fp_margin_quantiles": [
+        0.28570156097412114,
+        1.7925810813903809,
+        5.512423372268677
+      ],
+      "fp_correct_and_margin_ge2": 436,
+      "fp_correct_and_confidence_ge90": 364
+    }
+  ],
+  "training_inserted_semantic_accuracy": {
+    "contrast": 0.8870932544493477,
+    "balanced": 0.9172688036467679
+  },
+  "synthetic201_anomaly_confidence": {
+    "points": 7914,
+    "population": "Anomaly points only from existing eligible60 synthetic201 scans",
+    "contrast": {
+      "quantiles10_50_90": [
+        0.44165558218955997,
+        0.780499279499054,
+        0.9956118702888489
+      ],
+      "fraction_ge90": 0.3555724033358605
+    },
+    "balanced": {
+      "quantiles10_50_90": [
+        0.4871982395648956,
+        0.8448764979839325,
+        0.9970698356628418
+      ],
+      "fraction_ge90": 0.4130654536264847
+    }
+  },
+  "interpretation": [
+    "Approximately half of inserted-normal false positives already have correct normal semantics; the coexistence is strongest for cars, including original background cars.",
+    "Truck semantic transfer itself is weak in both inserted objects and original backgrounds; semantic-score coupling cannot be assumed to fix this separate failure.",
+    "High conditional normal confidence also occurs on synthetic anomalies, so subtracting confidence after training is not established as a valid remedy.",
+    "These observations motivate a controlled jointly trained unknown-versus-normal class competition; they do not establish an improvement before its same-data development experiment."
+  ],
+  "static_audit": {
+    "voxelization": "SupportScans, AuxiliaryScans and frozen inference all use official=True, full actual returns, and the same nearest-to-voxel-mean representative rule",
+    "context": "Query selection occurs after full-backbone context computation; training does not encode only its supervised 512-point background subset",
+    "labels": "Same STU semantic mapping and packed-slot restoration; inserted normal deltas require genuine normal labels",
+    "conditions": "FeatureEvidence ignores conditions, so training density versus evaluation range-only conditions do not affect scores",
+    "backbone": "FrozenPerception remains eval and disables autocast; cached raw features and deployed features are FP32"
+  },
+  "training_coverage": {
+    "role": "Bounded cache-label/condition statistics only; no feature inference, training, new data or val19 access",
+    "cpu_threads": 1,
+    "range_bands_m": [
+      [
+        2.5,
+        10
+      ],
+      [
+        10,
+        20
+      ],
+      [
+        20,
+        35
+      ],
+      [
+        35,
+        50
+      ]
+    ],
+    "range_definition": "exp of cached float32 log-range; np.searchsorted([10,20,35], side=right); not a new geometric measurement",
+    "normal_cache_scope": "Complete source206 and source201 original-normal prefixes, not all raw returns; 2064096/scan class-range reservation and 2012048/scan uniform normal-query budgets differ",
+    "normal_caches": {
+      "206": {
+        "points": 1839104,
+        "frames": 449,
+        "range_counts": [
+          816760,
+          487270,
+          365526,
+          169548
+        ],
+        "classes": [
+          {
+            "category": 0,
+            "name": "car",
+            "points": 99224,
+            "fraction": 0.053952359409799554,
+            "frames": 449,
+            "range_counts": [
+              36185,
+              30707,
+              22596,
+              9736
+            ],
+            "range_frame_counts": [
+              370,
+              429,
+              449,
+              415
+            ],
+            "range_quantiles10_50_90": [
+              7.649966716766357,
+              12.43537187576294,
+              34.77718696594238
+            ]
+          },
+          {
+            "category": 1,
+            "name": "bicycle",
+            "points": 596,
+            "fraction": 0.00032407085189309576,
+            "frames": 118,
+            "range_counts": [
+              0,
+              0,
+              570,
+              26
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              92,
+              26
+            ],
+            "range_quantiles10_50_90": [
+              20.952935218811035,
+              21.50156307220459,
+              28.826387405395508
+            ]
+          },
+          {
+            "category": 2,
+            "name": "motorcycle",
+            "points": 3977,
+            "fraction": 0.0021624660704342986,
+            "frames": 163,
+            "range_counts": [
+              0,
+              0,
+              3303,
+              674
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              112,
+              73
+            ],
+            "range_quantiles10_50_90": [
+              28.89780616760254,
+              30.97075080871582,
+              36.87968292236328
+            ]
+          },
+          {
+            "category": 3,
+            "name": "truck",
+            "points": 31311,
+            "fraction": 0.017025138328229397,
+            "frames": 374,
+            "range_counts": [
+              5665,
+              9576,
+              13913,
+              2157
+            ],
+            "range_frame_counts": [
+              76,
+              189,
+              327,
+              163
+            ],
+            "range_quantiles10_50_90": [
+              8.596402168273926,
+              20.206520080566406,
+              32.4066047668457
+            ]
+          },
+          {
+            "category": 4,
+            "name": "other-vehicle",
+            "points": 8698,
+            "fraction": 0.004729476962694878,
+            "frames": 190,
+            "range_counts": [
+              4079,
+              3770,
+              849,
+              0
+            ],
+            "range_frame_counts": [
+              75,
+              136,
+              59,
+              0
+            ],
+            "range_quantiles10_50_90": [
+              8.063039016723632,
+              10.055996894836426,
+              19.686567497253424
+            ]
+          },
+          {
+            "category": 5,
+            "name": "person",
+            "points": 18003,
+            "fraction": 0.009789005950723831,
+            "frames": 418,
+            "range_counts": [
+              523,
+              8452,
+              6570,
+              2458
+            ],
+            "range_frame_counts": [
+              23,
+              195,
+              322,
+              273
+            ],
+            "range_quantiles10_50_90": [
+              10.393868827819825,
+              20.025060653686523,
+              36.60353088378906
+            ]
+          },
+          {
+            "category": 6,
+            "name": "bicyclist",
+            "points": 0,
+            "fraction": 0.0,
+            "frames": 0,
+            "range_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_quantiles10_50_90": null
+          },
+          {
+            "category": 7,
+            "name": "motorcyclist",
+            "points": 1702,
+            "fraction": 0.0009254506542316259,
+            "frames": 71,
+            "range_counts": [
+              0,
+              0,
+              1480,
+              222
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              53,
+              20
+            ],
+            "range_quantiles10_50_90": [
+              21.867899703979493,
+              23.854580879211426,
+              37.260232543945314
+            ]
+          },
+          {
+            "category": 8,
+            "name": "road",
+            "points": 257358,
+            "fraction": 0.1399366213112472,
+            "frames": 449,
+            "range_counts": [
+              144584,
+              61411,
+              30011,
+              21352
+            ],
+            "range_frame_counts": [
+              449,
+              449,
+              449,
+              449
+            ],
+            "range_quantiles10_50_90": [
+              5.547752380371094,
+              8.905223369598389,
+              29.34917716979982
+            ]
+          },
+          {
+            "category": 9,
+            "name": "parking",
+            "points": 0,
+            "fraction": 0.0,
+            "frames": 0,
+            "range_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_quantiles10_50_90": null
+          },
+          {
+            "category": 10,
+            "name": "sidewalk",
+            "points": 76484,
+            "fraction": 0.04158764267817372,
+            "frames": 449,
+            "range_counts": [
+              21782,
+              24282,
+              24784,
+              5636
+            ],
+            "range_frame_counts": [
+              264,
+              414,
+              449,
+              411
+            ],
+            "range_quantiles10_50_90": [
+              6.0495209217071535,
+              17.884057998657227,
+              31.588766860961915
+            ]
+          },
+          {
+            "category": 11,
+            "name": "other-ground",
+            "points": 19183,
+            "fraction": 0.010430622738028953,
+            "frames": 446,
+            "range_counts": [
+              3816,
+              5555,
+              9032,
+              780
+            ],
+            "range_frame_counts": [
+              109,
+              171,
+              294,
+              181
+            ],
+            "range_quantiles10_50_90": [
+              8.275002479553223,
+              20.304105758666992,
+              31.365574264526366
+            ]
+          },
+          {
+            "category": 12,
+            "name": "building",
+            "points": 526596,
+            "fraction": 0.28633290993875277,
+            "frames": 449,
+            "range_counts": [
+              313081,
+              110083,
+              68214,
+              35218
+            ],
+            "range_frame_counts": [
+              449,
+              449,
+              449,
+              449
+            ],
+            "range_quantiles10_50_90": [
+              3.5254149436950684,
+              7.593588590621948,
+              30.5544490814209
+            ]
+          },
+          {
+            "category": 13,
+            "name": "fence",
+            "points": 152868,
+            "fraction": 0.08312091105233853,
+            "frames": 449,
+            "range_counts": [
+              65051,
+              38761,
+              28747,
+              20309
+            ],
+            "range_frame_counts": [
+              428,
+              449,
+              449,
+              449
+            ],
+            "range_quantiles10_50_90": [
+              4.829663228988648,
+              11.546258926391602,
+              37.177307510375975
+            ]
+          },
+          {
+            "category": 14,
+            "name": "vegetation",
+            "points": 310096,
+            "fraction": 0.16861254175946547,
+            "frames": 449,
+            "range_counts": [
+              106090,
+              97171,
+              74457,
+              32378
+            ],
+            "range_frame_counts": [
+              449,
+              449,
+              449,
+              449
+            ],
+            "range_quantiles10_50_90": [
+              5.623636245727539,
+              14.448973655700684,
+              35.32683563232422
+            ]
+          },
+          {
+            "category": 15,
+            "name": "trunk",
+            "points": 122776,
+            "fraction": 0.06675859548997773,
+            "frames": 449,
+            "range_counts": [
+              38985,
+              32103,
+              29328,
+              22360
+            ],
+            "range_frame_counts": [
+              420,
+              438,
+              449,
+              449
+            ],
+            "range_quantiles10_50_90": [
+              6.539475440979004,
+              16.99819850921631,
+              39.01952362060547
+            ]
+          },
+          {
+            "category": 16,
+            "name": "terrain",
+            "points": 78387,
+            "fraction": 0.04262238568346325,
+            "frames": 449,
+            "range_counts": [
+              29411,
+              23871,
+              16142,
+              8963
+            ],
+            "range_frame_counts": [
+              402,
+              421,
+              419,
+              390
+            ],
+            "range_quantiles10_50_90": [
+              7.280292320251465,
+              11.686199188232422,
+              35.69470748901367
+            ]
+          },
+          {
+            "category": 17,
+            "name": "pole",
+            "points": 74601,
+            "fraction": 0.04056377453368597,
+            "frames": 449,
+            "range_counts": [
+              24967,
+              22998,
+              21924,
+              4712
+            ],
+            "range_frame_counts": [
+              439,
+              449,
+              449,
+              395
+            ],
+            "range_quantiles10_50_90": [
+              5.093778610229492,
+              15.409042358398438,
+              30.30770492553711
+            ]
+          },
+          {
+            "category": 18,
+            "name": "traffic-sign",
+            "points": 57244,
+            "fraction": 0.031126026586859687,
+            "frames": 449,
+            "range_counts": [
+              22541,
+              18530,
+              13606,
+              2567
+            ],
+            "range_frame_counts": [
+              400,
+              449,
+              446,
+              282
+            ],
+            "range_quantiles10_50_90": [
+              4.914655303955079,
+              13.3663330078125,
+              28.744943046569837
+            ]
+          }
+        ]
+      },
+      "201": {
+        "points": 1313150,
+        "frames": 682,
+        "range_counts": [
+          551124,
+          349529,
+          220538,
+          191959
+        ],
+        "classes": [
+          {
+            "category": 0,
+            "name": "car",
+            "points": 10380,
+            "fraction": 0.007904656741423296,
+            "frames": 316,
+            "range_counts": [
+              6172,
+              3666,
+              501,
+              41
+            ],
+            "range_frame_counts": [
+              91,
+              213,
+              168,
+              23
+            ],
+            "range_quantiles10_50_90": [
+              5.28408465385437,
+              8.690712451934814,
+              17.095274543762212
+            ]
+          },
+          {
+            "category": 1,
+            "name": "bicycle",
+            "points": 26,
+            "fraction": 1.9799718234778968e-05,
+            "frames": 18,
+            "range_counts": [
+              0,
+              0,
+              23,
+              3
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              16,
+              2
+            ],
+            "range_quantiles10_50_90": [
+              24.233304977416992,
+              28.07569694519043,
+              38.15584945678711
+            ]
+          },
+          {
+            "category": 2,
+            "name": "motorcycle",
+            "points": 0,
+            "fraction": 0.0,
+            "frames": 0,
+            "range_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_quantiles10_50_90": null
+          },
+          {
+            "category": 3,
+            "name": "truck",
+            "points": 10276,
+            "fraction": 0.00782545786848418,
+            "frames": 365,
+            "range_counts": [
+              6024,
+              3215,
+              882,
+              155
+            ],
+            "range_frame_counts": [
+              88,
+              156,
+              189,
+              77
+            ],
+            "range_quantiles10_50_90": [
+              5.513000965118408,
+              9.125250339508057,
+              20.166752815246582
+            ]
+          },
+          {
+            "category": 4,
+            "name": "other-vehicle",
+            "points": 0,
+            "fraction": 0.0,
+            "frames": 0,
+            "range_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_quantiles10_50_90": null
+          },
+          {
+            "category": 5,
+            "name": "person",
+            "points": 4488,
+            "fraction": 0.0034177359783726154,
+            "frames": 546,
+            "range_counts": [
+              2320,
+              794,
+              700,
+              674
+            ],
+            "range_frame_counts": [
+              182,
+              251,
+              297,
+              170
+            ],
+            "range_quantiles10_50_90": [
+              3.7489809274673465,
+              9.47572660446167,
+              40.112375259399414
+            ]
+          },
+          {
+            "category": 6,
+            "name": "bicyclist",
+            "points": 0,
+            "fraction": 0.0,
+            "frames": 0,
+            "range_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_quantiles10_50_90": null
+          },
+          {
+            "category": 7,
+            "name": "motorcyclist",
+            "points": 0,
+            "fraction": 0.0,
+            "frames": 0,
+            "range_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_quantiles10_50_90": null
+          },
+          {
+            "category": 8,
+            "name": "road",
+            "points": 242904,
+            "fraction": 0.1849781060807981,
+            "frames": 676,
+            "range_counts": [
+              174405,
+              54768,
+              12085,
+              1646
+            ],
+            "range_frame_counts": [
+              592,
+              613,
+              643,
+              411
+            ],
+            "range_quantiles10_50_90": [
+              5.4377552509307865,
+              7.5665411949157715,
+              15.951906871795657
+            ]
+          },
+          {
+            "category": 9,
+            "name": "parking",
+            "points": 11087,
+            "fraction": 0.0084430567718844,
+            "frames": 266,
+            "range_counts": [
+              9092,
+              1862,
+              129,
+              4
+            ],
+            "range_frame_counts": [
+              160,
+              232,
+              93,
+              3
+            ],
+            "range_quantiles10_50_90": [
+              6.011483478546142,
+              7.67818021774292,
+              11.70004711151123
+            ]
+          },
+          {
+            "category": 10,
+            "name": "sidewalk",
+            "points": 255668,
+            "fraction": 0.19469824467882574,
+            "frames": 677,
+            "range_counts": [
+              182577,
+              56250,
+              13954,
+              2887
+            ],
+            "range_frame_counts": [
+              594,
+              616,
+              647,
+              548
+            ],
+            "range_quantiles10_50_90": [
+              5.270422792434692,
+              7.407658100128174,
+              16.672975540161136
+            ]
+          },
+          {
+            "category": 11,
+            "name": "other-ground",
+            "points": 0,
+            "fraction": 0.0,
+            "frames": 0,
+            "range_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_frame_counts": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "range_quantiles10_50_90": null
+          },
+          {
+            "category": 12,
+            "name": "building",
+            "points": 238602,
+            "fraction": 0.1817020142405666,
+            "frames": 682,
+            "range_counts": [
+              21,
+              38683,
+              72364,
+              127534
+            ],
+            "range_frame_counts": [
+              12,
+              354,
+              661,
+              682
+            ],
+            "range_quantiles10_50_90": [
+              17.02056884765625,
+              35.71851921081543,
+              46.58827667236328
+            ]
+          },
+          {
+            "category": 13,
+            "name": "fence",
+            "points": 37610,
+            "fraction": 0.02864105395423219,
+            "frames": 541,
+            "range_counts": [
+              23446,
+              10581,
+              2705,
+              878
+            ],
+            "range_frame_counts": [
+              364,
+              476,
+              444,
+              313
+            ],
+            "range_quantiles10_50_90": [
+              5.349271392822265,
+              8.521166801452637,
+              19.49397163391113
+            ]
+          },
+          {
+            "category": 14,
+            "name": "vegetation",
+            "points": 427269,
+            "fraction": 0.3253771465559913,
+            "frames": 682,
+            "range_counts": [
+              111383,
+              152496,
+              107653,
+              55737
+            ],
+            "range_frame_counts": [
+              508,
+              619,
+              663,
+              682
+            ],
+            "range_quantiles10_50_90": [
+              7.313350105285646,
+              15.300043106079102,
+              37.647134399414064
+            ]
+          },
+          {
+            "category": 15,
+            "name": "trunk",
+            "points": 15231,
+            "fraction": 0.011598827247458402,
+            "frames": 402,
+            "range_counts": [
+              7003,
+              5762,
+              1922,
+              544
+            ],
+            "range_frame_counts": [
+              263,
+              333,
+              349,
+              261
+            ],
+            "range_quantiles10_50_90": [
+              6.031762599945068,
+              10.588563919067383,
+              24.6488094329834
+            ]
+          },
+          {
+            "category": 16,
+            "name": "terrain",
+            "points": 48040,
+            "fraction": 0.03658378707687621,
+            "frames": 624,
+            "range_counts": [
+              23115,
+              18128,
+              5551,
+              1246
+            ],
+            "range_frame_counts": [
+              422,
+              568,
+              585,
+              383
+            ],
+            "range_quantiles10_50_90": [
+              6.242835855484008,
+              10.207701683044434,
+              23.004992103576658
+            ]
+          },
+          {
+            "category": 17,
+            "name": "pole",
+            "points": 6980,
+            "fraction": 0.005315462818413738,
+            "frames": 583,
+            "range_counts": [
+              2426,
+              2516,
+              1649,
+              389
+            ],
+            "range_frame_counts": [
+              324,
+              386,
+              365,
+              241
+            ],
+            "range_quantiles10_50_90": [
+              5.276543188095093,
+              13.323331832885742,
+              30.90177612304688
+            ]
+          },
+          {
+            "category": 18,
+            "name": "traffic-sign",
+            "points": 4589,
+            "fraction": 0.0034946502684384878,
+            "frames": 397,
+            "range_counts": [
+              3140,
+              808,
+              420,
+              221
+            ],
+            "range_frame_counts": [
+              292,
+              238,
+              224,
+              167
+            ],
+            "range_quantiles10_50_90": [
+              3.067362070083618,
+              6.093106746673584,
+              24.90988998413085
+            ]
+          }
+        ]
+      }
+    },
+    "synthetic_training_label_counts": {
+      "anomaly_background_background": {
+        "points": 983040,
+        "class_counts": [
+          27398,
+          9,
+          73,
+          3080,
+          387,
+          449,
+          0,
+          26,
+          165676,
+          0,
+          14273,
+          757,
+          438267,
+          63885,
+          212321,
+          34584,
+          13138,
+          5481,
+          3236
+        ],
+        "class_view_counts": [
+          1793,
+          9,
+          68,
+          853,
+          241,
+          365,
+          0,
+          22,
+          1920,
+          0,
+          1640,
+          483,
+          1920,
+          1916,
+          1920,
+          1891,
+          1589,
+          1643,
+          1446
+        ]
+      },
+      "normal_controls_background": {
+        "points": 262144,
+        "class_counts": [
+          7324,
+          5,
+          14,
+          786,
+          101,
+          135,
+          0,
+          12,
+          44725,
+          0,
+          4018,
+          198,
+          113030,
+          17575,
+          58731,
+          9159,
+          3911,
+          1541,
+          879
+        ],
+        "class_view_counts": [
+          486,
+          5,
+          12,
+          230,
+          65,
+          104,
+          0,
+          11,
+          512,
+          0,
+          441,
+          123,
+          512,
+          511,
+          512,
+          502,
+          447,
+          455,
+          395
+        ]
+      },
+      "normal_controls_inserted": {
+        "points": 82484,
+        "class_counts": [
+          44431,
+          0,
+          0,
+          20273,
+          14989,
+          2016,
+          0,
+          775,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "class_view_counts": [
+          109,
+          0,
+          0,
+          98,
+          127,
+          101,
+          0,
+          77,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    "ordinary_normal_total": 3084288,
+    "ordinary_normal_present_classes": 17,
+    "ordinary_normal_bce_mass": 0.45,
+    "inserted_control_bce_mass": 0.05,
+    "anomaly_bce_mass": 0.5,
+    "equal_normal_class_candidate": [
+      {
+        "category": 0,
+        "name": "car",
+        "ordinary_points": 133946,
+        "ordinary_fraction": 0.0434284995434927,
+        "current_overall_bce_mass": 0.019542824794571714,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 1.3544914061065874
+      },
+      {
+        "category": 1,
+        "name": "bicycle",
+        "ordinary_points": 610,
+        "ordinary_fraction": 0.0001977766019256308,
+        "current_overall_bce_mass": 8.899947086653387e-05,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 297.42410800385727
+      },
+      {
+        "category": 2,
+        "name": "motorcycle",
+        "ordinary_points": 4064,
+        "ordinary_fraction": 0.0013176460823373173,
+        "current_overall_bce_mass": 0.0005929407370517928,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 44.64289022695692
+      },
+      {
+        "category": 3,
+        "name": "truck",
+        "ordinary_points": 35177,
+        "ordinary_fraction": 0.011405225452357238,
+        "current_overall_bce_mass": 0.005132351453560757,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 5.157594618141198
+      },
+      {
+        "category": 4,
+        "name": "other-vehicle",
+        "ordinary_points": 9186,
+        "ordinary_fraction": 0.00297832109063745,
+        "current_overall_bce_mass": 0.0013402444907868525,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 19.75056671917624
+      },
+      {
+        "category": 5,
+        "name": "person",
+        "ordinary_points": 18587,
+        "ordinary_fraction": 0.006026350327855245,
+        "current_overall_bce_mass": 0.0027118576475348606,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 9.761053740913162
+      },
+      {
+        "category": 6,
+        "name": "bicyclist",
+        "ordinary_points": 0,
+        "ordinary_fraction": 0.0,
+        "current_overall_bce_mass": 0.0,
+        "proposed_equal_class_overall_bce_mass": 0.0,
+        "point_weight_multiplier": null
+      },
+      {
+        "category": 7,
+        "name": "motorcyclist",
+        "ordinary_points": 1740,
+        "ordinary_fraction": 0.0005641496513944224,
+        "current_overall_bce_mass": 0.00025386734312749003,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 104.26937119675456
+      },
+      {
+        "category": 8,
+        "name": "road",
+        "ordinary_points": 467759,
+        "ordinary_fraction": 0.15165866481988713,
+        "current_overall_bce_mass": 0.06824639916894921,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 0.3878679103605766
+      },
+      {
+        "category": 9,
+        "name": "parking",
+        "ordinary_points": 0,
+        "ordinary_fraction": 0.0,
+        "current_overall_bce_mass": 0.0,
+        "proposed_equal_class_overall_bce_mass": 0.0,
+        "point_weight_multiplier": null
+      },
+      {
+        "category": 10,
+        "name": "sidewalk",
+        "ordinary_points": 94775,
+        "ordinary_fraction": 0.03072832368442895,
+        "current_overall_bce_mass": 0.013827745657993027,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 1.9143097428895062
+      },
+      {
+        "category": 11,
+        "name": "other-ground",
+        "ordinary_points": 20138,
+        "ordinary_fraction": 0.006529221655046481,
+        "current_overall_bce_mass": 0.0029381497447709165,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 9.009271321995875
+      },
+      {
+        "category": 12,
+        "name": "building",
+        "ordinary_points": 1077893,
+        "ordinary_fraction": 0.34947871275315406,
+        "current_overall_bce_mass": 0.15726542073891933,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 0.16831791827421919
+      },
+      {
+        "category": 13,
+        "name": "fence",
+        "ordinary_points": 234328,
+        "ordinary_fraction": 0.07597474684594953,
+        "current_overall_bce_mass": 0.03418863608067729,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 0.7742510749135952
+      },
+      {
+        "category": 14,
+        "name": "vegetation",
+        "ordinary_points": 581148,
+        "ordinary_fraction": 0.18842209287848605,
+        "current_overall_bce_mass": 0.08478994179531872,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 0.3121901923130647
+      },
+      {
+        "category": 15,
+        "name": "trunk",
+        "ordinary_points": 166519,
+        "ordinary_fraction": 0.0539894458623838,
+        "current_overall_bce_mass": 0.02429525063807271,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 1.089537565577219
+      },
+      {
+        "category": 16,
+        "name": "terrain",
+        "ordinary_points": 95436,
+        "ordinary_fraction": 0.030942635707171314,
+        "current_overall_bce_mass": 0.013924186068227092,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 1.9010510277290849
+      },
+      {
+        "category": 17,
+        "name": "pole",
+        "ordinary_points": 81623,
+        "ordinary_fraction": 0.026464130457337316,
+        "current_overall_bce_mass": 0.011908858705801792,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 2.222764488959643
+      },
+      {
+        "category": 18,
+        "name": "traffic-sign",
+        "ordinary_points": 61359,
+        "ordinary_fraction": 0.019894056586155378,
+        "current_overall_bce_mass": 0.00895232546376992,
+        "proposed_equal_class_overall_bce_mass": 0.026470588235294117,
+        "point_weight_multiplier": 2.9568393533524495
+      }
+    ],
+    "existing_false_positive_evidence": {
+      "path": "results/train/observations/development_diagnostics.json",
+      "checkpoint": "results/train/observations/frozen.pt",
+      "scope": "Earlier observations model, eligible60 synthetic201 population; descriptive supporting evidence, not current competition outputs",
+      "total_false_positives": 124837,
+      "classes": [
+        {
+          "category": 10,
+          "name": "sidewalk",
+          "normal_points": 1012028,
+          "false_positives": 67885,
+          "false_positive_rate": 0.06707818360756818,
+          "share_of_all_false_positives": 0.543789100987688
+        },
+        {
+          "category": 13,
+          "name": "fence",
+          "normal_points": 175851,
+          "false_positives": 16157,
+          "false_positive_rate": 0.0918789202222336,
+          "share_of_all_false_positives": 0.12942476989994953
+        },
+        {
+          "category": 8,
+          "name": "road",
+          "normal_points": 999049,
+          "false_positives": 10729,
+          "false_positive_rate": 0.010739212991554968,
+          "share_of_all_false_positives": 0.08594407106867355
+        },
+        {
+          "category": 0,
+          "name": "car",
+          "normal_points": 49554,
+          "false_positives": 8340,
+          "false_positive_rate": 0.16830124712434918,
+          "share_of_all_false_positives": 0.06680711647988978
+        }
+      ]
+    },
+    "decision": {
+      "equal_class_weighting": "Not recommended as the next full17-class change: bicycle/motorcycle/other-vehicle/motorcyclist together receive4/17 of ordinary-normal mass despite very few and restricted-distance observations; this repeats the excessive amplification problem identified for controls.",
+      "supported_target": "Sidewalk ordinary-normal frequency is low relative to201 and existing errors are concentrated there; its existing206 near points are present and can be emphasized without new feature extraction. Car/fence are not missing or globally under-represented, so more weight is not established as their remedy.",
+      "unfillable_by_weighting": "206 has zero bicyclist and parking training points; parking appears in201. No finite weight can create missing class or missing distance observations.",
+      "next_step": "Keep the already-authorized normal-donor multi-view change isolated first. If a later weighting comparison is warranted, prioritize sidewalk rather than globally equalizing all17 normal classes; retain anomaly-view and normal-control masses and semantic CE unchanged.",
+      "weighting_candidate": "If comparing the two proposed generic choices, prefer source206 square-root-frequency ordinary-normal BCE weighting over full class-equal weighting; never fit per201-class manual coefficients."
+    },
+    "peak_rss_bytes": 976314368,
+    "frequency_weighting_comparison": {
+      "formula": "ordinary-normal w_i = N/(sqrt(n_class)*sum_populated_classes sqrt(n_class)); multiply original ordinary-normal BCE coefficient by w_i; preserve total .45",
+      "source": "All existing STU206 ordinary-normal cached points: original normals, auxiliary backgrounds, control backgrounds; exclude inserted normal controls and all anomalies",
+      "classes": [
+        {
+          "category": 0,
+          "name": "car",
+          "points": 133946,
+          "point_fraction": 0.0434284995434927,
+          "equal_class_multiplier": 1.3544914061065874,
+          "sqrt_multiplier": 1.5090319419616074,
+          "sqrt_overall_bce_mass": 0.029490746851168006
+        },
+        {
+          "category": 1,
+          "name": "bicycle",
+          "points": 610,
+          "point_fraction": 0.0001977766019256308,
+          "equal_class_multiplier": 297.42410800385727,
+          "sqrt_multiplier": 22.361369069702967,
+          "sqrt_overall_bce_mass": 0.0019901500150548406
+        },
+        {
+          "category": 2,
+          "name": "motorcycle",
+          "points": 4064,
+          "point_fraction": 0.0013176460823373173,
+          "equal_class_multiplier": 44.64289022695692,
+          "sqrt_multiplier": 8.663361912864238,
+          "sqrt_overall_bce_mass": 0.005136860197960151
+        },
+        {
+          "category": 3,
+          "name": "truck",
+          "points": 35177,
+          "point_fraction": 0.011405225452357238,
+          "equal_class_multiplier": 5.157594618141198,
+          "sqrt_multiplier": 2.944651529777643,
+          "sqrt_overall_bce_mass": 0.015112986559084192
+        },
+        {
+          "category": 4,
+          "name": "other-vehicle",
+          "points": 9186,
+          "point_fraction": 0.00297832109063745,
+          "equal_class_multiplier": 19.75056671917624,
+          "sqrt_multiplier": 5.762356012772892,
+          "sqrt_overall_bce_mass": 0.007722965900071362
+        },
+        {
+          "category": 5,
+          "name": "person",
+          "points": 18587,
+          "point_fraction": 0.006026350327855245,
+          "equal_class_multiplier": 9.761053740913162,
+          "sqrt_multiplier": 4.050966555046689,
+          "sqrt_overall_bce_mass": 0.010985644632211314
+        },
+        {
+          "category": 6,
+          "name": "bicyclist",
+          "points": 0,
+          "point_fraction": 0.0,
+          "equal_class_multiplier": null,
+          "sqrt_multiplier": null,
+          "sqrt_overall_bce_mass": 0.0
+        },
+        {
+          "category": 7,
+          "name": "motorcyclist",
+          "points": 1740,
+          "point_fraction": 0.0005641496513944224,
+          "equal_class_multiplier": 104.26937119675456,
+          "sqrt_multiplier": 13.240021275410813,
+          "sqrt_overall_bce_mass": 0.003361209024139985
+        },
+        {
+          "category": 8,
+          "name": "road",
+          "points": 467759,
+          "point_fraction": 0.15165866481988713,
+          "equal_class_multiplier": 0.3878679103605766,
+          "sqrt_multiplier": 0.8075180356347157,
+          "sqrt_overall_bce_mass": 0.05511019819605256
+        },
+        {
+          "category": 9,
+          "name": "parking",
+          "points": 0,
+          "point_fraction": 0.0,
+          "equal_class_multiplier": null,
+          "sqrt_multiplier": null,
+          "sqrt_overall_bce_mass": 0.0
+        },
+        {
+          "category": 10,
+          "name": "sidewalk",
+          "points": 94775,
+          "point_fraction": 0.03072832368442895,
+          "equal_class_multiplier": 1.9143097428895062,
+          "sqrt_multiplier": 1.7939750988915224,
+          "sqrt_overall_bce_mass": 0.02480663138424486
+        },
+        {
+          "category": 11,
+          "name": "other-ground",
+          "points": 20138,
+          "point_fraction": 0.006529221655046481,
+          "equal_class_multiplier": 9.009271321995875,
+          "sqrt_multiplier": 3.8918414468644302,
+          "sqrt_overall_bce_mass": 0.011434812953793602
+        },
+        {
+          "category": 12,
+          "name": "building",
+          "points": 1077893,
+          "point_fraction": 0.34947871275315406,
+          "equal_class_multiplier": 0.16831791827421919,
+          "sqrt_multiplier": 0.5319557178101533,
+          "sqrt_overall_bce_mass": 0.08365823977588761
+        },
+        {
+          "category": 13,
+          "name": "fence",
+          "points": 234328,
+          "point_fraction": 0.07597474684594953,
+          "equal_class_multiplier": 0.7742510749135952,
+          "sqrt_multiplier": 1.140909546821686,
+          "sqrt_overall_bce_mass": 0.03900614129725707
+        },
+        {
+          "category": 14,
+          "name": "vegetation",
+          "points": 581148,
+          "point_fraction": 0.18842209287848605,
+          "equal_class_multiplier": 0.3121901923130647,
+          "sqrt_multiplier": 0.7244692111651841,
+          "sqrt_overall_bce_mass": 0.06142770224719644
+        },
+        {
+          "category": 15,
+          "name": "trunk",
+          "points": 166519,
+          "point_fraction": 0.0539894458623838,
+          "equal_class_multiplier": 1.089537565577219,
+          "sqrt_multiplier": 1.3534163230456118,
+          "sqrt_overall_bce_mass": 0.03288158878605193
+        },
+        {
+          "category": 16,
+          "name": "terrain",
+          "points": 95436,
+          "point_fraction": 0.030942635707171314,
+          "equal_class_multiplier": 1.9010510277290849,
+          "sqrt_multiplier": 1.78775167189933,
+          "sqrt_overall_bce_mass": 0.02489298692331034
+        },
+        {
+          "category": 17,
+          "name": "pole",
+          "points": 81623,
+          "point_fraction": 0.026464130457337316,
+          "equal_class_multiplier": 2.222764488959643,
+          "sqrt_multiplier": 1.9331120617692672,
+          "sqrt_overall_bce_mass": 0.02302115840609139
+        },
+        {
+          "category": 18,
+          "name": "traffic-sign",
+          "points": 61359,
+          "point_fraction": 0.019894056586155378,
+          "equal_class_multiplier": 2.9568393533524495,
+          "sqrt_multiplier": 2.229585701637232,
+          "sqrt_overall_bce_mass": 0.01995997685042432
+        }
+      ],
+      "rare_four": {
+        "categories": [
+          1,
+          2,
+          4,
+          7
+        ],
+        "points": 15600,
+        "point_fraction": 0.0050578934262948206,
+        "equal_class_ordinary_mass_fraction": 0.23529411764705882,
+        "sqrt_ordinary_mass_fraction": 0.04046930030494742
+      },
+      "selected_candidate": "sqrt-frequency balancing for ordinary-normal BCE only; preserve .05 inserted controls, .5 view-weighted anomalies, semantic CE and all cached point identities",
+      "rationale": "Reduces dominant-building/vegetation mass and increases sidewalk/car/fence support without equal-class amplification of extremely rare training classes. It does not fill missing class/range support and does not establish a performance gain before evaluation.",
+      "timing": "Only consider after the currently authorized multi-view-normal-control dataset comparison; do not confound the two interventions"
+    }
+  }
+}

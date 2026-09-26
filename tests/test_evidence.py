@@ -108,6 +108,22 @@ def test_feature_evidence_both_supervisions_update_shared_residual_not_statistic
         assert name not in parameters and not value.requires_grad and value.grad is None
 
 
+def test_semantic_competition_uses_joint_class_probability_and_binary_semantic_gradients():
+    from src.normal import FeatureEvidence
+    with torch.random.fork_rng():
+        torch.manual_seed(919)
+        model = FeatureEvidence(semantic_competition=True)
+        features = torch.randn(7, 252)
+    result = model.components(features)
+    unknown = model.anomaly(model.encode(features))
+    joint = torch.cat((result["logits"], unknown), dim=-1).softmax(-1)[:, -1]
+    torch.testing.assert_close(result["score"].sigmoid(), joint)
+    binary = torch.nn.functional.binary_cross_entropy_with_logits(result["score"],
+        torch.tensor([0., 1., 0., 1., 0., 1., 0.]))
+    gradients = torch.autograd.grad(binary, (model.anomaly.weight, model.semantic.weight, model.residual[-1].weight))
+    assert all(torch.isfinite(value).all() and value.abs().sum() > 0 for value in gradients)
+
+
 def test_evidence_binary_weights_preserve_class_mass_and_equalize_only_anomaly_views():
     from src.train import evidence_binary_weights
     targets = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
@@ -183,6 +199,28 @@ def test_normal_control_mass_moves_only_normal_coefficients_and_preserves_all_po
     for invalid in (0, .5, -.1, float("nan"), float("inf")):
         with pytest.raises(ValueError, match="strictly between"):
             evidence_binary_weights(targets, views, counts, "view", control, invalid)
+
+
+def test_sqrt_normal_weights_conserve_mass_without_changing_anomalies_or_controls():
+    from src.train import evidence_binary_weights
+    targets = torch.tensor([0, 0, 0, 0, 0, 0, 1, 1, 1, 1])
+    views = torch.tensor([-1, -1, -1, -1, -1, -1, 0, 1, 1, 1])
+    semantic = torch.tensor([0, 1, 1, 1, 1, 18, -1, -1, -1, -1])
+    control = torch.tensor([False, False, False, False, False, True, False, False, False, False])
+    counts = torch.tensor([1, 3])
+    for selected_control in (None, control):
+        point = evidence_binary_weights(targets, views, counts, "view", selected_control, .05)
+        weighted = evidence_binary_weights(targets, views, counts, "view", selected_control, .05,
+                                           semantic, "sqrt_class")
+        ordinary = (targets == 0) if selected_control is None else (targets == 0)&~selected_control
+        assert torch.equal(weighted[~ordinary], point[~ordinary])
+        mass = .5 if selected_control is None else .45
+        assert float(weighted[ordinary].sum()/len(targets)) == pytest.approx(mass)
+        category_mass = torch.bincount(semantic[ordinary], weights=weighted[ordinary]/len(targets), minlength=19)
+        roots = torch.bincount(semantic[ordinary], minlength=19).float().sqrt()
+        torch.testing.assert_close(category_mass, mass*roots/roots.sum())
+        assert (category_mass[roots == 0] == 0).all()
+        assert (weighted > 0).all()
 
 
 def test_evidence_tail_weights_reproduce_global_view_ranking_across_point_batches():

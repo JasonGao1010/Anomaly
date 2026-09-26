@@ -22,8 +22,11 @@ class FeatureEvidence(nn.Module):
     classes = 19
     point_chunk = 16384
 
-    def __init__(self, residual=True):
+    def __init__(self, residual=True, semantic_competition=False):
         super().__init__()
+        if type(semantic_competition) is not bool:
+            raise ValueError("semantic competition must be an explicit boolean")
+        self.semantic_competition = semantic_competition
         self.register_buffer("location", torch.zeros(self.dimensions, dtype=torch.float32))
         self.register_buffer("whitener", torch.eye(self.dimensions, dtype=torch.float32))
         self.residual = nn.Sequential(
@@ -50,8 +53,14 @@ class FeatureEvidence(nn.Module):
         with torch.autocast(features.device.type, enabled=False):
             for start in range(0, len(features), self.point_chunk):
                 z = self.encode(features[start:start+self.point_chunk])
-                logits.append(self.semantic(z))
-                scores.append(self.anomaly(z).squeeze(-1))
+                normal = self.semantic(z)
+                score = self.anomaly(z).squeeze(-1)
+                # This is the unknown-vs-all-normal log odds of one 20-class model.
+                # Binary supervision now also updates the normal class evidence.
+                if self.semantic_competition:
+                    score = score - torch.logsumexp(normal, dim=-1)
+                logits.append(normal)
+                scores.append(score)
             return dict(logits=torch.cat(logits) if logits else features.new_empty((0, self.classes), dtype=torch.float32),
                         score=torch.cat(scores) if scores else features.new_empty(0, dtype=torch.float32))
 
