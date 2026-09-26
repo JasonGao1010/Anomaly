@@ -12,6 +12,54 @@ from torch_scatter import segment_csr
 
 SUPPORT_VERSION = "AJAE-frozen-support"
 INSTANCE_VERSION = "AJAE-instance-support"
+EVIDENCE_VERSION = "AJAE-feature-evidence"
+
+
+class FeatureEvidence(nn.Module):
+    """Joint normal semantics and anomaly evidence from one shared residual feature."""
+
+    dimensions = 252
+    classes = 19
+    point_chunk = 16384
+
+    def __init__(self, residual=True):
+        super().__init__()
+        self.register_buffer("location", torch.zeros(self.dimensions, dtype=torch.float32))
+        self.register_buffer("whitener", torch.eye(self.dimensions, dtype=torch.float32))
+        self.residual = nn.Sequential(
+            nn.Linear(self.dimensions, 128, dtype=torch.float32), nn.GELU(),
+            nn.Linear(128, self.dimensions, dtype=torch.float32)) if residual else None
+        # Initial predictions preserve the independently fitted linear readouts.
+        if self.residual is not None:
+            nn.init.zeros_(self.residual[-1].weight)
+            nn.init.zeros_(self.residual[-1].bias)
+        self.semantic = nn.Linear(self.dimensions, self.classes, dtype=torch.float32)
+        self.anomaly = nn.Linear(self.dimensions, 1, dtype=torch.float32)
+
+    def encode(self, features):
+        if features.ndim != 2 or features.shape[1] != self.dimensions:
+            raise ValueError("feature evidence requires shape [N, 252]")
+        with torch.autocast(features.device.type, enabled=False):
+            x = (features.float() - self.location) @ self.whitener
+            return x if self.residual is None else x + self.residual(x)
+
+    def components(self, features):
+        if features.ndim != 2 or features.shape[1] != self.dimensions:
+            raise ValueError("feature evidence requires shape [N, 252]")
+        logits, scores = [], []
+        with torch.autocast(features.device.type, enabled=False):
+            for start in range(0, len(features), self.point_chunk):
+                z = self.encode(features[start:start+self.point_chunk])
+                logits.append(self.semantic(z))
+                scores.append(self.anomaly(z).squeeze(-1))
+            return dict(logits=torch.cat(logits) if logits else features.new_empty((0, self.classes), dtype=torch.float32),
+                        score=torch.cat(scores) if scores else features.new_empty(0, dtype=torch.float32))
+
+    def normal_logits(self, features):
+        return self.components(features)["logits"]
+
+    def forward(self, features, conditions=None):
+        return self.components(features)["score"]
 
 
 def support_conditions(xyzi, indices=None, *, range_only=False):

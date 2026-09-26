@@ -50,6 +50,64 @@ def test_normal_semantics_keeps_unseen_training_classes_and_false_positives():
     assert measured["iou"][9] == 0 and measured["mean_iou_gt"] == .5
 
 
+def test_feature_evidence_initialization_preserves_linear_predictions_in_float32():
+    from src.normal import FeatureEvidence
+    with torch.random.fork_rng():
+        torch.manual_seed(913)
+        model = FeatureEvidence()
+        features = torch.randn(11, 252, dtype=torch.float64)
+        with torch.no_grad():
+            model.location.copy_(torch.randn(252))
+            model.whitener.copy_(torch.randn(252, 252) / np.sqrt(252))
+    # Force multiple chunks without changing the independent linear calculation.
+    model.point_chunk = 4
+    encoded = (features.float()-model.location) @ model.whitener
+    expected_logits = encoded @ model.semantic.weight.T + model.semantic.bias
+    expected_score = (encoded @ model.anomaly.weight.T + model.anomaly.bias).squeeze(-1)
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        result = model.components(features)
+        score = model(features, torch.zeros(11, 2))
+        logits = model.normal_logits(features)
+    assert all(p.dtype == torch.float32 for p in model.parameters())
+    assert result["score"].dtype == result["logits"].dtype == torch.float32
+    torch.testing.assert_close(result["logits"], expected_logits)
+    torch.testing.assert_close(result["score"], expected_score)
+    torch.testing.assert_close(score, expected_score)
+    torch.testing.assert_close(logits, expected_logits)
+    linear = FeatureEvidence(residual=False)
+    linear.load_state_dict({key: value for key, value in model.state_dict().items()
+                            if not key.startswith("residual.")})
+    assert linear.residual is None
+    assert not any(name.startswith("residual.") for name, _ in linear.named_parameters())
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        linear_result = linear.components(features)
+    torch.testing.assert_close(linear_result["logits"], result["logits"])
+    torch.testing.assert_close(linear_result["score"], result["score"])
+
+
+def test_feature_evidence_both_supervisions_update_shared_residual_not_statistics():
+    from src.normal import FeatureEvidence
+    with torch.random.fork_rng():
+        torch.manual_seed(914)
+        model = FeatureEvidence()
+        features = torch.randn(13, 252)
+    result = model.components(features)
+    semantic_loss = torch.nn.functional.cross_entropy(result["logits"], torch.arange(13) % 19)
+    anomaly_loss = torch.nn.functional.binary_cross_entropy_with_logits(result["score"],
+        (torch.arange(13) % 2).float())
+    shared = model.residual[-1].weight
+    normal_gradient = torch.autograd.grad(semantic_loss, shared, retain_graph=True)[0]
+    anomaly_gradient = torch.autograd.grad(anomaly_loss, shared, retain_graph=True)[0]
+    assert torch.isfinite(normal_gradient).all() and normal_gradient.abs().sum() > 0
+    assert torch.isfinite(anomaly_gradient).all() and anomaly_gradient.abs().sum() > 0
+    (semantic_loss+anomaly_loss).backward()
+    torch.testing.assert_close(shared.grad, normal_gradient+anomaly_gradient)
+    parameters = dict(model.named_parameters())
+    for name in ("location", "whitener"):
+        value = getattr(model, name)
+        assert name not in parameters and not value.requires_grad and value.grad is None
+
+
 def test_target_cache_view_excludes_every_auxiliary_point(tmp_path):
     from src.train import target_normal_cache
     path = tmp_path / "source.npy"

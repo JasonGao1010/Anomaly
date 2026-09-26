@@ -337,12 +337,12 @@ def evaluate(model, manifest, device, workers=4, score_path=None, record_points=
     required = 64 * count + 1_000_000_000
     if memory_available() < required:
         raise RuntimeError(f"official metrics require about {required / 1e9:.1f} GB free RAM")
-    from .normal import InstanceSupport
+    from .normal import FeatureEvidence, InstanceSupport
     dataset = PreparedScans(manifest, relations=getattr(model, "relation", None) is not None,
                             normal=getattr(model, "normal", None) is not None, normal_reference=False,
                             hypotheses=getattr(model, "mode", None) == "normal_hypothesis",
                             frozen=getattr(model, "mode", None) == "frozen_support",
-                            range_only=isinstance(getattr(model, "scorer", None), InstanceSupport))
+                            range_only=isinstance(getattr(model, "scorer", None), (InstanceSupport, FeatureEvidence)))
     loader = DataLoader(dataset, batch_size=None, sampler=indices, num_workers=workers,
                         pin_memory=device.type == "cuda",
                         **({"prefetch_factor": 1} if workers else {}),
@@ -436,19 +436,26 @@ def load_model(path, device):
         raise ValueError("historical evidence checkpoints require their recorded code revision ("
                          +historical[saved["version"]]+")")
     from .model import NormalHypothesis, NORMAL_VERSION
-    from .normal import FeatureSupport, InstanceSupport, ScoreCalibration, SUPPORT_VERSION, INSTANCE_VERSION
-    if saved.get("version") in (SUPPORT_VERSION, INSTANCE_VERSION):
+    from .normal import (FeatureSupport, InstanceSupport, FeatureEvidence, ScoreCalibration,
+                         SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION)
+    if saved.get("version") in (SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION):
         from .model import FrozenSupport
         if (not saved.get("frozen") or not saved.get("complete") or not saved.get("selected")
                 or saved["config"]["initial_sha256"] != "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"):
-            raise ValueError("frozen support requires completed normal-only model selection")
-        scorer = (InstanceSupport(memory_size=saved["config"]["memory_size"])
-                  if saved["version"] == INSTANCE_VERSION else FeatureSupport(modes=saved["config"]["modes"]))
+            raise ValueError("frozen perception requires completed model selection with the official initial weights")
+        if saved["version"] == EVIDENCE_VERSION:
+            if saved["config"].get("version") != EVIDENCE_VERSION or type(saved["config"].get("residual")) is not bool:
+                raise ValueError("feature-evidence checkpoint must specify its version and residual capacity")
+            scorer = FeatureEvidence(residual=saved["config"]["residual"])
+        else:
+            scorer = (InstanceSupport(memory_size=saved["config"]["memory_size"])
+                      if saved["version"] == INSTANCE_VERSION else FeatureSupport(modes=saved["config"]["modes"]))
         model = FrozenSupport(scorer=scorer)
         if saved["version"] == INSTANCE_VERSION:
             model.scorer.calibration = ScoreCalibration(
                 range_bandwidth=saved["config"].get("calibration_bandwidth", 0.))
         model.load_state_dict(saved["model"], strict=True)
+        torch.backends.cuda.matmul.allow_tf32 = False
         return model.to(device).eval(), saved
     if saved.get("version") in (NORMAL_VERSION, "AJAE-normal-hypothesis"):
         # Shape-compatible historical weights still represent a different model.
@@ -845,18 +852,22 @@ def infer(model, scan, device, *, return_semantics=False):
             from .normal import hypothesis_observation
             sample["observation"] = hypothesis_observation(xyzi)
         elif mode == "frozen_support":
-            from .normal import InstanceSupport, support_conditions
+            from .normal import FeatureEvidence, InstanceSupport, support_conditions
             sample["conditions"] = torch.from_numpy(support_conditions(
-                xyzi, range_only=isinstance(model.scorer, InstanceSupport)))
+                xyzi, range_only=isinstance(model.scorer, (InstanceSupport, FeatureEvidence))))
         sample = to_device(sample, device)
         with autocast(device):
             if return_semantics:
                 if mode == "frozen_support":
-                    from .normal import InstanceSupport
+                    from .normal import FeatureEvidence, InstanceSupport
                     encoded = model.perception.encode(sample)
-                    classes, count = encoded["logits"].argmax(-1), 16
-                    options = dict(predicted=classes) if isinstance(model.scorer, InstanceSupport) else {}
-                    prediction = model.scorer(encoded["features"], sample["conditions"], **options)
+                    if isinstance(model.scorer, FeatureEvidence):
+                        outputs = model.scorer.components(encoded["features"])
+                        prediction, classes, count = outputs["score"], outputs["logits"].argmax(-1), 19
+                    else:
+                        classes, count = encoded["logits"].argmax(-1), 16
+                        options = dict(predicted=classes) if isinstance(model.scorer, InstanceSupport) else {}
+                        prediction = model.scorer(encoded["features"], sample["conditions"], **options)
                 else:
                     outputs = model.predict(sample)
                     prediction, classes, count = outputs["score"], outputs["semantic"], 19
@@ -1033,7 +1044,7 @@ def main():
             command.add_argument("--scans", type=Path, nargs="+", required=True)
             if name == "infer":
                 command.add_argument("--semantic-output", action="store_true",
-                    help="also save *.semantic.npy: frozen support uses official nuScenes 16-class order; older normal models use STU19; empty slots are -1")
+                    help="also save *.semantic.npy: feature evidence uses its learned STU19 head; earlier frozen support uses nuScenes16; empty slots are -1")
             if name == "benchmark":
                 command.add_argument("--warmup", type=int, default=5)
                 command.add_argument("--repeats", type=int, default=20)
@@ -1067,14 +1078,14 @@ def main():
         return
     model, saved = load_model(args.checkpoint, device)
     from .model import NORMAL_VERSION
-    from .normal import SUPPORT_VERSION, INSTANCE_VERSION
-    if saved.get("version") in (SUPPORT_VERSION, INSTANCE_VERSION):
+    from .normal import SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION
+    if saved.get("version") in (SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION):
         torch.backends.cuda.matmul.allow_tf32 = False
-    normal_run = saved.get("version") in (NORMAL_VERSION, SUPPORT_VERSION, INSTANCE_VERSION)
+    normal_run = saved.get("version") in (NORMAL_VERSION, SUPPORT_VERSION, INSTANCE_VERSION, EVIDENCE_VERSION)
     if args.action == "infer" and args.semantic_output and not normal_run:
         parser.error("--semantic-output requires a joint normal-evidence checkpoint")
     if normal_run and (args.action == "mine" or (args.action == "normal" and saved.get("version") != INSTANCE_VERSION)):
-        parser.error("this action belongs to the earlier supervised field; normal-only development is recorded by src.train --normal")
+        parser.error("this action belongs to earlier field or instance models; feature-evidence normal development is recorded during training")
     if args.action == "normal":
         if saved.get("version") == INSTANCE_VERSION:
             if args.manifest is not None:

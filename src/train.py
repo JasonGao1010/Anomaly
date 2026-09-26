@@ -2015,9 +2015,10 @@ def auxiliary_development(scorer, cache, device):
             scores = []
             for start in range(0, len(features), 4096):
                 stop = start + 4096
+                from .normal import InstanceSupport
+                kwargs = dict(predicted=torch.as_tensor(predicted[start:stop], device=device)) if isinstance(scorer, InstanceSupport) else {}
                 scores.append(scorer(torch.as_tensor(features[start:stop], device=device),
-                    torch.as_tensor(conditions[start:stop], device=device),
-                    torch.as_tensor(predicted[start:stop], device=device)).cpu().numpy())
+                    torch.as_tensor(conditions[start:stop], device=device), **kwargs).cpu().numpy())
             scores = np.concatenate(scores)
             normal.append(scores[targets == 0])
             anomaly.append(scores[targets == 1])
@@ -2446,6 +2447,181 @@ def instance_development(scorer, data, indices, *, retain=False, exclude_neighbo
     return (result,torch.cat(scores)) if retain else result
 
 
+def evidence_training(args, cache, dev_cache, resources):
+    """Learn shared normal semantics and anomaly evidence from the fixed STU features."""
+    from .normal import FeatureEvidence, EVIDENCE_VERSION, normal_semantic_metrics
+    from .model import FrozenSupport
+    device = torch.device("cuda")
+    started = time.perf_counter()
+    if args.initial_module is None or args.auxiliary_cache is None:
+        raise ValueError("feature evidence requires identified normal statistics and supplied auxiliary caches")
+    auxiliary_path = args.auxiliary_cache
+    metadata = json.loads((auxiliary_path / "auxiliary.json").read_text())
+    views = json.loads((auxiliary_path / "auxiliary_views.json").read_text())
+    dev_views = json.loads((auxiliary_path / "synthetic_development.json").read_text())
+    synthetic_dev = json.loads((auxiliary_path / "synthetic_development/features.json").read_text())
+    anomaly_probe = json.loads((auxiliary_path / "linear_probe.json").read_text())
+    semantic_probe = json.loads((args.initial_module.parent / "linear_probe.json").read_text())
+    if (metadata["initial_sha256"] != WEIGHTS_SHA256 or metadata["manifest"] != views["sha256"]
+        or views["source_sequence"] != 206 or dev_views["source_sequence"] != 201
+        or anomaly_probe["training"]["synthetic_view_identity"] != views["sha256"]
+        or anomaly_probe["development"]["selected_views_identity"] != dev_views["sha256"]
+        or anomaly_probe["normalizer_checkpoint_sha256"] != file_sha256(args.initial_module)):
+        raise ValueError("feature evidence cache or initialization identities disagree")
+    initial = torch.load(args.initial_module, map_location="cpu", weights_only=False)
+    if initial["config"]["initial_sha256"] != WEIGHTS_SHA256 or initial["config"].get("data_scope") != "STU206_STU201":
+        raise ValueError("normal statistics must come from the identified STU-only model")
+    scorer = FeatureEvidence().to(device)
+    location = initial["model"]["scorer.location"].double()
+    whitener = initial["model"]["scorer.whitener"].double()
+    coefficient = torch.tensor(semantic_probe["coefficient"], dtype=torch.float64)
+    mean = torch.tensor(semantic_probe["feature_mean"], dtype=torch.float64)
+    scale = torch.tensor(semantic_probe["feature_scale"], dtype=torch.float64)
+    raw_weight = coefficient[:-1] / scale[:, None]
+    semantic_weight = torch.linalg.solve(whitener, raw_weight)
+    semantic_bias = coefficient[-1] + (location - mean) @ raw_weight
+    anomaly_coefficient = torch.tensor(anomaly_probe["coefficients_whitened_with_last_intercept"])
+    with torch.no_grad():
+        scorer.location.copy_(location); scorer.whitener.copy_(whitener)
+        scorer.semantic.weight.copy_(semantic_weight.T); scorer.semantic.bias.copy_(semantic_bias)
+        # A positive affine map preserves the fitted anomaly ranking exactly in real arithmetic.
+        scorer.anomaly.weight.copy_(4 * anomaly_coefficient[:-1][None])
+        scorer.anomaly.bias.copy_(4 * anomaly_coefficient[-1] - 2)
+    del initial
+    data, dev = normal_cache(cache, device), normal_cache(dev_cache, device)
+    with np.load(auxiliary_path / "auxiliary.npz") as values:
+        auxiliary_features = torch.tensor(values["features"], device=device)
+        auxiliary_targets = torch.tensor(values["targets"], device=device, dtype=torch.long)
+        auxiliary_semantic = torch.tensor(values["semantic"], device=device, dtype=torch.long)
+    if (int((auxiliary_targets == 1).sum()) != metadata["anomalies"]
+        or int((auxiliary_targets == 0).sum()) != metadata["normals"]
+        or bool((auxiliary_semantic[auxiliary_targets == 1] != -1).any())
+        or bool((auxiliary_semantic[auxiliary_targets == 0] < 0).any())
+        or bool((data["semantic"] < 0).any())):
+        raise ValueError("real normal classes and synthetic anomaly targets are inconsistent")
+    features = torch.cat((data["features"], auxiliary_features))
+    semantic = torch.cat((data["semantic"], auxiliary_semantic))
+    targets = torch.cat((torch.zeros(cache["count"], device=device, dtype=torch.long), auxiliary_targets))
+    real_count, count = cache["count"], len(features)
+    del auxiliary_features, auxiliary_semantic, auxiliary_targets, data
+    torch.cuda.empty_cache()
+    frequencies = torch.bincount(semantic[semantic >= 0], minlength=19)
+    semantic_weights = torch.where(frequencies > 0, count / (int((frequencies > 0).sum()) * frequencies.clamp_min(1).float()), 0.)
+    binary_counts = torch.bincount(targets, minlength=2)
+    binary_weights = count / (2 * binary_counts.float())
+    holdout = ((dev["frame"] // 64) % 2 == 1).nonzero().flatten()
+    config = dict(version=EVIDENCE_VERSION, architecture="frozen_litept_shared_feature_evidence",
+        score_version="supervised_shared_feature_anomaly_logit", residual=True, initial_sha256=WEIGHTS_SHA256,
+        seed=206, features=str(args.features), data_scope="STU206_STU201", backbone_frozen=True,
+        training_points=count, real_normal_points=real_count, synthetic_normal_points=metadata["normals"],
+        synthetic_anomaly_points=metadata["anomalies"], auxiliary_identity=views["sha256"],
+        synthetic_development_identity=dev_views["sha256"], auxiliary_cache=str(auxiliary_path),
+        initialization=dict(normal_statistics=str(args.initial_module), normal_head=str(args.initial_module.parent / "linear_probe.json"),
+            anomaly_head=str(auxiliary_path / "linear_probe.json"), learned_distance_transform_reused=False),
+        objective="equal binary class mass BCE plus equal normal semantic class mass CE on one shared residual; all cached training points once per epoch",
+        batch_size=8192, epochs=args.epochs, learning_rate=.001, weight_decay=.0001,
+        selection="synthetic201 AP then AUROC then negative FPR95; normal201 odd-block mIoU must not fall below initialized linear model; epoch zero eligible",
+        calibrated=False, no_synthetic_anomalies=False, val19_used_for_selection=False,
+        evaluation="repeated val19 evaluation after development selection", deadline=args.deadline,
+        reserve_seconds=args.reserve_seconds)
+    args.output.mkdir(parents=True)
+    write_json(args.output / "config.json", config); write_json(args.output / "resources.json", resources)
+
+    @torch.no_grad()
+    def normal_development(f, y, indices):
+        scorer.eval()
+        confusion = torch.zeros(19, 19, device=device, dtype=torch.long)
+        ce = torch.zeros((), device=device, dtype=torch.float64)
+        for begin in range(0, len(indices), 16384):
+            at = indices[begin:begin+16384]
+            logits = scorer.normal_logits(f[at])
+            if not bool(torch.isfinite(logits).all()):
+                raise ValueError("nonfinite feature evidence semantics")
+            confusion += torch.bincount(y[at] * 19 + logits.argmax(-1), minlength=361).reshape(19, 19)
+            ce += F.cross_entropy(logits, y[at], reduction="sum").double()
+        return dict(semantics=normal_semantic_metrics(confusion), cross_entropy=float(ce / len(indices)))
+
+    baseline = normal_development(dev["features"], dev["semantic"], holdout)
+    initial_synthetic = auxiliary_development(scorer, synthetic_dev, device)
+    best = dict(epoch=0, development=baseline, synthetic=initial_synthetic)
+    print("evidence initial " + json.dumps(dict(normal_mIoU=baseline["semantics"]["mean_iou_gt"],
+        synthetic=initial_synthetic["metrics"])), flush=True)
+    expected_normal = semantic_probe["metrics"]["201_development"]["mean_iou_gt"]
+    expected_synthetic = anomaly_probe["development"]["primary"]
+    if abs(baseline["semantics"]["mean_iou_gt"] - expected_normal) > .0001:
+        raise ValueError("converted semantic head does not reproduce the independent normal probe")
+    if any(abs(initial_synthetic["metrics"][k] - expected_synthetic[k]) > .01 for k in ("AP", "AUROC", "FPR95")):
+        raise ValueError("converted anomaly head does not reproduce the independent anomaly probe")
+    atomic_save(args.output / "selected.pt", dict(scorer=scorer.state_dict(), selection=best))
+    write_json(args.output / "development.json", dict(initial=best, selected=best))
+    optimizer = torch.optim.AdamW(scorer.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
+    for epoch in range(1, args.epochs + 1):
+        if time.time() >= args.deadline - args.reserve_seconds:
+            break
+        tick = time.perf_counter(); scorer.train()
+        generator = torch.Generator(device=device).manual_seed(206 + epoch)
+        order = torch.randperm(count, generator=generator, device=device)
+        for group in optimizer.param_groups:
+            group["lr"] = config["learning_rate"] * (.1 + .9 * .5 * (1 + math.cos(math.pi * (epoch - 1) / args.epochs)))
+        losses = np.zeros(3); processed = 0
+        for begin in range(0, count, config["batch_size"]):
+            at = order[begin:begin+config["batch_size"]]
+            result = scorer.components(features[at])
+            anomaly_loss = (F.binary_cross_entropy_with_logits(result["score"], targets[at].float(), reduction="none") * binary_weights[targets[at]]).mean()
+            valid = semantic[at] >= 0
+            normal_loss = (F.cross_entropy(result["logits"][valid], semantic[at][valid], reduction="none") * semantic_weights[semantic[at][valid]]).sum() / len(at)
+            loss = anomaly_loss + normal_loss
+            if epoch == 1 and begin == 0:
+                gradients = torch.autograd.grad(anomaly_loss, (scorer.anomaly.weight, scorer.residual[-1].weight), retain_graph=True)
+                if any(not bool(torch.isfinite(g).all()) or not bool(g.abs().sum() > 0) for g in gradients):
+                    raise ValueError("anomaly supervision must update the deployed head and shared representation")
+                print("evidence anomaly gradients " + json.dumps([float(g.norm()) for g in gradients]), flush=True)
+            optimizer.zero_grad(set_to_none=True); loss.backward()
+            nn.utils.clip_grad_norm_(scorer.parameters(), 5., error_if_nonfinite=True)
+            optimizer.step()
+            losses += np.array([float(loss.detach()), float(normal_loss.detach()), float(anomaly_loss.detach())]) * len(at)
+            processed += len(at)
+            if (begin // config["batch_size"] + 1) % 100 == 0:
+                print(f"evidence epoch {epoch}/{args.epochs}: {processed}/{count} points; loss={losses[0]/processed:.4f}; elapsed={time.perf_counter()-tick:.1f}s", flush=True)
+        measured = normal_development(dev["features"], dev["semantic"], holdout)
+        synthetic = auxiliary_development(scorer, synthetic_dev, device)
+        row = dict(epoch=epoch, development=measured, synthetic=synthetic,
+            processed_points=processed, loss=(losses / processed).tolist(), seconds=time.perf_counter()-tick)
+        metrics, previous = synthetic["metrics"], best["synthetic"]["metrics"]
+        eligible = measured["semantics"]["mean_iou_gt"] >= baseline["semantics"]["mean_iou_gt"]
+        improved = eligible and (metrics["AP"], metrics["AUROC"], -metrics["FPR95"]) > (previous["AP"], previous["AUROC"], -previous["FPR95"])
+        if improved:
+            best = row
+            atomic_save(args.output / "selected.pt", dict(scorer=scorer.state_dict(), selection=best))
+        with (args.output / "training.jsonl").open("a") as handle:
+            handle.write(json.dumps(row) + "\n")
+        write_json(args.output / "development.json", dict(initial=dict(development=baseline, synthetic=initial_synthetic), selected=best, last=row))
+        print("evidence development " + json.dumps(dict(epoch=epoch, normal_mIoU=measured["semantics"]["mean_iou_gt"],
+            normal_preserved=eligible, synthetic=metrics, selected_epoch=best["epoch"], seconds=row["seconds"])), flush=True)
+    saved = torch.load(args.output / "selected.pt", map_location=device, weights_only=False)
+    if best["epoch"] == 0:
+        # Remove the unused zero residual when development selects the linear initialization.
+        scorer = FeatureEvidence(residual=False).to(device)
+        saved["scorer"] = {k: v for k, v in saved["scorer"].items() if not k.startswith("residual.")}
+        config["residual"] = False
+    scorer.load_state_dict(saved["scorer"]); scorer.eval()
+    normal_training = normal_development(features, semantic, torch.arange(real_count, device=device))
+    write_json(args.output / "normal206.json", dict(normal_training, scope="all cached real STU206 normal points"))
+    write_json(args.output / "config.json", config)
+    model = FrozenSupport(scorer=scorer).to(device).eval()
+    atomic_save(args.output / "frozen.pt", dict(version=EVIDENCE_VERSION, mode="frozen_support", model=model.state_dict(),
+        config=config, frozen=True, selected=True, complete=True, selection=best, final_val19_evaluated=False))
+    (args.output / "selected.pt").unlink()
+    report = dict(version=EVIDENCE_VERSION, complete=True, selected=best,
+        trainable_parameters=sum(p.numel() for p in scorer.parameters()), training_seconds=time.perf_counter()-started,
+        gpu_peak_bytes=torch.cuda.max_memory_allocated(), val19_used_for_selection=False,
+        no_synthetic_anomalies=False, backbone_frozen=True, evaluation_status="not yet repeated")
+    write_json(args.output / "result.json", report)
+    print("evidence complete " + json.dumps(dict(selected_epoch=best["epoch"], residual=config["residual"],
+        synthetic=best["synthetic"]["metrics"], normal_mIoU=best["development"]["semantics"]["mean_iou_gt"],
+        seconds=report["training_seconds"])), flush=True)
+
+
 def normal_main():
     """Learn a bounded multilevel metric after the frozen official perception network."""
     from threadpoolctl import threadpool_limits
@@ -2462,6 +2638,8 @@ def normal_main():
     parser.add_argument("--reserve-seconds",type=int,default=2700)
     parser.add_argument("--auxiliary-manifest",type=Path)
     parser.add_argument("--initial-module",type=Path)
+    parser.add_argument("--readout",action="store_true")
+    parser.add_argument("--auxiliary-cache",type=Path)
     args=parser.parse_args()
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("use an empty output directory")
@@ -2485,6 +2663,9 @@ def normal_main():
         raise ValueError("normal cache must retain actual partial label sets")
     cache=target_normal_cache(cache,"206")
     dev_cache=target_normal_cache(dev_cache,"201")
+    if args.readout:
+        evidence_training(args, cache, dev_cache, resources)
+        return
     args.output.mkdir(parents=True)
     config=dict(version=INSTANCE_VERSION,architecture="frozen_litept_normal_instance_support",
         score_version="bounded_full_rank_multilevel_nearest_real_normal",features=str(args.features),

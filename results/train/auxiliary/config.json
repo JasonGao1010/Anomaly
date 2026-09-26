@@ -1,0 +1,43 @@
+{
+  "version": "AJAE-instance-support",
+  "architecture": "frozen_litept_normal_instance_support",
+  "score_version": "bounded_full_rank_multilevel_nearest_real_normal",
+  "features": "results/train/normal/features",
+  "initial_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+  "seed": 206,
+  "training_points": 1839104,
+  "development_points": 1313150,
+  "memory_size": 16384,
+  "batch_size": 1024,
+  "epochs": 4,
+  "learning_rate": 0.0002,
+  "coordinate_source": "STU206 only",
+  "data_scope": "STU206_STU201",
+  "training": "STU206 only; equal normal-class loss mass; no nuScenes training, reference or development points",
+  "selection": "synthetic STU201 AP, then AUROC, then negative FPR95, subject to no decline in real normal STU201 mean IoU from initialization; val19 unused",
+  "calibration": "STU201 even blocks only; existing normal class/range tail rule",
+  "calibration_bandwidths": [
+    0.0,
+    0.25,
+    0.5,
+    1.0
+  ],
+  "backbone_frozen": true,
+  "no_synthetic_anomalies": false,
+  "val19_used_for_selection": false,
+  "evaluation": "repeated val19 evaluation after development selection",
+  "deadline": 1790388000.0,
+  "reserve_seconds": 2700,
+  "auxiliary_manifest": "/home/jasongao/Study/AJAE-v3/samples/manifest.json",
+  "auxiliary_identity": "40ec787aede7b3e62d4d68b042f7284153d3f157a269e8152391d38bce22abd1",
+  "auxiliary_objective": "normal class CE plus 0.5 times synthetic-background class CE and pairwise softplus(1 + normal distance - anomaly distance); distances divided by normal-only temperature",
+  "auxiliary_pairs_per_batch": 128,
+  "auxiliary_sampling": "four anomaly-count strata select frames; uniform selected views and uniform anomaly/normal points within the same view",
+  "module_initialization": {
+    "path": "results/train/stu/frozen.pt",
+    "sha256": "3e803389e160450de3a627a36105b19a48ce0775844f9f742c0a680dd041035f",
+    "role": "reuse only the previously learned STU-normal distance transform and its fixed temperature"
+  },
+  "calibration_bandwidth": 0.5,
+  "calibrated": true
+}
