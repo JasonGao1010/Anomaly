@@ -2181,6 +2181,124 @@ def support_cache(model, records, output, device, workers, *, development=False,
     return info
 
 
+def mined_normal_indices(slots, voxels, scores, old_slots, limit=1024):
+    """Select new normal evidence once per voxel, excluding every old query voxel."""
+    slots, voxels, scores, old_slots = map(np.asarray, (slots, voxels, scores, old_slots))
+    if (slots.ndim != 1 or voxels.shape != slots.shape or scores.shape != slots.shape
+            or old_slots.ndim != 1 or not len(slots) or np.any(np.diff(slots) <= 0)
+            or not np.isfinite(scores).all() or type(limit) is not int or limit < 1):
+        raise ValueError("normal mining requires ordered point identities and finite aligned scores")
+    old = np.searchsorted(slots, old_slots)
+    if np.any(old >= len(slots)) or not np.array_equal(slots[old], old_slots):
+        raise ValueError("original normal query slots are absent from the complete normal frame")
+    candidates = np.flatnonzero(~np.isin(voxels, voxels[old]))
+    # Points in the same voxel have identical frozen features; retain the first slot.
+    _, first = np.unique(voxels[candidates], return_index=True)
+    candidates = candidates[first]
+    rank = np.lexsort((slots[candidates], -scores[candidates]))
+    return np.sort(candidates[rank[:limit]])
+
+
+def mine_normal_features(args, cache, dev_cache, cache_config, resources):
+    """Append previously unqueried hard normal voxels from original STU206 only."""
+    from .data import normal_records
+    from .evaluate import load_model
+    from .normal import EVIDENCE_VERSION, support_conditions
+    records = normal_records("206")
+    if (len(records) != 449 or len(cache["frames"]) != len(records)
+            or any(row["source"] != "normal_stu" or str(row["scene"]) != "206"
+                   or row["frame"] != index for index, row in enumerate(records))):
+        raise ValueError("normal mining requires all 449 original STU206 training frames")
+    original = {key: np.load(path, mmap_mode="r") for key, path in cache["paths"].items()}
+    limit, capacity = 1024, cache["count"] + 1024 * len(records)
+    # Full replacement cache, one streamed frame, and metadata; no full-frame feature archive.
+    bytes_per_point = sum(value.dtype.itemsize * math.prod(value.shape[1:]) for value in original.values())
+    peak = capacity * bytes_per_point + 100_000_000
+    disk_check(peak)
+    device = torch.device("cuda")
+    model, saved = load_model(args.mine_normal, device)
+    if (saved.get("version") != EVIDENCE_VERSION or saved["config"].get("data_scope") != "STU206_STU201"
+            or saved["config"].get("backbone_frozen") is not True):
+        raise ValueError("normal mining requires the selected STU feature-evidence model")
+    miner = dict(path=str(args.mine_normal.resolve()), sha256=file_sha256(args.mine_normal),
+                 epoch=saved["selection"]["epoch"])
+    del saved
+    mining = dict(source_sequence=206, source_records=identity(records), miner=miner,
+        original_cache=str(args.features.resolve()),
+        original_training_sha256=file_sha256(args.features / "training.json"),
+        original_config_sha256=file_sha256(args.features / "config.json"),
+        maximum_new_points_per_frame=limit,
+        selection="highest fixed-miner scores among previously unqueried voxels; one actual normal point per new voxel; original queries retained",
+        normal_statistics="unchanged; downstream initialization retains the supplied original normal statistics and linear probes")
+    args.output.mkdir(parents=True)
+    config = dict(cache_config, operation="STU206_hard_normal_feature_mining", mining=mining,
+                  training_records=identity(records), source_sequence=206)
+    write_json(args.output / "config.json", config)
+    write_json(args.output / "resources.json", resources)
+    paths = {key: args.output.resolve() / ("training_" + key + ".npy") for key in original}
+    arrays = {key: np.lib.format.open_memmap(path, mode="w+", dtype=original[key].dtype,
+              shape=(capacity,) + original[key].shape[1:]) for key, path in paths.items()}
+    loader = DataLoader(SupportScans(records, full=True), batch_size=None, num_workers=args.workers,
+        pin_memory=True, prefetch_factor=1 if args.workers else None,
+        generator=torch.Generator().manual_seed(206))
+    cursor, frames, started = 0, [], time.perf_counter()
+    for number, sample in enumerate(loader, 1):
+        if time.time() >= args.deadline - args.reserve_seconds:
+            raise TimeoutError("normal mining reached the declared evaluation reserve")
+        index = int(sample["index"])
+        row = cache["frames"][index]
+        begin, end = row["begin"], row["end"]
+        old_slots = original["slot"][begin:end]
+        slots = sample["slots"].numpy()
+        old_positions = np.searchsorted(slots, old_slots)
+        if (np.any(old_positions >= len(slots)) or not np.array_equal(slots[old_positions], old_slots)
+                or np.any(sample["semantic"].numpy() < 0)
+                or not np.array_equal(sample["semantic"].numpy()[old_positions], original["semantic"][begin:end])
+                or not np.array_equal(sample["allowed"].numpy()[old_positions], original["allowed"][begin:end])):
+            raise ValueError("complete-frame normal identities or labels differ from the original cache")
+        batch = to_device(sample, device)
+        with torch.inference_mode():
+            features = model.perception.encode(batch, indices=batch["queries"])["features"]
+            scores = model.scorer(features).cpu().numpy()
+        if number == 1 and not np.array_equal(features[torch.as_tensor(old_positions, device=device)].cpu().numpy(),
+                                               original["features"][begin:end]):
+            raise ValueError("full-query inference did not reproduce the original frozen features exactly")
+        voxels = sample["inverse"][sample["queries"]].numpy()
+        selected = mined_normal_indices(slots, voxels, scores, old_slots, limit)
+        count, new_count = end - begin, len(selected)
+        # Copy every original field unchanged before appending genuine new observations.
+        for key in arrays:
+            arrays[key][cursor:cursor+count] = original[key][begin:end]
+        at, stop = cursor + count, cursor + count + new_count
+        arrays["features"][at:stop] = features[torch.as_tensor(selected, device=device)].cpu().numpy()
+        arrays["conditions"][at:stop] = support_conditions(sample["xyzi"].numpy(), sample["queries"].numpy()[selected])
+        for key in ("allowed", "semantic"):
+            arrays[key][at:stop] = sample[key].numpy()[selected]
+        arrays["source"][at:stop], arrays["frame"][at:stop] = 1, index
+        arrays["slot"][at:stop] = slots[selected]
+        frames.append(dict(row, begin=cursor, end=stop, original_points=count, mined_points=new_count,
+            eligible_new_voxels=int(len(np.setdiff1d(voxels, voxels[old_positions])))))
+        cursor = stop
+        if number % 25 == 0 or number == len(records):
+            elapsed = time.perf_counter() - started
+            print(f"normal mining: {number}/{len(records)} frames, {cursor:,} retained points, "
+                  f"{sum(item['mined_points'] for item in frames):,} new, {elapsed/60:.1f} min, "
+                  f"remaining {(len(records)-number)*elapsed/number/60:.1f} min", flush=True)
+        if number % 100 == 0:
+            disk_check(max(0, capacity-cursor) * bytes_per_point + 10_000_000)
+    for value in arrays.values():
+        value.flush()
+    info = dict(count=cursor, capacity=capacity, paths={key: str(path) for key, path in paths.items()},
+        frames=frames, seconds=time.perf_counter()-started, labels="normal_candidate_sets_v1", mining=mining,
+        original_points=cache["count"], mined_points=cursor-cache["count"])
+    write_json(args.output / "training.json", info)
+    # Development observations remain byte-for-byte the original cache arrays.
+    development = dict(dev_cache, paths={key: str(Path(path).resolve()) for key, path in dev_cache["paths"].items()})
+    write_json(args.output / "development_features.json", development)
+    print(f"normal mining complete: {info['mined_points']:,} new normal points, {info['seconds']:.1f} seconds", flush=True)
+    return info
+
+
 def support_indices(cache, *, training, include_coarse=False):
     """Bound fitting memory and preserve target-domain support in each class."""
     labels = np.load(cache["paths"]["semantic"], mmap_mode="r")[:cache["count"]]
@@ -2638,6 +2756,8 @@ def evidence_training(args, cache, dev_cache, resources):
     targets = torch.cat((torch.zeros(cache["count"], device=device, dtype=torch.long), auxiliary_targets))
     source_views = torch.cat((torch.full((cache["count"],), -1, device=device, dtype=torch.long), auxiliary_views))
     view_counts = torch.tensor([row["recorded_anomalies"] for row in views["records"]], device=device)
+    del auxiliary_features, auxiliary_semantic, auxiliary_targets, auxiliary_views, data
+    torch.cuda.empty_cache()
     control_mask = control_metadata = control_dev = None
     if args.control_cache is not None:
         control_metadata = json.loads((args.control_cache / "train/auxiliary.json").read_text())
@@ -2662,7 +2782,6 @@ def evidence_training(args, cache, dev_cache, resources):
             targets = torch.cat((targets, torch.zeros(len(values["targets"]), device=device, dtype=torch.long)))
             source_views = torch.cat((source_views, torch.full((len(values["targets"]),), -1, device=device, dtype=torch.long)))
     real_count, count = cache["count"], len(features)
-    del auxiliary_features, auxiliary_semantic, auxiliary_targets, auxiliary_views, data
     torch.cuda.empty_cache()
     frequencies = torch.bincount(semantic[semantic >= 0], minlength=19)
     semantic_weights = torch.where(frequencies > 0, count / (int((frequencies > 0).sum()) * frequencies.clamp_min(1).float()), 0.)
@@ -2709,6 +2828,8 @@ def evidence_training(args, cache, dev_cache, resources):
         calibrated=False, no_synthetic_anomalies=False, val19_used_for_selection=False,
         evaluation="repeated val19 evaluation after development selection", deadline=args.deadline,
         reserve_seconds=args.reserve_seconds)
+    if cache.get("mining") is not None:
+        config["normal_mining"] = cache["mining"]
     if control_metadata is not None:
         config.update(control_cache=str(args.control_cache), normal_control_points=control_metadata["normals"],
             inserted_normal_control_points=control_metadata["inserted_points"], control_identity=control_metadata["manifest"],
@@ -2875,6 +2996,8 @@ def normal_main():
     parser.add_argument("--normal",action="store_true")
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--features",type=Path,default=Path("results/train/normal/features"))
+    parser.add_argument("--mine-normal",type=Path,
+        help="append at most 1024 new hard normal voxels per original STU206 frame using a fixed selected scorer")
     parser.add_argument("--threads",type=int,default=4)
     parser.add_argument("--workers",type=int,default=16)
     parser.add_argument("--epochs",type=int,default=12)
@@ -2901,6 +3024,8 @@ def normal_main():
     parser.add_argument("--learning-rate",type=float,default=.001,
         help="initial learning rate for feature-evidence readout training")
     args=parser.parse_args()
+    if args.mine_normal is not None and (args.readout or args.cache_controls is not None):
+        raise ValueError("normal mining, control extraction and readout training are separate operations")
     if (args.tail_refine is not None or args.semantic_competition) and not args.readout:
         raise ValueError("tail refinement and semantic competition require the existing feature-evidence readout entry")
     if not math.isfinite(args.normal_control_mass) or not 0 < args.normal_control_mass < .5:
@@ -2948,6 +3073,9 @@ def normal_main():
         raise ValueError("normal cache must retain actual partial label sets")
     cache=target_normal_cache(cache,"206")
     dev_cache=target_normal_cache(dev_cache,"201")
+    if args.mine_normal is not None:
+        mine_normal_features(args, cache, dev_cache, cache_config, resources)
+        return
     if args.readout:
         evidence_training(args, cache, dev_cache, resources)
         return

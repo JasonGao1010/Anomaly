@@ -1299,3 +1299,25 @@ def test_support_queries_and_cache_preserve_coarse_normal_candidate_sets(monkeyp
     np.testing.assert_array_equal(np.load(info["paths"]["features"])[:info["count"], 0], expected)
     with pytest.raises(ValueError, match="will not overwrite"):
         support_cache(model, records, tmp_path, torch.device("cpu"), workers=0)
+
+
+def test_normal_mining_excludes_entire_old_voxels_and_keeps_highest_new_scores():
+    from src.train import mined_normal_indices
+
+    # The second return in each old voxel was not queried, but is still duplicate evidence.
+    voxels = np.repeat(np.arange(1032), 2)
+    slots = np.arange(len(voxels), dtype=np.uint32) * 3
+    scores = voxels.astype(np.float32)
+    scores[:4] = 1e6
+    old_slots = slots[[0, 2]]
+    chosen = mined_normal_indices(slots, voxels, scores, old_slots)
+    assert len(chosen) == 1024
+    assert len(np.unique(voxels[chosen])) == len(chosen)
+    assert not np.isin(voxels[chosen], [0, 1]).any()
+    np.testing.assert_array_equal(voxels[chosen], np.arange(8, 1032))
+    assert np.all(chosen % 2 == 0)  # Equal-feature ties keep the first actual slot.
+    fewer = mined_normal_indices(slots[:8], voxels[:8], scores[:8], old_slots)
+    np.testing.assert_array_equal(fewer, [4, 6])
+    assert not len(mined_normal_indices(slots[:4], voxels[:4], scores[:4], old_slots))
+    with pytest.raises(ValueError, match="absent"):
+        mined_normal_indices(slots, voxels, scores, [slots[-1]+3])
