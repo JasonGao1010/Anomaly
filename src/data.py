@@ -324,9 +324,16 @@ def read_delta(path):
     fields = {"format", "source_identity", "world_identity", "source_slot", "xyzi",
               "packed_labels", "inserted_slot", "occluded_slot"}
     with np.load(path, allow_pickle=False) as saved:
-        if set(saved.files) != fields or saved["format"].item() != "stu-frozen-frame":
+        kind = saved["format"].item() if "format" in saved.files else None
+        normal = kind == "stu-normal-control-frame"
+        expected = fields | {"normal_semantic"} if normal else fields
+        if set(saved.files) != expected or kind not in ("stu-frozen-frame", "stu-normal-control-frame"):
             raise ValueError("unrecognized saved scan delta")
-        delta = {name: saved[name] for name in fields - {"format"}}
+        delta = {name: saved[name] for name in expected - {"format"}}
+    if normal:
+        delta["normal_semantic"] = int(delta["normal_semantic"])
+        if delta["normal_semantic"] not in STU_NORMAL_SEMANTICS:
+            raise ValueError("inserted control requires a genuine STU normal semantic class")
     for name in ("source_identity", "world_identity"):
         delta[name] = str(delta[name].item())
     for name in ("source_slot", "inserted_slot", "occluded_slot"):
@@ -342,8 +349,9 @@ def read_delta(path):
     if packed.dtype != np.uint32 or packed.shape != (len(slots),):
         raise ValueError("invalid saved labels")
     selected = np.isin(slots, inserted, assume_unique=True)
-    if np.any(~np.any(xyzi[selected, :3] != 0, axis=1)) or np.any(packed[selected] != (np.uint32(60001) << np.uint32(16) | np.uint32(2))):
-        raise ValueError("saved anomaly returns/labels disagree")
+    expected_label = np.uint32(delta["normal_semantic"]) if normal else (np.uint32(60001) << np.uint32(16) | np.uint32(2))
+    if np.any(~np.any(xyzi[selected, :3] != 0, axis=1)) or np.any(packed[selected] != expected_label):
+        raise ValueError("saved inserted returns/labels disagree with the declared role")
     if np.any(xyzi[~selected] != 0) or np.any(packed[~selected] != 0):
         raise ValueError("opaque occlusion without return must clear XYZI and labels")
     return delta
@@ -1615,7 +1623,7 @@ class Scans:
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Prepare nuScenes source data or historical experiment manifests.")
-    parser.add_argument("operation", choices=("normal", "expand", "mix", "native", "legacy", "ndp", "nuscenes"))
+    parser.add_argument("operation", choices=("normal", "expand", "mix", "native", "legacy", "ndp", "nuscenes", "normal-controls"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--nuscenes-root", type=Path, default=NUSCENES_ROOT)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
@@ -1623,10 +1631,19 @@ def main():
     parser.add_argument("--train", type=Path, default=Path("assets/train.json"))
     parser.add_argument("--val", type=Path, default=Path("assets/val.json"))
     parser.add_argument("--workers", type=int, default=min(4, len(os.sched_getaffinity(0))))
+    parser.add_argument("--train-count", type=int, default=256, help="STU normal-control training observations")
+    parser.add_argument("--dev-count", type=int, default=64, help="STU normal-control development observations")
     parser.add_argument("--background-only", action="store_true", help="nuScenes: split original backgrounds without extracting or inserting objects")
     parser.add_argument("--objects", type=Path, help="nuScenes: reviewed object catalog for one fixed placement per sequence")
     parser.add_argument("--normal-annotations", type=Path, help="nuScenes: reviewed native point labels; unresolved points remain ignored")
     args = parser.parse_args()
+    if args.operation == "normal-controls":
+        if args.output is None:
+            parser.error("normal-controls requires an explicit new output directory")
+        from .render import generate_normal_controls
+        generate_normal_controls(args.output, data_root=args.data_root, pool_root=args.pool_root,
+                                 train_count=args.train_count, dev_count=args.dev_count, workers=args.workers)
+        return
     if args.background_only and args.operation != "nuscenes":
         parser.error("--background-only is only supported by the nuscenes operation")
     if args.objects is not None and (args.operation != "nuscenes" or args.background_only):

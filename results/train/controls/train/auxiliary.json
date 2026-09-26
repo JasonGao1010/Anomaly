@@ -1,0 +1,13 @@
+{
+  "manifest": "c62305b014b03a61bd69f32134cbe7fcc6c62c95f314b3929691ceca5c492457",
+  "frames": 512,
+  "anomalies": 0,
+  "source_recorded_anomalies": 0,
+  "normals": 344628,
+  "source_sequence": 206,
+  "role": "normal_control",
+  "inserted_points": 82484,
+  "initial_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+  "seconds": 135.0881172750087,
+  "scope": "all valid inserted foreground returns plus at most 512 genuine-semantic background normal returns per selected STU206 scan"
+}

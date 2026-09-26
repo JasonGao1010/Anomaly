@@ -4,7 +4,7 @@ Shape parameters and numerical resolutions are explicit; no legacy shape sampler
 size distribution, connectivity acceptance or grounding threshold is a V4 default.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 
 import numpy as np
@@ -33,6 +33,106 @@ class Trace:
             value = getattr(self, name)
             if not np.isfinite(value) or value <= 0:
                 raise ValueError(f"trace {name} must be finite and positive")
+
+
+@dataclass(frozen=True, slots=True)
+class MeasuredSurface:
+    """Open measured triangles; only the donor sensor's observed side is supported."""
+
+    vertices: np.ndarray
+    faces: np.ndarray
+    sensor_local: np.ndarray
+    _corners: np.ndarray = field(init=False, repr=False)
+    _edge1: np.ndarray = field(init=False, repr=False)
+    _edge2: np.ndarray = field(init=False, repr=False)
+    _normals: np.ndarray = field(init=False, repr=False)
+    _area: np.ndarray = field(init=False, repr=False)
+    _observed: np.ndarray = field(init=False, repr=False)
+
+    def __post_init__(self):
+        vertices = np.array(self.vertices, dtype=np.float64, copy=True)
+        faces = np.asarray(self.faces)
+        sensor = np.array(self.sensor_local, dtype=np.float64, copy=True)
+        if (vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) < 3
+                or not np.isfinite(vertices).all()):
+            raise ValueError("measured vertices must be finite [N,3], N >= 3")
+        if (faces.ndim != 2 or faces.shape[1] != 3 or not len(faces)
+                or faces.dtype.kind not in "iu" or np.any(faces < 0)
+                or np.any(faces >= len(vertices))):
+            raise ValueError("measured faces must contain valid integer [M,3] vertex indices")
+        if sensor.shape != (3,) or not np.isfinite(sensor).all():
+            raise ValueError("measured sensor origin must be finite [3]")
+        faces = faces.astype(np.int64, copy=True)
+        corners = vertices[faces[:, 0]]
+        edge1, edge2 = vertices[faces[:, 1]] - corners, vertices[faces[:, 2]] - corners
+        cross = np.cross(edge1, edge2)
+        area = np.linalg.norm(cross, axis=1)
+        scale = np.linalg.norm(edge1, axis=1) * np.linalg.norm(edge2, axis=1)
+        tolerance = 64 * np.finfo(np.float64).eps
+        if (not np.isfinite(area).all() or not np.isfinite(scale).all()
+                or np.any(area <= tolerance * scale)):
+            raise ValueError("measured faces must be nondegenerate triangles")
+        normals = cross / area[:, None]
+        side = np.einsum("ij,ij->i", sensor - corners, normals)
+        normals *= np.where(side < 0, -1., 1.)[:, None]
+        # Tangential donor views contain no evidence for either side of a facet.
+        observed = np.abs(side) > tolerance * np.maximum(1., np.linalg.norm(sensor - corners, axis=1))
+        for name, value in (("vertices", vertices), ("faces", faces), ("sensor_local", sensor),
+                            ("_corners", corners), ("_edge1", edge1), ("_edge2", edge2),
+                            ("_normals", normals), ("_area", area), ("_observed", observed)):
+            object.__setattr__(self, name, readonly(value))
+
+    def bounds(self):
+        # An open planar surface legitimately has a zero-width box axis.
+        return self.vertices.min(axis=0), self.vertices.max(axis=0)
+
+    def intersect(self, origins, directions, trace):
+        """First positive Moller-Trumbore hit, without filling holes or back sides."""
+        origins, directions = np.asarray(origins, np.float64), np.asarray(directions, np.float64)
+        if directions.ndim != 2 or directions.shape[1] != 3:
+            raise ValueError("ray directions must be [N,3]")
+        origins = np.broadcast_to(origins, directions.shape)
+        length = np.linalg.norm(directions, axis=1)
+        if (not np.isfinite(origins).all() or not np.isfinite(length).all()
+                or np.any(length <= 0)):
+            raise ValueError("rays must be finite and nonzero")
+        directions = directions / length[:, None]
+        lower, upper = self.bounds()
+        parallel = directions == 0
+        outside = np.any(parallel & ((origins < lower) | (origins > upper)), axis=1)
+        first = np.divide(lower - origins, directions, out=np.full_like(origins, -np.inf), where=~parallel)
+        last = np.divide(upper - origins, directions, out=np.full_like(origins, np.inf), where=~parallel)
+        near = np.maximum(np.minimum(first, last).max(axis=1), trace.near_m)
+        far = np.maximum(first, last).min(axis=1)
+        candidates = np.flatnonzero(~outside & (far >= near))
+        distance, normals = np.full(len(directions), np.inf), np.zeros_like(directions)
+        tolerance = 64 * np.finfo(np.float64).eps
+        # Both axes are bounded: a large scan or donor never allocates rays x faces.
+        for start in range(0, len(candidates), 512):
+            ids = candidates[start:start + 512]
+            direction, origin = directions[ids], origins[ids]
+            for face_start in range(0, len(self.faces), 256):
+                at = slice(face_start, face_start + 256)
+                edge1, edge2 = self._edge1[at], self._edge2[at]
+                offset = origin[:, None] - self._corners[at][None]
+                p = np.cross(direction[:, None], edge2[None])
+                determinant = np.einsum("rfi,fi->rf", p, edge1)
+                nonparallel = np.abs(determinant) > tolerance * self._area[at][None]
+                inverse = np.divide(1., determinant, out=np.zeros_like(determinant), where=nonparallel)
+                u = np.einsum("rfi,rfi->rf", offset, p) * inverse
+                q = np.cross(offset, edge1[None])
+                v = np.einsum("ri,rfi->rf", direction, q) * inverse
+                hit = np.einsum("fi,rfi->rf", edge2, q) * inverse
+                front = np.einsum("rfi,fi->rf", offset, self._normals[at]) > 0
+                valid = (nonparallel & front & self._observed[at][None]
+                         & (u >= 0) & (v >= 0) & (u + v <= 1) & (hit >= trace.near_m))
+                hit = np.where(valid, hit, np.inf)
+                choice = hit.argmin(axis=1)
+                nearest = hit[np.arange(len(ids)), choice]
+                closer = nearest < distance[ids]
+                distance[ids[closer]] = nearest[closer]
+                normals[ids[closer]] = self._normals[face_start + choice[closer]]
+        return readonly(distance), readonly(normals), readonly(np.isfinite(distance))
 
 
 @dataclass(frozen=True, slots=True)

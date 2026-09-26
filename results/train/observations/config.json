@@ -1,0 +1,72 @@
+{
+  "version": "AJAE-feature-evidence",
+  "architecture": "frozen_litept_shared_feature_evidence",
+  "score_version": "supervised_shared_feature_anomaly_logit",
+  "residual": true,
+  "initial_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+  "seed": 206,
+  "features": "results/train/normal/features",
+  "data_scope": "STU206_STU201",
+  "backbone_frozen": true,
+  "training_points": 3041948,
+  "real_normal_points": 1839104,
+  "synthetic_normal_points": 983040,
+  "synthetic_anomaly_points": 219804,
+  "auxiliary_identity": "40ec787aede7b3e62d4d68b042f7284153d3f157a269e8152391d38bce22abd1",
+  "synthetic_development_identity": "30704aff7ea6c89241d10a6560d68e89e8c3a94d02d70adbd5228948b6e608a0",
+  "auxiliary_cache": "results/train/auxiliary",
+  "initialization": {
+    "normal_statistics": "results/train/stu/frozen.pt",
+    "normal_head": "results/train/stu/linear_probe.json",
+    "anomaly_head": "results/train/auxiliary/linear_probe.json",
+    "learned_distance_transform_reused": false
+  },
+  "objective": "equal binary class mass BCE plus equal normal semantic class mass CE on one shared residual; all cached training points once per epoch",
+  "anomaly_weighting": "view",
+  "binary_loss_mass": {
+    "normal": 0.5000000198237229,
+    "anomaly": 0.5000000102357444,
+    "strata": [
+      {
+        "anomaly_points": "1-4",
+        "views": 480,
+        "points": 1168,
+        "bce_coefficient_mass": 0.12500000605947809,
+        "fraction_of_anomaly_mass": 0.25000001211895617
+      },
+      {
+        "anomaly_points": "5-20",
+        "views": 480,
+        "points": 5065,
+        "bce_coefficient_mass": 0.1250000025519532,
+        "fraction_of_anomaly_mass": 0.2500000051039064
+      },
+      {
+        "anomaly_points": "21-100",
+        "views": 480,
+        "points": 23451,
+        "bce_coefficient_mass": 0.12500000145624357,
+        "fraction_of_anomaly_mass": 0.25000000291248714
+      },
+      {
+        "anomaly_points": ">100",
+        "views": 480,
+        "points": 190120,
+        "bce_coefficient_mass": 0.12500000016806956,
+        "fraction_of_anomaly_mass": 0.2500000003361391
+      }
+    ],
+    "definition": "sum of per-point BCE coefficients divided by training point count; not measured loss or gradient contributions"
+  },
+  "batch_size": 8192,
+  "epochs": 24,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0001,
+  "selection": "synthetic201 AP then AUROC then negative FPR95; normal201 odd-block mIoU must not fall below initialized linear model; epoch zero eligible",
+  "calibrated": false,
+  "no_synthetic_anomalies": false,
+  "val19_used_for_selection": false,
+  "evaluation": "repeated val19 evaluation after development selection",
+  "deadline": 1790395200.0,
+  "reserve_seconds": 2400
+}

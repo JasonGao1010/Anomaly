@@ -1,0 +1,577 @@
+{
+  "role": "Read-only diagnosis of selected observations model on existing STU201 normal and synthetic development; no parameter updates or val19 read",
+  "checkpoint": "results/train/observations/frozen.pt",
+  "checkpoint_sha256": "e643e5075b195d9e757425540d3b1d96a3c32636c8db44e58ab7617795aeaeb4",
+  "selected_epoch": 13,
+  "primary95_threshold_from_existing_selected_record": 1.3006166219711304,
+  "normal_cache": "results/train/normal/features/development_features.json",
+  "synthetic_views_identity": "30704aff7ea6c89241d10a6560d68e89e8c3a94d02d70adbd5228948b6e608a0",
+  "normal201": {
+    "holdout_odd_blocks": {
+      "threshold": 1.3006166219711304,
+      "normal_points": 644238,
+      "false_positives": 15857,
+      "false_positive_rate": 0.024613574486447555,
+      "classes": [
+        {
+          "category": 10,
+          "name": "sidewalk",
+          "normal_points": 98067,
+          "false_positives": 7516,
+          "false_positive_rate": 0.07664147980462337,
+          "share_of_all_false_positives": 0.47398625212839757
+        },
+        {
+          "category": 13,
+          "name": "fence",
+          "normal_points": 19584,
+          "false_positives": 2583,
+          "false_positive_rate": 0.13189338235294118,
+          "share_of_all_false_positives": 0.16289335939963423
+        },
+        {
+          "category": 16,
+          "name": "terrain",
+          "normal_points": 21514,
+          "false_positives": 1802,
+          "false_positive_rate": 0.08375941247559729,
+          "share_of_all_false_positives": 0.11364066342940027
+        },
+        {
+          "category": 8,
+          "name": "road",
+          "normal_points": 116902,
+          "false_positives": 1701,
+          "false_positive_rate": 0.01455064926177482,
+          "share_of_all_false_positives": 0.10727123667780791
+        },
+        {
+          "category": 0,
+          "name": "car",
+          "normal_points": 5841,
+          "false_positives": 924,
+          "false_positive_rate": 0.15819209039548024,
+          "share_of_all_false_positives": 0.05827079523238948
+        },
+        {
+          "category": 18,
+          "name": "traffic-sign",
+          "normal_points": 1742,
+          "false_positives": 360,
+          "false_positive_rate": 0.2066590126291619,
+          "share_of_all_false_positives": 0.0227029072333985
+        },
+        {
+          "category": 3,
+          "name": "truck",
+          "normal_points": 6712,
+          "false_positives": 272,
+          "false_positive_rate": 0.04052443384982122,
+          "share_of_all_false_positives": 0.017153307687456643
+        },
+        {
+          "category": 15,
+          "name": "trunk",
+          "normal_points": 8189,
+          "false_positives": 252,
+          "false_positive_rate": 0.030772988154841863,
+          "share_of_all_false_positives": 0.01589203506337895
+        },
+        {
+          "category": 5,
+          "name": "person",
+          "normal_points": 1970,
+          "false_positives": 169,
+          "false_positive_rate": 0.08578680203045685,
+          "share_of_all_false_positives": 0.010657753673456517
+        },
+        {
+          "category": 9,
+          "name": "parking",
+          "normal_points": 5911,
+          "false_positives": 156,
+          "false_positive_rate": 0.02639147352393842,
+          "share_of_all_false_positives": 0.009837926467806016
+        },
+        {
+          "category": 14,
+          "name": "vegetation",
+          "normal_points": 219253,
+          "false_positives": 63,
+          "false_positive_rate": 0.0002873392838410421,
+          "share_of_all_false_positives": 0.0039730087658447375
+        },
+        {
+          "category": 17,
+          "name": "pole",
+          "normal_points": 2868,
+          "false_positives": 35,
+          "false_positive_rate": 0.012203626220362623,
+          "share_of_all_false_positives": 0.002207227092135965
+        },
+        {
+          "category": 12,
+          "name": "building",
+          "normal_points": 135685,
+          "false_positives": 24,
+          "false_positive_rate": 0.00017688027416442494,
+          "share_of_all_false_positives": 0.0015135271488932332
+        }
+      ]
+    },
+    "normal_only_99pct_threshold": 3.6961677074432373,
+    "holdout_at_normal_99pct": {
+      "threshold": 3.6961677074432373,
+      "normal_points": 644238,
+      "false_positives": 7841,
+      "false_positive_rate": 0.012170967872121793,
+      "classes": [
+        {
+          "category": 10,
+          "name": "sidewalk",
+          "normal_points": 98067,
+          "false_positives": 3316,
+          "false_positive_rate": 0.033813617220879603,
+          "share_of_all_false_positives": 0.42290524167835736
+        },
+        {
+          "category": 13,
+          "name": "fence",
+          "normal_points": 19584,
+          "false_positives": 1619,
+          "false_positive_rate": 0.08266952614379085,
+          "share_of_all_false_positives": 0.20647876546358881
+        },
+        {
+          "category": 16,
+          "name": "terrain",
+          "normal_points": 21514,
+          "false_positives": 972,
+          "false_positive_rate": 0.04517988286697035,
+          "share_of_all_false_positives": 0.12396378013008545
+        },
+        {
+          "category": 8,
+          "name": "road",
+          "normal_points": 116902,
+          "false_positives": 626,
+          "false_positive_rate": 0.0053549126618877355,
+          "share_of_all_false_positives": 0.07983675551587807
+        },
+        {
+          "category": 0,
+          "name": "car",
+          "normal_points": 5841,
+          "false_positives": 620,
+          "false_positive_rate": 0.1061462078411231,
+          "share_of_all_false_positives": 0.07907154699655657
+        },
+        {
+          "category": 18,
+          "name": "traffic-sign",
+          "normal_points": 1742,
+          "false_positives": 216,
+          "false_positive_rate": 0.12399540757749714,
+          "share_of_all_false_positives": 0.027547506695574545
+        },
+        {
+          "category": 3,
+          "name": "truck",
+          "normal_points": 6712,
+          "false_positives": 137,
+          "false_positive_rate": 0.020411203814064364,
+          "share_of_all_false_positives": 0.017472261191174596
+        },
+        {
+          "category": 15,
+          "name": "trunk",
+          "normal_points": 8189,
+          "false_positives": 133,
+          "false_positive_rate": 0.016241299303944315,
+          "share_of_all_false_positives": 0.016962122178293584
+        },
+        {
+          "category": 5,
+          "name": "person",
+          "normal_points": 1970,
+          "false_positives": 104,
+          "false_positive_rate": 0.05279187817258883,
+          "share_of_all_false_positives": 0.013263614334906262
+        },
+        {
+          "category": 9,
+          "name": "parking",
+          "normal_points": 5911,
+          "false_positives": 47,
+          "false_positive_rate": 0.007951277279648113,
+          "share_of_all_false_positives": 0.005994133401351868
+        },
+        {
+          "category": 14,
+          "name": "vegetation",
+          "normal_points": 219253,
+          "false_positives": 27,
+          "false_positive_rate": 0.0001231454073604466,
+          "share_of_all_false_positives": 0.003443438336946818
+        },
+        {
+          "category": 17,
+          "name": "pole",
+          "normal_points": 2868,
+          "false_positives": 19,
+          "false_positive_rate": 0.006624825662482566,
+          "share_of_all_false_positives": 0.0024231603111847977
+        },
+        {
+          "category": 12,
+          "name": "building",
+          "normal_points": 135685,
+          "false_positives": 5,
+          "false_positive_rate": 3.685005711758853e-05,
+          "share_of_all_false_positives": 0.0006376737661012626
+        }
+      ]
+    }
+  },
+  "synthetic_primary_normal_false_positives": {
+    "threshold": 1.3006166219711304,
+    "normal_points": 5200330,
+    "false_positives": 124837,
+    "false_positive_rate": 0.02400559195281838,
+    "classes": [
+      {
+        "category": 10,
+        "name": "sidewalk",
+        "normal_points": 1012028,
+        "false_positives": 67885,
+        "false_positive_rate": 0.06707818360756818,
+        "share_of_all_false_positives": 0.543789100987688
+      },
+      {
+        "category": 13,
+        "name": "fence",
+        "normal_points": 175851,
+        "false_positives": 16157,
+        "false_positive_rate": 0.0918789202222336,
+        "share_of_all_false_positives": 0.12942476989994953
+      },
+      {
+        "category": 16,
+        "name": "terrain",
+        "normal_points": 227112,
+        "false_positives": 11110,
+        "false_positive_rate": 0.04891859523054704,
+        "share_of_all_false_positives": 0.0889960508503088
+      },
+      {
+        "category": 8,
+        "name": "road",
+        "normal_points": 999049,
+        "false_positives": 10729,
+        "false_positive_rate": 0.010739212991554968,
+        "share_of_all_false_positives": 0.08594407106867355
+      },
+      {
+        "category": 0,
+        "name": "car",
+        "normal_points": 49554,
+        "false_positives": 8340,
+        "false_positive_rate": 0.16830124712434918,
+        "share_of_all_false_positives": 0.06680711647988978
+      },
+      {
+        "category": 3,
+        "name": "truck",
+        "normal_points": 77582,
+        "false_positives": 3507,
+        "false_positive_rate": 0.04520378438297543,
+        "share_of_all_false_positives": 0.028092632793162285
+      },
+      {
+        "category": 18,
+        "name": "traffic-sign",
+        "normal_points": 23316,
+        "false_positives": 2186,
+        "false_positive_rate": 0.09375536112540744,
+        "share_of_all_false_positives": 0.017510834127702525
+      },
+      {
+        "category": 15,
+        "name": "trunk",
+        "normal_points": 69495,
+        "false_positives": 1201,
+        "false_positive_rate": 0.017281818835887475,
+        "share_of_all_false_positives": 0.009620545190928972
+      },
+      {
+        "category": 5,
+        "name": "person",
+        "normal_points": 14034,
+        "false_positives": 1089,
+        "false_positive_rate": 0.07759726378794357,
+        "share_of_all_false_positives": 0.008723375281366902
+      },
+      {
+        "category": 9,
+        "name": "parking",
+        "normal_points": 59284,
+        "false_positives": 1006,
+        "false_positive_rate": 0.016969165373456583,
+        "share_of_all_false_positives": 0.008058508294816441
+      },
+      {
+        "category": 14,
+        "name": "vegetation",
+        "normal_points": 1658156,
+        "false_positives": 953,
+        "false_positive_rate": 0.0005747348259150526,
+        "share_of_all_false_positives": 0.007633954676898676
+      },
+      {
+        "category": 12,
+        "name": "building",
+        "normal_points": 808728,
+        "false_positives": 324,
+        "false_positive_rate": 0.0004006291361248776,
+        "share_of_all_false_positives": 0.002595384381233128
+      },
+      {
+        "category": 17,
+        "name": "pole",
+        "normal_points": 22385,
+        "false_positives": 224,
+        "false_positive_rate": 0.010006700915791825,
+        "share_of_all_false_positives": 0.001794339819124138
+      },
+      {
+        "category": 1,
+        "name": "bicycle",
+        "normal_points": 46,
+        "false_positives": 5,
+        "false_positive_rate": 0.10869565217391304,
+        "share_of_all_false_positives": 4.005222810544951e-05
+      }
+    ]
+  },
+  "synthetic_anomaly_count_strata": [
+    {
+      "stratum": "1-4",
+      "frames": 20,
+      "normal_points": 1522098,
+      "anomaly_points": 45,
+      "AP": 0.10971707555865617,
+      "AUROC": 96.66444093758892,
+      "FPR95": 13.757129961408529,
+      "threshold": -5.552123069763184,
+      "recall_at_saved_primary95_threshold": 0.6666666666666666,
+      "misses_at_saved_primary95_threshold": 15,
+      "exact_normal_feature_collisions": 0,
+      "collision_fraction": 0.0,
+      "collided_misses": 0
+    },
+    {
+      "stratum": "5-20",
+      "frames": 20,
+      "normal_points": 1664805,
+      "anomaly_points": 211,
+      "AP": 1.2655062472062346,
+      "AUROC": 97.26104950224662,
+      "FPR95": 15.908649962007562,
+      "threshold": -6.816808223724365,
+      "recall_at_saved_primary95_threshold": 0.7962085308056872,
+      "misses_at_saved_primary95_threshold": 43,
+      "exact_normal_feature_collisions": 0,
+      "collision_fraction": 0.0,
+      "collided_misses": 0
+    },
+    {
+      "stratum": "21-100",
+      "frames": 20,
+      "normal_points": 1771362,
+      "anomaly_points": 876,
+      "AP": 8.252622240748481,
+      "AUROC": 97.2745255438687,
+      "FPR95": 17.046318030984068,
+      "threshold": -7.648565292358398,
+      "recall_at_saved_primary95_threshold": 0.7968036529680366,
+      "misses_at_saved_primary95_threshold": 178,
+      "exact_normal_feature_collisions": 0,
+      "collision_fraction": 0.0,
+      "collided_misses": 0
+    },
+    {
+      "stratum": ">100",
+      "frames": 20,
+      "normal_points": 1764163,
+      "anomaly_points": 6827,
+      "AP": 82.6437670562964,
+      "AUROC": 99.78207018837372,
+      "FPR95": 1.0664547436943184,
+      "threshold": 3.444284439086914,
+      "recall_at_saved_primary95_threshold": 0.9745129632342171,
+      "misses_at_saved_primary95_threshold": 174,
+      "exact_normal_feature_collisions": 6,
+      "collision_fraction": 0.0008788633367511352,
+      "collided_misses": 0
+    }
+  ],
+  "primary_range_statistics": [
+    {
+      "range_m": [
+        2.5,
+        10
+      ],
+      "normal_points": 2344610,
+      "normal_fpr": 0.03724073513292189,
+      "anomaly_points": 6679,
+      "anomaly_recall": 0.9734990268004192
+    },
+    {
+      "range_m": [
+        10,
+        20
+      ],
+      "normal_points": 1533168,
+      "normal_fpr": 0.015163374137733112,
+      "anomaly_points": 896,
+      "anomaly_recall": 0.8515625
+    },
+    {
+      "range_m": [
+        20,
+        35
+      ],
+      "normal_points": 766141,
+      "normal_fpr": 0.01450646813053994,
+      "anomaly_points": 249,
+      "anomaly_recall": 0.8393574297188755
+    },
+    {
+      "range_m": [
+        35,
+        50.0
+      ],
+      "normal_points": 556411,
+      "normal_fpr": 0.005679255083023161,
+      "anomaly_points": 90,
+      "anomaly_recall": 0.5
+    }
+  ],
+  "local_feature_sensitivity": [
+    {
+      "point_group": "normal_true_negative",
+      "points": 1024,
+      "layers": [
+        {
+          "layer": "early",
+          "dimensions": 36,
+          "mean_absolute_standardized_derivative": 0.7641366531159512,
+          "mean_l1_share": 0.09043238336132414,
+          "mean_l2_norm": 6.465892113025349
+        },
+        {
+          "layer": "middle",
+          "dimensions": 144,
+          "mean_absolute_standardized_derivative": 0.8206823125604201,
+          "mean_l1_share": 0.39009488151733596,
+          "mean_l2_norm": 13.100318840904535
+        },
+        {
+          "layer": "deep",
+          "dimensions": 72,
+          "mean_absolute_standardized_derivative": 2.1947763968371614,
+          "mean_l1_share": 0.5194727351213398,
+          "mean_l2_norm": 25.108613492317
+        }
+      ]
+    },
+    {
+      "point_group": "normal_false_positive",
+      "points": 1024,
+      "layers": [
+        {
+          "layer": "early",
+          "dimensions": 36,
+          "mean_absolute_standardized_derivative": 0.6741493267424077,
+          "mean_l1_share": 0.09212240804666416,
+          "mean_l2_norm": 5.879006657266503
+        },
+        {
+          "layer": "middle",
+          "dimensions": 144,
+          "mean_absolute_standardized_derivative": 0.7202081087123093,
+          "mean_l1_share": 0.39376320962996725,
+          "mean_l2_norm": 11.467653973513656
+        },
+        {
+          "layer": "deep",
+          "dimensions": 72,
+          "mean_absolute_standardized_derivative": 1.88521906958197,
+          "mean_l1_share": 0.5141143823233686,
+          "mean_l2_norm": 21.557255194953267
+        }
+      ]
+    },
+    {
+      "point_group": "anomaly_detected",
+      "points": 1024,
+      "layers": [
+        {
+          "layer": "early",
+          "dimensions": 36,
+          "mean_absolute_standardized_derivative": 0.654290883247494,
+          "mean_l1_share": 0.09264685143909987,
+          "mean_l2_norm": 5.695358916292616
+        },
+        {
+          "layer": "middle",
+          "dimensions": 144,
+          "mean_absolute_standardized_derivative": 0.6887931612675803,
+          "mean_l1_share": 0.3911416434804166,
+          "mean_l2_norm": 10.867483918324904
+        },
+        {
+          "layer": "deep",
+          "dimensions": 72,
+          "mean_absolute_standardized_derivative": 1.826297806533516,
+          "mean_l1_share": 0.5162115050804836,
+          "mean_l2_norm": 20.959631486180943
+        }
+      ]
+    },
+    {
+      "point_group": "anomaly_missed",
+      "points": 374,
+      "layers": [
+        {
+          "layer": "early",
+          "dimensions": 36,
+          "mean_absolute_standardized_derivative": 0.6655111255612666,
+          "mean_l1_share": 0.08984453378584205,
+          "mean_l2_norm": 5.698301082762129
+        },
+        {
+          "layer": "middle",
+          "dimensions": 144,
+          "mean_absolute_standardized_derivative": 0.7108225880727193,
+          "mean_l1_share": 0.38434307926159755,
+          "mean_l2_norm": 11.355768658695274
+        },
+        {
+          "layer": "deep",
+          "dimensions": 72,
+          "mean_absolute_standardized_derivative": 1.9526700777853556,
+          "mean_l1_share": 0.5258123869525605,
+          "mean_l2_norm": 22.214353793595944
+        }
+      ]
+    }
+  ],
+  "sensitivity_sampling": "Up to 32 seeded points per frame and error group, capped at 1024 per group; gradients with respect to original 252 features times normal201 per-channel standard deviation. Not a population causal attribution or an ablation.",
+  "exact_feature_collision_definition": "Bitwise equality of all 252 float32 feature values between an anomaly point and at least one normal point in the same modified frame. A deterministic downstream pointwise module cannot distinguish such a pair from these features alone; this does not imply a global AP ceiling.",
+  "intensity_identifiability": "These caches contain no raw intensity field. Frozen features may encode intensity, but feature gradients do not establish an intensity shortcut; direct intensity attribution requires matched observed controls or intervention.",
+  "stratum_interpretation": "Separate pools have different positive prevalence. Point count is not identical to distance, density, shape, or difficulty.",
+  "full_primary_metrics_recomputed": false,
+  "cpu_threads": 4,
+  "seconds": 15.024337738985196
+}

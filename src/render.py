@@ -21,7 +21,7 @@ from .data import (Frame, PILOT_VERSION, STUSequence, legacy_source_identity,
                    nuscenes_rays, nuscenes_poses, read_nuscenes, identity, NATIVE_VERSION,
                    DIVERSITY, context_groups, observation_descriptor, normal_descriptor,
                    select_observations, native_keyframes, expand_stu, load_manifest, stu_observations)
-from .shape import Shape, Trace, unresolved_penetration
+from .shape import Shape, MeasuredSurface, Trace, unresolved_penetration
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,14 +119,20 @@ class Object:
     shape: Shape
     material: Material
     pose: np.ndarray
+    semantic: int = 2
 
     def __post_init__(self):
         if type(self.object_id) is not int or not 0 < self.object_id <= np.iinfo(np.int64).max:
             raise ValueError("object_id must be a positive int64")
         if not isinstance(self.geometry_id, str) or not self.geometry_id.strip():
             raise ValueError("geometry_id must identify the supplied geometry")
-        if not isinstance(self.shape, Shape) or not isinstance(self.material, Material):
-            raise TypeError("object requires Shape and Material")
+        if not isinstance(self.shape, (Shape, MeasuredSurface)) or not isinstance(self.material, Material):
+            raise TypeError("object requires supported geometry and Material")
+        from .data import STU_NORMAL_SEMANTICS
+        if self.semantic != 2 and self.semantic not in STU_NORMAL_SEMANTICS:
+            raise ValueError("inserted labels must be anomaly or a verified STU normal semantic")
+        if self.semantic != 2 and not isinstance(self.shape, MeasuredSurface):
+            raise ValueError("normal controls require a measured labeled normal surface")
         pose = np.asarray(self.pose, np.float64)
         rigid(pose)
         object.__setattr__(self, "pose", readonly(pose.copy()))
@@ -146,8 +152,8 @@ class World:
     tie_tolerance_m: float
 
     def __post_init__(self):
-        if not isinstance(self.version, str) or not self.version.strip() or self.sequence_id not in (0, 206):
-            raise ValueError("a V4 world must identify its version and nuScenes or STU 206 source")
+        if not isinstance(self.version, str) or not self.version.strip() or self.sequence_id not in (0, 206, 201):
+            raise ValueError("a V4 world must identify its version and normal-data source")
         if type(self.seed) is not int or not 0 <= self.seed < 2**64:
             raise ValueError("world seed must be a uint64 integer")
         if not np.isfinite(self.tie_tolerance_m) or self.tie_tolerance_m < 0:
@@ -262,7 +268,7 @@ def render_frame(source, world, rays, response, trace):
         xyzi[kept, :3] = rays.origins[kept] + ray_parameter[:, None] * rays.directions[kept]
         xyzi[kept, 3] = intensity[returned]
         # Synthetic object IDs stay in metadata, never collide with native instance IDs.
-        labels[kept] = 2
+        labels[kept] = item.semantic
     frame = Frame(source.frame_id, xyzi, source.pose, labels, source.sequence_id, source.partition)
     normal = source.actual & (source.semantic != 0) & (source.semantic != 2) & ~foreground
     # Potential/foreground count ray opportunities, not visible surface area.
@@ -1630,6 +1636,226 @@ def generate_native(output, *, pool_root, workers=8, limit=None, extend_from=Non
                   response=str(response_path.resolve()), geometry=str((output / "geometry.json").resolve()))
     result["sha256"] = identity(result)
     write_json(output / "manifest.json", result)
+
+
+def _control_source(sequence, frame_id):
+    """Canonicalize only the released 201 file aliases; preserve their output slots."""
+    context = _NORMAL_CONTROLS[sequence]
+    record = context["records"][frame_id]
+    original = Frame(frame_id, np.fromfile(record["scan"], dtype="<f4").reshape(-1, 4),
+                     np.asarray(record["pose"], dtype=np.float64),
+                     np.fromfile(record["label"], dtype="<u4"), sequence_id=sequence)
+    count = len(original.xyzi)
+    mapping, start = np.arange(count), 0
+    if count != 131072:
+        layouts = {0: (0, (131072, 131072, 131072)), 1: (0, (131072, 131072, 131072)),
+                   2: (29184, (29184, 131072, 131072)), 3: (0, (131072, 131072))}
+        if sequence != 201 or frame_id not in layouts:
+            raise ValueError("normal control source has an unknown ray-file layout")
+        start, runs = layouts[frame_id]
+        mapping = np.concatenate([np.arange(length) for length in runs])
+        if len(mapping) != count or not np.array_equal(original.xyzi, original.xyzi[start:start+131072][mapping]) or not np.array_equal(original.labels, original.labels[start:start+131072][mapping]):
+            raise ValueError("201 aliases no longer duplicate the documented complete ray block")
+    canonical = Frame(frame_id, original.xyzi[start:start+131072], original.pose,
+                      original.labels[start:start+131072], sequence_id=sequence)
+    return original, canonical, mapping
+
+
+def _control_donors(sequence):
+    """Use labeled normal instances and adjacent measured rays, without closing surfaces."""
+    from .nuscenes import _ground, _basis
+    context = _NORMAL_CONTROLS[sequence]
+    rays = _NORMAL_CONTROLS["rays"]
+    grid = np.argsort(rays.canonical_ids).reshape(128, 1024)[np.argsort(rays.local[:, 2])]
+    a, b = grid[:-1], np.roll(grid[:-1], -1, axis=1)
+    c, d = grid[1:], np.roll(grid[1:], -1, axis=1)
+    faces = np.concatenate((np.stack((a, b, c), -1).reshape(-1, 3),
+                            np.stack((b, d, c), -1).reshape(-1, 3)))
+    donors = {}
+    categories = (10, 11, 15, 18, 20, 30, 31, 32, 252, 254, 255, 258, 259)
+    for frame_id in np.linspace(0, len(context["records"])-1, 64, dtype=int):
+        original, frame, _ = _control_source(sequence, int(frame_id))
+        eligible = frame.actual & np.isin(frame.semantic, categories) & (frame.instance > 0)
+        road = frame.xyzi[frame.actual & np.isin(frame.semantic, (40, 44, 48, 49, 60)), :3].astype(float)
+        for packed in np.unique(frame.labels[eligible]):
+            selected = frame.actual & (frame.labels == packed)
+            if selected.sum() < 30:
+                continue
+            triangle = faces[selected[faces].all(1)]
+            if len(triangle) < 8:
+                continue
+            xyz = frame.xyzi[:, :3].astype(float)
+            distance = np.linalg.norm(xyz, axis=1)
+            legal = np.ones(len(triangle), bool)
+            for first, second in ((0, 1), (1, 2), (2, 0)):
+                u, v = triangle[:, first], triangle[:, second]
+                chord = np.linalg.norm(xyz[u]/distance[u, None]-xyz[v]/distance[v, None], axis=1)*np.minimum(distance[u], distance[v])
+                legal &= abs(distance[u]-distance[v]) <= .2 + 2*chord
+            triangle = triangle[legal]
+            if not 8 <= len(triangle) <= 12000:
+                continue
+            slots, inverse = np.unique(triangle, return_inverse=True)
+            vertices = xyz[slots]
+            center = np.median(vertices[:, :2], axis=0)
+            radius = max(2., np.linalg.norm(vertices[:, :2]-center, axis=1).max()+.5)
+            plane = _ground(road, center, radius)
+            if plane is None:
+                continue
+            origin = np.r_[center, plane[2]]
+            basis = _basis(center/np.linalg.norm(center), plane)
+            local = (vertices-origin)@basis
+            # Ground height comes from measured road support, not an invented completed object.
+            if local[:, 2].min() < -.15 or local[:, 2].min() > .5:
+                continue
+            key = int(packed)
+            if key in donors and len(donors[key]["faces"]) >= len(triangle):
+                continue
+            donors[key] = dict(vertices=local, faces=inverse.reshape(-1, 3), sensor_local=-origin@basis,
+                source_frame=int(frame_id), raw_semantic=key & 65535, instance=key >> 16,
+                source_slots=slots.tolist(), source_range=float(np.median(distance[slots])),
+                source_identity=legacy_source_identity(original))
+    if not donors:
+        raise ValueError(f"STU{sequence} has no qualified observed normal donor surfaces")
+    return sorted(donors.values(), key=lambda d: (d["raw_semantic"], d["instance"]))
+
+
+def _make_normal_control(task):
+    from scipy.spatial import ConvexHull, QhullError
+    from .nuscenes import _ground, _basis
+    from .shape import MeasuredSurface
+    from .data import file_sha256, restore_delta
+    sequence, number, count = task
+    context = _NORMAL_CONTROLS[sequence]
+    rng = np.random.default_rng(np.random.SeedSequence([sequence, number, 6301]))
+    frame_id = int(round(number*(len(context["records"])-1)/max(1, count-1)))
+    original, source, mapping = _control_source(sequence, frame_id)
+    road = source.xyzi[source.actual & np.isin(source.semantic, (40, 60)), :3].astype(float)
+    obstacles = source.xyzi[source.actual & ~np.isin(source.semantic, (40, 44, 48, 49, 60, 72)), :3].astype(float)
+    groups = context["groups"]
+    classes = sorted(groups)
+    # Appearance and the return stream stay fixed across geometric placement attempts.
+    material = context["materials"][int(rng.integers(len(context["materials"])))]
+    world_seed = int(rng.integers(2**32))
+    rejected = Counter()
+    for attempt in range(96):
+        category = classes[(number + attempt//16) % len(classes)]
+        donor = groups[category][(number//len(classes)+attempt//16) % len(groups[category])]
+        lower = max(5., donor["source_range"])
+        candidates = road[(np.linalg.norm(road, axis=1) >= lower) & (np.linalg.norm(road, axis=1) <= 48.)]
+        if not len(candidates):
+            rejected["no_supported_range"] += 1; continue
+        center = candidates[int(rng.integers(len(candidates))), :2]
+        radius = max(1.5, np.linalg.norm(donor["vertices"][:, :2], axis=1).max()+.5)
+        plane = _ground(road, center, radius)
+        if plane is None:
+            rejected["road_plane"] += 1; continue
+        basis = _basis(center/np.linalg.norm(center), plane)
+        origin = np.r_[center, plane[2]]
+        placed = donor["vertices"]@basis.T+origin
+        support = road[np.linalg.norm(road[:, :2]-center, axis=1) <= radius]
+        try:
+            hull = ConvexHull(support[:, :2])
+        except QhullError:
+            rejected["road_hull"] += 1; continue
+        if np.any(placed[:, :2]@hull.equations[:, :2].T+hull.equations[:, 2] > .05):
+            rejected["footprint_off_road"] += 1; continue
+        lo, hi = placed.min(0), placed.max(0)
+        if np.any(np.all((obstacles >= lo-np.array([.15,.15,0.])) & (obstacles <= hi+.15), axis=1)):
+            rejected["observed_collision"] += 1; continue
+        surface = MeasuredSurface(donor["vertices"], donor["faces"], donor["sensor_local"])
+        pose = source.pose.copy()
+        pose[:3, :3] = source.pose[:3, :3]@basis
+        pose[:3, 3] = origin@source.pose[:3, :3].T+source.pose[:3, 3]
+        geometry = identity(dict(sequence=sequence, frame=donor["source_frame"], semantic=category,
+                                 instance=donor["instance"], slots=donor["source_slots"]))
+        item = Object(1, geometry, surface, Material(**material), pose, semantic=category)
+        world = World("STU-measured-normal-control", sequence, world_seed, (item,), 1e-6)
+        observed = render_frame(source, world, _NORMAL_CONTROLS["rays"], _NORMAL_CONTROLS["response"],
+                                _NORMAL_CONTROLS["trace"])
+        normal_count = int((observed.inserted & (point_targets(observed.frame) == 0)).sum())
+        if not normal_count:
+            rejected["no_visible_normal_return"] += 1; continue
+        specification = dict(source_sequence=sequence, frame=frame_id, donor_geometry=geometry,
+            donor_source_identity=donor["source_identity"], seed=world.seed, material=material,
+            pose=pose.tolist(), normal_semantic=category, calibration=_NORMAL_CONTROLS["calibration"])
+        world_id = identity(specification)
+        inserted, occluded = observed.inserted[mapping], observed.occluded_original[mapping]
+        slots = np.flatnonzero(inserted | occluded).astype(np.int32)
+        xyzi, labels = observed.frame.xyzi[mapping], observed.frame.labels[mapping]
+        path = context["output"] / f"{number:04d}.npz"
+        np.savez_compressed(path, format=np.asarray("stu-normal-control-frame"),
+            source_identity=np.asarray(legacy_source_identity(original)), world_identity=np.asarray(world_id),
+            source_slot=slots, xyzi=xyzi[slots], packed_labels=labels[slots],
+            inserted_slot=np.flatnonzero(inserted).astype(np.int32),
+            occluded_slot=np.flatnonzero(occluded).astype(np.int32), normal_semantic=np.uint16(category))
+        restored = restore_delta(path, original, world_id)
+        if not np.array_equal(restored.xyzi, xyzi) or not np.array_equal(restored.labels, labels):
+            raise ValueError("normal control delta does not restore the complete rendered observation")
+        stored_count = int((inserted & (point_targets(restored) == 0)).sum())
+        return dict(role="normal_control", source_sequence=sequence, frame=frame_id, world=world_id,
+            delta=str(path), delta_sha256=file_sha256(path), recorded_anomalies=0,
+            inserted_normal_points=stored_count, unique_inserted_normal_points=normal_count,
+            normal_semantic=category, donor=dict(sequence=sequence, frame=donor["source_frame"],
+                semantic=category, instance=donor["instance"], geometry=geometry),
+            material=material, pose=pose.tolist(), attempts=attempt+1, rejections=dict(rejected))
+    return dict(rejected=True, source_sequence=sequence, frame=frame_id, reasons=dict(rejected))
+
+
+def generate_normal_controls(output, *, data_root, pool_root, train_count=256, dev_count=64, workers=4):
+    """Insert actual same-sequence normal surfaces through the calibrated STU ray renderer."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+    import torch
+    from threadpoolctl import threadpool_limits
+    from .data import DATA_ROOT, normal_records, file_sha256
+    global _NORMAL_CONTROLS
+    if Path(data_root).resolve() != DATA_ROOT.resolve() or min(train_count, dev_count, workers) < 1:
+        raise ValueError("normal controls require the documented local STU source and positive counts")
+    output, pool_root = Path(output).resolve(), Path(pool_root).resolve()
+    if output.exists():
+        raise FileExistsError("normal control outputs must use a new directory")
+    threadpool_limits(1)
+    started = time.perf_counter()
+    sensor = torch.load(pool_root / "calibration.pt", map_location="cpu", weights_only=False)["sensor"]
+    if sensor["source_sequence_id"] != 206:
+        raise ValueError("STU signal response must be fitted on normal206 only")
+    response = Response(sensor["range_edges_m"], sensor["incidence_edges_rad"], sensor["quantile_levels"],
+        sensor["return_probability"], sensor["intensity_quantiles"],
+        (sensor["intensity_min"], sensor["intensity_max"]), 1/3500, "existing STU206 response; identical synthetic output quantization")
+    _NORMAL_CONTROLS = dict(rays=read_rays(), response=response, trace=Trace(96,8,24,1e-5,4.,1e-5,1e-5,1e-9),
+                           calibration=file_sha256(pool_root / "calibration.pt"))
+    pool = json.loads((pool_root / "manifest.json").read_text())
+    output.mkdir(parents=True)
+    for sequence, split, count in ((206,"train",train_count),(201,"validation",dev_count)):
+        folder = output / split; folder.mkdir()
+        materials = []
+        for row in pool["splits"][split]["worlds"]:
+            value = json.loads((pool_root / row["path"] / "world.json").read_text())["world"]["objects"][0]["material"]
+            materials.append(dict(quantile=value["intensity_quantile"], roughness=value["roughness"], return_bias=value["return_bias"]))
+        _NORMAL_CONTROLS[sequence] = dict(records=normal_records(str(sequence), development=sequence==201),
+            output=folder, materials=materials)
+        donors = _control_donors(sequence)
+        groups = defaultdict(list)
+        for donor in donors:
+            groups[donor["raw_semantic"]].append(donor)
+        _NORMAL_CONTROLS[sequence]["groups"] = dict(groups)
+        print(f"normal controls {sequence}: {len(donors)} real normal donors, classes {dict(Counter(d['raw_semantic'] for d in donors))}", flush=True)
+        records, rejected = [], []
+        tasks = [(sequence, i, count) for i in range(count)]
+        with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork")) as executor:
+            for i, row in enumerate(executor.map(_make_normal_control, tasks), 1):
+                (rejected if row.get("rejected") else records).append(row)
+                if i % 16 == 0 or i == count:
+                    print(f"normal controls {sequence}: {i}/{count}, accepted {len(records)}, elapsed {time.perf_counter()-started:.1f}s", flush=True)
+        manifest = dict(role="normal_control", source_sequence=sequence, split=split, records=records,
+            requested_frames=count, selected_frames=len(records), rejected=rejected,
+            donor_instances=len(donors), normal_class_counts=dict(Counter(r["normal_semantic"] for r in records)),
+            calibration=_NORMAL_CONTROLS["calibration"], semantics="actual labeled normal instances; original size; measured surface sides only; same STU ray response and opaque occlusion; no anomaly shape relabeling")
+        manifest["sha256"] = identity(manifest)
+        write_json(output / f"{split}.json", manifest)
+        if not records:
+            raise ValueError(f"STU{sequence} produced no visible valid normal controls")
+    print(f"normal controls complete: {time.perf_counter()-started:.1f}s", flush=True)
 
 
 if __name__ == "__main__":

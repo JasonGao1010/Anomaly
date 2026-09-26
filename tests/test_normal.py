@@ -1398,3 +1398,114 @@ def test_normal_source_identity_tracks_bytes_and_preserves_existing_hashes(tmp_p
     # Existing identities may never be silently replaced with the changed file's digest.
     with pytest.raises(ValueError, match="source file changed: " + changed_file):
         data.normal_records("nuscenes")
+
+
+def test_measured_surface_uses_each_actual_origin_and_unit_ray_distance():
+    from src.shape import MeasuredSurface
+    vertices = np.array([[2., -1., -1.], [2., 1., -1.], [2., 0., 1.]])
+    surface = MeasuredSurface(vertices, [[0, 1, 2]], [0., 0., 0.])
+    vertices[:] = 99  # The immutable donor must not alias caller-owned arrays.
+    origins = np.array([[1., -.25, 0.], [0., .25, 0.], [0., 3., 0.]])
+    directions = np.array([[3., 0., 0.], [1., 0., 0.], [1., 0., 0.]])
+    distance, normal, valid = surface.intersect(origins, directions, SimpleNamespace(near_m=1e-5))
+    np.testing.assert_array_equal(valid, [True, True, False])
+    np.testing.assert_allclose(distance[:2], [1., 2.], atol=1e-14)
+    np.testing.assert_allclose(normal[:2], [[-1., 0., 0.]] * 2, atol=1e-14)
+    assert np.isinf(distance[2]) and not normal[2].any()
+    np.testing.assert_array_equal(surface.bounds(), [[2., -1., -1.], [2., 1., 1.]])
+    assert all(not value.flags.writeable for value in (surface.vertices, surface.faces,
+                                                      surface.sensor_local, distance, normal, valid))
+
+
+def test_measured_surface_keeps_nearest_hit_across_ray_and_face_blocks():
+    from src.shape import MeasuredSurface
+    triangle = np.array([[4., -1., -1.], [4., 1., -1.], [4., 0., 1.]])
+    vertices = np.r_[triangle, triangle - [2., 0., 0.]]
+    faces = np.r_[np.tile([[0, 1, 2]], (256, 1)), [[3, 4, 5]]]
+    surface = MeasuredSurface(vertices, faces, [0., 0., 0.])
+    origins = np.zeros((513, 3))
+    origins[:, 0] = np.linspace(0., .5, len(origins))
+    directions = np.tile([1., 0., 0.], (len(origins), 1))
+    distance, normal, valid = surface.intersect(origins, directions, SimpleNamespace(near_m=1e-5))
+    assert valid.all()
+    np.testing.assert_allclose(distance, 2. - origins[:, 0], atol=1e-14)
+    np.testing.assert_allclose(normal, np.tile([-1., 0., 0.], (len(origins), 1)), atol=1e-14)
+
+
+def test_measured_surface_does_not_close_unobserved_holes():
+    from src.shape import MeasuredSurface
+    left = np.array([[2., -2., -1.], [2., -1., -1.], [2., -1.5, 1.]])
+    surface = MeasuredSurface(np.r_[left, left + [0., 3., 0.]], [[0, 1, 2], [3, 4, 5]], [0., 0., 0.])
+    origins = np.array([[0., -1.5, 0.], [0., 0., 0.], [0., 1.5, 0.]])
+    distance, _, valid = surface.intersect(origins, np.tile([1., 0., 0.], (3, 1)),
+                                          SimpleNamespace(near_m=1e-5))
+    np.testing.assert_array_equal(valid, [True, False, True])
+    assert np.isinf(distance[1])
+
+
+@pytest.mark.parametrize("face", [[[0, 1, 2]], [[0, 2, 1]]])
+def test_measured_surface_rejects_back_side_independently_of_face_winding(face):
+    from src.shape import MeasuredSurface
+    surface = MeasuredSurface([[2., -1., -1.], [2., 1., -1.], [2., 0., 1.]], face, [0., 0., 0.])
+    origins = [[0., 0., 0.], [3., 0., 0.]]
+    distance, normal, valid = surface.intersect(origins, [[1., 0., 0.], [-1., 0., 0.]],
+                                               SimpleNamespace(near_m=1e-5))
+    np.testing.assert_array_equal(valid, [True, False])
+    np.testing.assert_array_equal(normal[0], [-1., 0., 0.])
+    assert np.isinf(distance[1])
+
+
+@pytest.mark.parametrize("vertices,faces,sensor", [
+    ([[2., -1., -1.], [2., 1., -1.], [2., 0., np.nan]], [[0, 1, 2]], [0., 0., 0.]),
+    ([[2., -1., -1.], [2., 1., -1.], [2., 0., 1.]], [[0, 1, 3]], [0., 0., 0.]),
+    ([[2., -1., -1.], [2., 1., -1.], [2., 0., 1.]], [[0., 1., 2.]], [0., 0., 0.]),
+    ([[2., -1., -1.], [2., 1., -1.], [2., 0., 1.]], [[0, 1, 1]], [0., 0., 0.]),
+    ([[2., -1., -1.], [2., 1., -1.], [2., 0., 1.]], [[0, 1, 2]], [0., np.inf, 0.]),
+])
+def test_measured_surface_rejects_invalid_or_degenerate_geometry(vertices, faces, sensor):
+    from src.shape import MeasuredSurface
+    with pytest.raises(ValueError):
+        MeasuredSurface(vertices, faces, sensor)
+
+
+@pytest.mark.parametrize("sequence", [206, 201])
+def test_measured_surface_label_role_preserves_shared_returns_and_occlusion(sequence):
+    from dataclasses import replace
+    from src.data import Frame, Rays
+    from src.render import Material, Object, Response, World, render_frame
+    from src.shape import MeasuredSurface, Trace
+
+    # A diagnostic stochastic response exercises returned AND opaque no-return rays.
+    origins = np.column_stack((np.full(64, .1), np.linspace(-2., 2., 64), np.zeros(64)))
+    directions = np.tile([1., 0., 0.], (len(origins), 1))
+    rays = Rays(directions, origins, np.arange(len(origins)), np.array([[1., 0., 0.]]))
+    xyzi = np.column_stack((origins + 8 * directions, np.full(len(origins), .3))).astype(np.float32)
+    labels = ((np.arange(1, len(origins) + 1, dtype=np.uint32) << 16) | np.uint32(40))
+    source = Frame(17, xyzi, np.eye(4), labels, sequence_id=sequence)
+    surface = MeasuredSurface([[0., -1., -1.], [0., 1., -1.], [0., 0., 1.]],
+                               [[0, 1, 2]], [-3., 0., 0.])
+    pose = np.eye(4)
+    pose[0, 3] = 3.
+    item = Object(7, "diagnostic-measured-surface", surface, Material(.5, .4, 0.), pose, semantic=2)
+    world = World("diagnostic-label-invariance", sequence, 31, (item,), 1e-6)
+    response = Response([0., 100.], [0., math.pi / 2], [0., 1.], np.full((1, 1, 1), .5),
+                        np.array([[[[.1, .9]]]]), (0., 1.), None,
+                        "Diagnostic response for shared normal/anomaly rendering; not scientific data")
+    trace = Trace(2, 0, 1, 1e-5, 1., 1e-5, 1e-5, 1e-9)
+    anomaly = render_frame(source, world, rays, response, trace)
+    normal = render_frame(source, replace(world, objects=(replace(item, semantic=10),)),
+                          rays, response, trace)
+    np.testing.assert_array_equal(anomaly.frame.xyzi, normal.frame.xyzi)
+    for key in ("inserted", "occluded_original", "visible_normal", "object_ids"):
+        np.testing.assert_array_equal(getattr(anomaly, key), getattr(normal, key))
+    assert anomaly.sampling == normal.sampling
+    inserted, occluded = anomaly.inserted, anomaly.occluded_original
+    assert inserted.any() and (occluded & ~inserted).any() and (~occluded).any()
+    np.testing.assert_array_equal(anomaly.frame.labels[inserted], np.full(inserted.sum(), 2, np.uint32))
+    np.testing.assert_array_equal(normal.frame.labels[inserted], np.full(inserted.sum(), 10, np.uint32))
+    np.testing.assert_array_equal(anomaly.frame.labels[~inserted], normal.frame.labels[~inserted])
+    for result in (anomaly, normal):
+        np.testing.assert_array_equal(result.frame.xyzi[~occluded], source.xyzi[~occluded])
+        np.testing.assert_array_equal(result.frame.labels[~occluded], source.labels[~occluded])
+        assert not result.frame.xyzi[occluded & ~inserted].any()
+        assert not result.frame.labels[occluded & ~inserted].any()

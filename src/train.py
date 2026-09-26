@@ -1873,7 +1873,7 @@ def auxiliary_records(path, split="train", samples=1920):
 
 
 class AuxiliaryScans:
-    """Keep every synthetic anomaly and original semantic labels on normal returns."""
+    """Retain inserted foreground identities and genuine semantics on normal returns."""
 
     def __init__(self, manifest, full=False):
         from .data import STUSequence, DATA_ROOT, normal_records
@@ -1881,6 +1881,7 @@ class AuxiliaryScans:
         if self.sequence_id not in (206, 201) or manifest["split"] != ("train" if self.sequence_id == 206 else "validation"):
             raise ValueError("auxiliary source must be train206 or validation201")
         self.records = manifest["records"]
+        self.control = manifest.get("role") == "normal_control"
         self.full = full
         self.sequence = (STUSequence(DATA_ROOT) if self.sequence_id == 206 else
                          {row["frame"]: row for row in normal_records("201", development=True)})
@@ -1890,7 +1891,7 @@ class AuxiliaryScans:
         return len(self.records)
 
     def __getitem__(self, index):
-        from .data import Frame, STU_NORMAL_SEMANTICS, restore_delta, point_targets
+        from .data import Frame, STU_NORMAL_SEMANTICS, restore_delta, read_delta, point_targets
         from .model import voxelize
         from .normal import support_conditions
         row = self.records[index]
@@ -1911,19 +1912,30 @@ class AuxiliaryScans:
             semantic[labels == label] = category
         normal = np.flatnonzero((raw["targets"] == 0) & (semantic >= 0))
         anomaly = np.flatnonzero(raw["targets"] == 1)
-        if not len(anomaly) or len(anomaly) != row["recorded_anomalies"]:
+        inserted = raw["targets"] == 1
+        if self.control:
+            delta = read_delta(row["delta"])
+            if "normal_semantic" not in delta or len(anomaly) or row["recorded_anomalies"] != 0:
+                raise ValueError("normal controls must contain only verified normal insertions")
+            inserted = np.isin(slots, delta["inserted_slot"], assume_unique=True)
+            if int((inserted & (raw["targets"] == 0)).sum()) != row["inserted_normal_points"] or row["inserted_normal_points"] <= 0:
+                raise ValueError("restored inserted normal count disagrees with its source record")
+        elif not len(anomaly) or len(anomaly) != row["recorded_anomalies"]:
             raise ValueError("restored auxiliary anomaly count disagrees with its source record")
         if self.full:
             chosen = np.flatnonzero(raw["targets"] >= 0)
         else:
             rng = np.random.default_rng(np.random.SeedSequence([self.sequence_id, index, 314]))
-            normal = rng.choice(normal, min(512, len(normal)), replace=False)
-            chosen = np.sort(np.r_[normal, anomaly]).astype(np.int64)
+            foreground = normal[inserted[normal]] if self.control else anomaly
+            background = normal[~inserted[normal]] if self.control else normal
+            background = rng.choice(background, min(512, len(background)), replace=False)
+            chosen = np.sort(np.r_[background, foreground]).astype(np.int64)
         semantic[raw["targets"] != 0] = -1
         sample = voxelize(raw["xyzi"], official=True)
         sample.update(queries=torch.from_numpy(chosen), targets=torch.from_numpy(raw["targets"][chosen]),
                       conditions=torch.from_numpy(support_conditions(raw["xyzi"], chosen, range_only=True)),
                       semantic=torch.from_numpy(semantic[chosen]),
+                      inserted=torch.from_numpy(inserted[chosen]),
                       slots=torch.from_numpy(raw["slots"][chosen].astype(np.int64)),
                       index=index, frame=int(self.records[index]["frame"]))
         return sample
@@ -1933,19 +1945,21 @@ def auxiliary_cache(manifest, output, device, workers):
     """Encode training queries or complete development observations once."""
     from .model import FrozenPerception
     development = manifest.get("source_sequence") == 201
+    control = manifest.get("role") == "normal_control"
     if manifest.get("source_sequence") not in (206, 201):
         raise ValueError("auxiliary data must use STU206 training or STU201 development")
     output.mkdir(parents=True, exist_ok=True)
     expected = sum(row["recorded_anomalies"] for row in manifest["records"])
-    capacity = (350_000 if development else 512) * len(manifest["records"]) + expected
+    expected_inserted = sum(row["inserted_normal_points"] for row in manifest["records"]) if control else expected
+    capacity = (350_000 if development else 512) * len(manifest["records"]) + expected_inserted
     disk_check(capacity * 1100 + 200_000_000)
     perception = FrozenPerception().to(device).eval()
     loader = DataLoader(AuxiliaryScans(manifest, full=development), batch_size=None,
         num_workers=workers, pin_memory=True, generator=torch.Generator().manual_seed(206),
         **({"prefetch_factor": 1} if workers else {}))
-    values = {key: [] for key in ("features", "targets", "semantic", "frame", "slot", "view")}
+    values = {key: [] for key in ("features", "targets", "semantic", "frame", "slot", "view", "inserted")}
     paths = []
-    anomalies = normals = 0
+    anomalies = normals = inserted_points = 0
     started = time.perf_counter()
     with torch.inference_mode():
         for number, sample in enumerate(loader, 1):
@@ -1955,10 +1969,12 @@ def auxiliary_cache(manifest, output, device, workers):
                 raise ValueError("nonfinite auxiliary frozen features")
             anomalies += int((sample["targets"] == 1).sum())
             normals += int((sample["targets"] == 0).sum())
+            inserted_points += int(sample["inserted"].sum())
             if development:
                 path = output / f"{number-1:04d}.npz"
                 np.savez(path, features=encoded.cpu().numpy(), targets=sample["targets"].numpy(),
                     semantic=sample["semantic"].numpy(), slot=sample["slots"].numpy(),
+                    inserted=sample["inserted"].numpy(),
                     conditions=sample["conditions"].numpy(),
                     predicted=perception.seg_head(encoded[:, 180:]).argmax(-1).cpu().numpy())
                 paths.append(str(path))
@@ -1966,7 +1982,7 @@ def auxiliary_cache(manifest, output, device, workers):
                     disk_check(200_000_000)
             else:
                 values["features"].append(encoded.cpu().numpy())
-                for key in ("targets", "semantic"):
+                for key in ("targets", "semantic", "inserted"):
                     values[key].append(sample[key].numpy())
                 values["frame"].append(np.full(len(encoded), sample["frame"], np.int64))
                 values["slot"].append(sample["slots"].numpy())
@@ -1976,11 +1992,12 @@ def auxiliary_cache(manifest, output, device, workers):
                 print(f"auxiliary features {number}/{len(manifest['records'])}: "
                       f"remaining {(len(manifest['records'])-number)*elapsed/number:.0f}s", flush=True)
             del batch, encoded
-    if anomalies != expected:
-        raise ValueError("restored auxiliary anomaly counts disagree with the selected pool")
+    if anomalies != expected or inserted_points != expected_inserted:
+        raise ValueError("restored auxiliary anomaly or insertion counts disagree with the selected pool")
     if development:
         result = dict(frames=paths, manifest=manifest["sha256"], anomalies=anomalies, normals=normals,
-            seconds=time.perf_counter()-started, source_sequence=201,
+            seconds=time.perf_counter()-started, source_sequence=201, initial_sha256=WEIGHTS_SHA256,
+            role="normal_control" if control else "synthetic_anomaly", inserted_points=inserted_points,
             scope="all valid normal and anomaly returns in selected synthetic development scans, including 1-4-anomaly-point scans; not val19")
         write_json(output / "features.json", result)
         del perception, loader, sample
@@ -1988,27 +2005,28 @@ def auxiliary_cache(manifest, output, device, workers):
         return result
     values = {key: np.concatenate(rows) for key, rows in values.items()}
     actual_anomalies = int((values["targets"] == 1).sum())
-    if (not actual_anomalies or np.any(values["semantic"][values["targets"] == 1] != -1)
+    if ((not actual_anomalies and not control) or np.any(values["semantic"][values["targets"] == 1] != -1)
             or np.any(values["semantic"][values["targets"] == 0] < 0)):
         raise ValueError("auxiliary anomaly and normal semantic identities disagree")
     np.savez(output / "auxiliary.npz", **values)
     write_json(output / "auxiliary.json", dict(manifest=manifest["sha256"], frames=len(manifest["records"]),
         anomalies=actual_anomalies, source_recorded_anomalies=expected,
         normals=int((values["targets"] == 0).sum()),
+        source_sequence=206, role="normal_control" if control else "synthetic_anomaly", inserted_points=inserted_points,
         initial_sha256=WEIGHTS_SHA256, seconds=time.perf_counter()-started,
-        role="all actual in-range synthetic anomalies in selected supplied STU206 views plus at most 512 true-semantic normal returns per modified scan"))
+        scope="all valid inserted foreground returns plus at most 512 genuine-semantic background normal returns per selected STU206 scan"))
     del perception, loader, sample
     torch.cuda.empty_cache()
     return {key: torch.as_tensor(value, device=device) for key, value in values.items()}
 
 
 @torch.no_grad()
-def auxiliary_development(scorer, cache, device):
+def auxiliary_development(scorer, cache, device, controls=None):
     """Exact pooled scores over every valid point in the fixed synthetic dev scans."""
     from .evaluate import rank_metrics
     scorer.eval()
     normal, anomaly, eligible_normal, eligible_anomaly = [], [], [], []
-    for path in cache["frames"]:
+    def score_frame(path):
         with np.load(path) as values:
             features = values["features"]
             conditions, predicted, targets = values["conditions"], values["predicted"], values["targets"]
@@ -2019,17 +2037,45 @@ def auxiliary_development(scorer, cache, device):
                 kwargs = dict(predicted=torch.as_tensor(predicted[start:stop], device=device)) if isinstance(scorer, InstanceSupport) else {}
                 scores.append(scorer(torch.as_tensor(features[start:stop], device=device),
                     torch.as_tensor(conditions[start:stop], device=device), **kwargs).cpu().numpy())
-            scores = np.concatenate(scores)
-            normal.append(scores[targets == 0])
-            anomaly.append(scores[targets == 1])
-            if len(anomaly[-1]) >= 5:
-                eligible_normal.append(normal[-1])
-                eligible_anomaly.append(anomaly[-1])
-    return dict(metrics=rank_metrics(np.concatenate(eligible_normal), np.concatenate(eligible_anomaly)),
+            return np.concatenate(scores), targets, values["inserted"] if "inserted" in values else None
+    for path in cache["frames"]:
+        scores, targets, _ = score_frame(path)
+        normal.append(scores[targets == 0])
+        anomaly.append(scores[targets == 1])
+        if len(anomaly[-1]) >= 5:
+            eligible_normal.append(normal[-1])
+            eligible_anomaly.append(anomaly[-1])
+    primary_normal, primary_anomaly = np.concatenate(eligible_normal), np.concatenate(eligible_anomaly)
+    result = dict(metrics=rank_metrics(primary_normal, primary_anomaly),
         all_positive_frame_metrics=rank_metrics(np.concatenate(normal), np.concatenate(anomaly)),
         frames=len(cache["frames"]), normal_points=sum(map(len, normal)),
         anomaly_points=sum(map(len, anomaly)), eligible_frames=len(eligible_normal),
         scope="synthetic STU201; primary metrics require at least five valid anomalies per frame; all_positive_frame_metrics also retain 1-4-point observations")
+    if controls is not None:
+        if controls.get("source_sequence") != 201 or controls.get("role") != "normal_control":
+            raise ValueError("normal-control development requires the independent STU201 cache")
+        control_scores, inserted_scores = [], []
+        for path in controls["frames"]:
+            scores, targets, inserted = score_frame(path)
+            if (np.any(targets != 0) or inserted is None or inserted.dtype != np.bool_
+                    or inserted.shape != targets.shape or not inserted.any()):
+                raise ValueError("control development must preserve normal labels and inserted identities")
+            control_scores.append(scores)
+            inserted_scores.append(scores[inserted])
+        control_scores, inserted_scores = np.concatenate(control_scores), np.concatenate(inserted_scores)
+        result["original60_metrics"] = result["metrics"]
+        result["metrics"] = rank_metrics(np.r_[primary_normal, control_scores], primary_anomaly)
+        threshold = result["metrics"]["threshold"]
+        result["normal_controls"] = dict(frames=len(controls["frames"]), points=len(control_scores),
+            inserted_points=len(inserted_scores), threshold=threshold,
+            FPR95=float(100*np.mean(control_scores >= threshold)),
+            inserted_FPR95=float(100*np.mean(inserted_scores >= threshold)),
+            fpr_at_zero=float(100*np.mean(control_scores >= 0)),
+            inserted_fpr_at_zero=float(100*np.mean(inserted_scores >= 0)),
+            threshold_source="95% recall operating point from the expanded STU201 development; zero is the fixed binary-logit decision")
+        result["expanded_normal_points"] = len(primary_normal) + len(control_scores)
+        result["scope"] += "; selection metrics pool the original eligible scans with every normal-control point; original60_metrics retains the earlier population"
+    return result
 
 
 def auxiliary_loss(scorer, data, positive, negative):
@@ -2447,6 +2493,56 @@ def instance_development(scorer, data, indices, *, retain=False, exclude_neighbo
     return (result,torch.cat(scores)) if retain else result
 
 
+def evidence_binary_weights(targets, view, view_counts, weighting="point", control=None, control_mass=.25):
+    """Preserve half the BCE coefficient mass per class; optionally equalize anomaly views."""
+    if not math.isfinite(control_mass) or not 0 < control_mass < .5:
+        raise ValueError("normal-control BCE mass must be finite and strictly between zero and .5")
+    if (weighting not in ("point", "view") or targets.ndim != 1 or view.shape != targets.shape
+            or view_counts.ndim != 1 or not len(view_counts)
+            or bool(((targets != 0) & (targets != 1)).any())
+            or bool(((view < -1) | (view >= len(view_counts))).any())):
+        raise ValueError("binary supervision requires matching targets and valid source views")
+    positive = targets == 1
+    if bool((view[positive] < 0).any()):
+        raise ValueError("every anomaly must identify its synthetic source view")
+    actual = torch.bincount(view[positive], minlength=len(view_counts))
+    if bool((view_counts <= 0).any()) or not torch.equal(actual, view_counts):
+        raise ValueError("every selected view must retain its recorded positive anomaly count")
+    binary_counts = torch.bincount(targets, minlength=2)
+    if bool((binary_counts == 0).any()):
+        raise ValueError("binary supervision requires both normal and anomaly points")
+    weights = (len(targets) / (2 * binary_counts.float()))[targets]
+    if weighting == "view":
+        weights[positive] = len(targets) / (2 * len(view_counts) * actual[view[positive]].float())
+    if control is not None:
+        if (control.shape != targets.shape or control.dtype != torch.bool
+                or bool((control & positive).any()) or not bool(control.any())):
+            raise ValueError("normal-control weights require genuine inserted normal point identities")
+        ordinary = (~positive) & (~control)
+        if not bool(ordinary.any()):
+            raise ValueError("normal-control training also requires original normal observations")
+        weights[control] = len(targets) * control_mass / int(control.sum())
+        weights[ordinary] = len(targets) * (.5 - control_mass) / int(ordinary.sum())
+    return weights
+
+
+def evidence_refinement(scorer, state):
+    """Keep learned normal perception exact while refining only its anomaly readout."""
+    scorer.load_state_dict(state)
+    scorer.requires_grad_(False)
+    scorer.anomaly.requires_grad_(True)
+
+
+def evidence_tail_loss(scores, targets, weights, hard_scores):
+    """Unbiased view-weighted ranking estimate under uniform full-point batches."""
+    positive = targets == 1
+    if not bool(positive.any()):
+        return scores.sum() * 0
+    pair = F.softplus(1 + hard_scores[None] - scores[positive, None]).mean(1)
+    # Positive BCE weights are N/(2*V*n_view); never normalize by a random batch sum.
+    return 2 * (weights[positive] * pair).sum() / len(scores)
+
+
 def evidence_training(args, cache, dev_cache, resources):
     """Learn shared normal semantics and anomaly evidence from the fixed STU features."""
     from .normal import FeatureEvidence, EVIDENCE_VERSION, normal_semantic_metrics
@@ -2455,6 +2551,8 @@ def evidence_training(args, cache, dev_cache, resources):
     started = time.perf_counter()
     if args.initial_module is None or args.auxiliary_cache is None:
         raise ValueError("feature evidence requires identified normal statistics and supplied auxiliary caches")
+    if not math.isfinite(args.learning_rate) or args.learning_rate <= 0:
+        raise ValueError("feature evidence learning rate must be finite and positive")
     auxiliary_path = args.auxiliary_cache
     metadata = json.loads((auxiliary_path / "auxiliary.json").read_text())
     views = json.loads((auxiliary_path / "auxiliary_views.json").read_text())
@@ -2471,7 +2569,18 @@ def evidence_training(args, cache, dev_cache, resources):
     initial = torch.load(args.initial_module, map_location="cpu", weights_only=False)
     if initial["config"]["initial_sha256"] != WEIGHTS_SHA256 or initial["config"].get("data_scope") != "STU206_STU201":
         raise ValueError("normal statistics must come from the identified STU-only model")
-    scorer = FeatureEvidence().to(device)
+    refinement = None
+    if args.tail_refine is not None:
+        refinement = torch.load(args.tail_refine, map_location="cpu", weights_only=False)
+        previous = refinement["config"]
+        if (args.anomaly_weighting != "view" or refinement.get("mode") != "frozen_support"
+                or not all(refinement.get(key) is True for key in ("frozen", "selected", "complete"))
+                or previous.get("version") != EVIDENCE_VERSION or type(previous.get("residual")) is not bool
+                or previous.get("initial_sha256") != WEIGHTS_SHA256 or previous.get("data_scope") != "STU206_STU201"
+                or previous.get("backbone_frozen") is not True or previous.get("auxiliary_identity") != views["sha256"]
+                or previous.get("synthetic_development_identity") != dev_views["sha256"]):
+            raise ValueError("tail refinement requires a selected same-source feature model and view-weighted positives")
+    scorer = FeatureEvidence(residual=True if refinement is None else previous["residual"]).to(device)
     location = initial["model"]["scorer.location"].double()
     whitener = initial["model"]["scorer.whitener"].double()
     coefficient = torch.tensor(semantic_probe["coefficient"], dtype=torch.float64)
@@ -2487,12 +2596,19 @@ def evidence_training(args, cache, dev_cache, resources):
         # A positive affine map preserves the fitted anomaly ranking exactly in real arithmetic.
         scorer.anomaly.weight.copy_(4 * anomaly_coefficient[:-1][None])
         scorer.anomaly.bias.copy_(4 * anomaly_coefficient[-1] - 2)
+    if refinement is not None:
+        evidence_refinement(scorer, {key[7:]: value for key, value in refinement["model"].items() if key.startswith("scorer.")})
+        if (not torch.equal(scorer.location.cpu(), location.float())
+                or not torch.equal(scorer.whitener.cpu(), whitener.float())):
+            raise ValueError("tail refinement must retain the identified STU206 normal statistics")
+        del refinement["model"]
     del initial
     data, dev = normal_cache(cache, device), normal_cache(dev_cache, device)
     with np.load(auxiliary_path / "auxiliary.npz") as values:
         auxiliary_features = torch.tensor(values["features"], device=device)
         auxiliary_targets = torch.tensor(values["targets"], device=device, dtype=torch.long)
         auxiliary_semantic = torch.tensor(values["semantic"], device=device, dtype=torch.long)
+        auxiliary_views = torch.tensor(values["view"], device=device, dtype=torch.long)
     if (int((auxiliary_targets == 1).sum()) != metadata["anomalies"]
         or int((auxiliary_targets == 0).sum()) != metadata["normals"]
         or bool((auxiliary_semantic[auxiliary_targets == 1] != -1).any())
@@ -2502,13 +2618,55 @@ def evidence_training(args, cache, dev_cache, resources):
     features = torch.cat((data["features"], auxiliary_features))
     semantic = torch.cat((data["semantic"], auxiliary_semantic))
     targets = torch.cat((torch.zeros(cache["count"], device=device, dtype=torch.long), auxiliary_targets))
+    source_views = torch.cat((torch.full((cache["count"],), -1, device=device, dtype=torch.long), auxiliary_views))
+    view_counts = torch.tensor([row["recorded_anomalies"] for row in views["records"]], device=device)
+    control_mask = control_metadata = control_dev = None
+    if args.control_cache is not None:
+        control_metadata = json.loads((args.control_cache / "train/auxiliary.json").read_text())
+        control_manifest = json.loads((args.control_cache / "train/manifest.json").read_text())
+        control_dev = json.loads((args.control_cache / "development/features.json").read_text())
+        control_dev_manifest = json.loads((args.control_cache / "development/manifest.json").read_text())
+        for info, manifest, sequence in ((control_metadata, control_manifest, 206), (control_dev, control_dev_manifest, 201)):
+            if (info.get("role") != "normal_control" or info.get("source_sequence") != sequence
+                    or info.get("initial_sha256") != WEIGHTS_SHA256 or info["manifest"] != manifest["sha256"]
+                    or manifest.get("role") != "normal_control" or manifest.get("source_sequence") != sequence):
+                raise ValueError("normal-control features must retain their official backbone and split identities")
+        with np.load(args.control_cache / "train/auxiliary.npz") as values:
+            if (np.any(values["targets"] != 0) or np.any((values["semantic"] < 0) | (values["semantic"] >= 19))
+                    or values["inserted"].dtype != np.bool_ or values["inserted"].shape != values["targets"].shape
+                    or len(values["targets"]) != control_metadata["normals"]
+                    or int(values["inserted"].sum()) != control_metadata["inserted_points"]):
+                raise ValueError("normal-control cache contains inconsistent point labels or insertion identities")
+            control_mask = torch.cat((torch.zeros(len(targets), device=device, dtype=torch.bool),
+                                      torch.tensor(values["inserted"], device=device)))
+            features = torch.cat((features, torch.tensor(values["features"], device=device)))
+            semantic = torch.cat((semantic, torch.tensor(values["semantic"], device=device, dtype=torch.long)))
+            targets = torch.cat((targets, torch.zeros(len(values["targets"]), device=device, dtype=torch.long)))
+            source_views = torch.cat((source_views, torch.full((len(values["targets"]),), -1, device=device, dtype=torch.long)))
     real_count, count = cache["count"], len(features)
-    del auxiliary_features, auxiliary_semantic, auxiliary_targets, data
+    del auxiliary_features, auxiliary_semantic, auxiliary_targets, auxiliary_views, data
     torch.cuda.empty_cache()
     frequencies = torch.bincount(semantic[semantic >= 0], minlength=19)
     semantic_weights = torch.where(frequencies > 0, count / (int((frequencies > 0).sum()) * frequencies.clamp_min(1).float()), 0.)
-    binary_counts = torch.bincount(targets, minlength=2)
-    binary_weights = count / (2 * binary_counts.float())
+    binary_weights = evidence_binary_weights(targets, source_views, view_counts, args.anomaly_weighting,
+                                            control_mask, args.normal_control_mass)
+    positive = targets == 1
+    positive_views = source_views[positive]
+    point_mass = binary_weights[positive].double() / count
+    strata = []
+    for name, low, high in (("1-4", 1, 4), ("5-20", 5, 20), ("21-100", 21, 100), (">100", 101, math.inf)):
+        in_band = (view_counts >= low) & (view_counts <= high)
+        selected = in_band[positive_views]
+        mass = float(point_mass[selected].sum())
+        strata.append(dict(anomaly_points=name, views=int(in_band.sum()), points=int(selected.sum()),
+            bce_coefficient_mass=mass, fraction_of_anomaly_mass=2*mass))
+    loss_mass = dict(normal=float(binary_weights[~positive].double().sum()/count),
+        anomaly=float(point_mass.sum()), strata=strata,
+        definition="sum of per-point BCE coefficients divided by training point count; not measured loss or gradient contributions")
+    if control_mask is not None:
+        loss_mass.update(inserted_normal_control=float(binary_weights[control_mask].double().sum()/count),
+            other_normal=float(binary_weights[(~positive)&(~control_mask)].double().sum()/count))
+    del source_views, view_counts, positive, positive_views, point_mass
     holdout = ((dev["frame"] // 64) % 2 == 1).nonzero().flatten()
     config = dict(version=EVIDENCE_VERSION, architecture="frozen_litept_shared_feature_evidence",
         score_version="supervised_shared_feature_anomaly_logit", residual=True, initial_sha256=WEIGHTS_SHA256,
@@ -2519,11 +2677,35 @@ def evidence_training(args, cache, dev_cache, resources):
         initialization=dict(normal_statistics=str(args.initial_module), normal_head=str(args.initial_module.parent / "linear_probe.json"),
             anomaly_head=str(auxiliary_path / "linear_probe.json"), learned_distance_transform_reused=False),
         objective="equal binary class mass BCE plus equal normal semantic class mass CE on one shared residual; all cached training points once per epoch",
-        batch_size=8192, epochs=args.epochs, learning_rate=.001, weight_decay=.0001,
+        anomaly_weighting=args.anomaly_weighting, binary_loss_mass=loss_mass,
+        batch_size=8192, epochs=args.epochs, learning_rate=args.learning_rate, weight_decay=.0001,
         selection="synthetic201 AP then AUROC then negative FPR95; normal201 odd-block mIoU must not fall below initialized linear model; epoch zero eligible",
         calibrated=False, no_synthetic_anomalies=False, val19_used_for_selection=False,
         evaluation="repeated val19 evaluation after development selection", deadline=args.deadline,
         reserve_seconds=args.reserve_seconds)
+    if control_metadata is not None:
+        config.update(control_cache=str(args.control_cache), normal_control_points=control_metadata["normals"],
+            inserted_normal_control_points=control_metadata["inserted_points"], control_identity=control_metadata["manifest"],
+            control_development_identity=control_dev["manifest"],
+            normal_control_mass=args.normal_control_mass,
+            objective=f"BCE coefficient mass: inserted normal controls {args.normal_control_mass:g}, all other normal points {.5-args.normal_control_mass:g}, anomalies .5; unchanged equal normal semantic class mass CE; every cached point once per epoch",
+            selection="expanded synthetic201 including all normal-control points: AP then AUROC then negative FPR95; unchanged normal201 semantic floor; original60 metrics retained")
+    if refinement is not None:
+        previous_control = previous.get("control_identity")
+        if previous_control is not None and (previous_control != config.get("control_identity")
+                or previous.get("control_development_identity") != config.get("control_development_identity")):
+            raise ValueError("tail refinement cannot silently remove or replace existing normal controls")
+        config.update(residual=previous["residual"], tail_refine=str(args.tail_refine),
+            tail_refine_sha256=file_sha256(args.tail_refine),
+            initialization=dict(checkpoint=str(args.tail_refine), checkpoint_sha256=file_sha256(args.tail_refine),
+                normal_statistics=str(args.initial_module), shared_representation_reused=True,
+                semantic_head_reused=True, anomaly_head_reused=True),
+            refinement_source_epoch=refinement["selection"]["epoch"],
+            refinement_added_normal_controls=previous_control is None and control_metadata is not None,
+            trainable_scope="anomaly linear head only; shared representation and normal semantic head frozen",
+            tail_fraction=.001, tail_normal_samples=32, tail_margin=1., tail_weight=.1,
+            objective="full-point BCE with configured normal/control masses plus .1 view-weighted ranking against the highest-scoring .1% of all training normal points; fixed normal semantics",
+            selection="same synthetic201 population: AP then AUROC then negative FPR95; fixed normal semantics; epoch zero eligible")
     args.output.mkdir(parents=True)
     write_json(args.output / "config.json", config); write_json(args.output / "resources.json", resources)
 
@@ -2542,51 +2724,77 @@ def evidence_training(args, cache, dev_cache, resources):
         return dict(semantics=normal_semantic_metrics(confusion), cross_entropy=float(ce / len(indices)))
 
     baseline = normal_development(dev["features"], dev["semantic"], holdout)
-    initial_synthetic = auxiliary_development(scorer, synthetic_dev, device)
+    initial_synthetic = auxiliary_development(scorer, synthetic_dev, device, controls=control_dev)
     best = dict(epoch=0, development=baseline, synthetic=initial_synthetic)
     print("evidence initial " + json.dumps(dict(normal_mIoU=baseline["semantics"]["mean_iou_gt"],
-        synthetic=initial_synthetic["metrics"])), flush=True)
+        synthetic=initial_synthetic["metrics"], normal_controls=initial_synthetic.get("normal_controls"))), flush=True)
     expected_normal = semantic_probe["metrics"]["201_development"]["mean_iou_gt"]
     expected_synthetic = anomaly_probe["development"]["primary"]
-    if abs(baseline["semantics"]["mean_iou_gt"] - expected_normal) > .0001:
+    if refinement is None and abs(baseline["semantics"]["mean_iou_gt"] - expected_normal) > .0001:
         raise ValueError("converted semantic head does not reproduce the independent normal probe")
-    if any(abs(initial_synthetic["metrics"][k] - expected_synthetic[k]) > .01 for k in ("AP", "AUROC", "FPR95")):
+    initial_comparison = initial_synthetic.get("original60_metrics", initial_synthetic["metrics"])
+    if refinement is None and any(abs(initial_comparison[k] - expected_synthetic[k]) > .01 for k in ("AP", "AUROC", "FPR95")):
         raise ValueError("converted anomaly head does not reproduce the independent anomaly probe")
     atomic_save(args.output / "selected.pt", dict(scorer=scorer.state_dict(), selection=best))
     write_json(args.output / "development.json", dict(initial=best, selected=best))
-    optimizer = torch.optim.AdamW(scorer.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
+    trainable = [parameter for parameter in scorer.parameters() if parameter.requires_grad]
+    optimizer = torch.optim.AdamW(trainable, lr=config["learning_rate"], weight_decay=config["weight_decay"])
     for epoch in range(1, args.epochs + 1):
         if time.time() >= args.deadline - args.reserve_seconds:
             break
         tick = time.perf_counter(); scorer.train()
         generator = torch.Generator(device=device).manual_seed(206 + epoch)
         order = torch.randperm(count, generator=generator, device=device)
+        if refinement is not None:
+            with torch.no_grad():
+                normal_indices = (targets == 0).nonzero().flatten()
+                normal_scores = torch.cat([scorer(features[normal_indices[start:start+16384]])
+                    for start in range(0, len(normal_indices), 16384)])
+                k = max(1, math.ceil(config["tail_fraction"] * len(normal_indices)))
+                hardest = torch.topk(normal_scores, k, sorted=False)
+                hard_indices = normal_indices[hardest.indices]
+                hard_threshold = float(hardest.values.min())
+                del normal_indices, normal_scores
+            hard_generator = torch.Generator(device=device).manual_seed(20600 + epoch)
         for group in optimizer.param_groups:
             group["lr"] = config["learning_rate"] * (.1 + .9 * .5 * (1 + math.cos(math.pi * (epoch - 1) / args.epochs)))
-        losses = np.zeros(3); processed = 0
+        losses = np.zeros(3); processed = 0; tail_total = 0.
         for begin in range(0, count, config["batch_size"]):
             at = order[begin:begin+config["batch_size"]]
             result = scorer.components(features[at])
-            anomaly_loss = (F.binary_cross_entropy_with_logits(result["score"], targets[at].float(), reduction="none") * binary_weights[targets[at]]).mean()
-            valid = semantic[at] >= 0
-            normal_loss = (F.cross_entropy(result["logits"][valid], semantic[at][valid], reduction="none") * semantic_weights[semantic[at][valid]]).sum() / len(at)
+            anomaly_loss = (F.binary_cross_entropy_with_logits(result["score"], targets[at].float(), reduction="none") * binary_weights[at]).mean()
+            if refinement is None:
+                valid = semantic[at] >= 0
+                normal_loss = (F.cross_entropy(result["logits"][valid], semantic[at][valid], reduction="none") * semantic_weights[semantic[at][valid]]).sum() / len(at)
+            else:
+                normal_loss = result["score"].sum() * 0
             loss = anomaly_loss + normal_loss
+            if refinement is not None:
+                hard = hard_indices[torch.randint(len(hard_indices), (config["tail_normal_samples"],),
+                    device=device, generator=hard_generator)]
+                tail_loss = evidence_tail_loss(result["score"], targets[at], binary_weights[at], scorer(features[hard]))
+                loss = loss + config["tail_weight"] * tail_loss
+                tail_total += float(tail_loss.detach()) * len(at)
             if epoch == 1 and begin == 0:
-                gradients = torch.autograd.grad(anomaly_loss, (scorer.anomaly.weight, scorer.residual[-1].weight), retain_graph=True)
+                checked = (scorer.anomaly.weight,) if refinement is not None else (scorer.anomaly.weight, scorer.residual[-1].weight)
+                gradients = torch.autograd.grad(anomaly_loss, checked, retain_graph=True)
                 if any(not bool(torch.isfinite(g).all()) or not bool(g.abs().sum() > 0) for g in gradients):
-                    raise ValueError("anomaly supervision must update the deployed head and shared representation")
+                    raise ValueError("anomaly supervision must update every checked trainable evidence parameter")
                 print("evidence anomaly gradients " + json.dumps([float(g.norm()) for g in gradients]), flush=True)
             optimizer.zero_grad(set_to_none=True); loss.backward()
-            nn.utils.clip_grad_norm_(scorer.parameters(), 5., error_if_nonfinite=True)
+            nn.utils.clip_grad_norm_(trainable, 5., error_if_nonfinite=True)
             optimizer.step()
             losses += np.array([float(loss.detach()), float(normal_loss.detach()), float(anomaly_loss.detach())]) * len(at)
             processed += len(at)
             if (begin // config["batch_size"] + 1) % 100 == 0:
                 print(f"evidence epoch {epoch}/{args.epochs}: {processed}/{count} points; loss={losses[0]/processed:.4f}; elapsed={time.perf_counter()-tick:.1f}s", flush=True)
-        measured = normal_development(dev["features"], dev["semantic"], holdout)
-        synthetic = auxiliary_development(scorer, synthetic_dev, device)
+        measured = baseline if refinement is not None else normal_development(dev["features"], dev["semantic"], holdout)
+        synthetic = auxiliary_development(scorer, synthetic_dev, device, controls=control_dev)
         row = dict(epoch=epoch, development=measured, synthetic=synthetic,
             processed_points=processed, loss=(losses / processed).tolist(), seconds=time.perf_counter()-tick)
+        if refinement is not None:
+            row.update(tail_ranking_loss=tail_total/processed, hard_normal_points=len(hard_indices),
+                hard_normal_threshold=hard_threshold)
         metrics, previous = synthetic["metrics"], best["synthetic"]["metrics"]
         eligible = measured["semantics"]["mean_iou_gt"] >= baseline["semantics"]["mean_iou_gt"]
         improved = eligible and (metrics["AP"], metrics["AUROC"], -metrics["FPR95"]) > (previous["AP"], previous["AUROC"], -previous["FPR95"])
@@ -2597,9 +2805,10 @@ def evidence_training(args, cache, dev_cache, resources):
             handle.write(json.dumps(row) + "\n")
         write_json(args.output / "development.json", dict(initial=dict(development=baseline, synthetic=initial_synthetic), selected=best, last=row))
         print("evidence development " + json.dumps(dict(epoch=epoch, normal_mIoU=measured["semantics"]["mean_iou_gt"],
-            normal_preserved=eligible, synthetic=metrics, selected_epoch=best["epoch"], seconds=row["seconds"])), flush=True)
+            normal_preserved=eligible, synthetic=metrics, normal_controls=synthetic.get("normal_controls"),
+            selected_epoch=best["epoch"], seconds=row["seconds"])), flush=True)
     saved = torch.load(args.output / "selected.pt", map_location=device, weights_only=False)
-    if best["epoch"] == 0:
+    if best["epoch"] == 0 and refinement is None:
         # Remove the unused zero residual when development selects the linear initialization.
         scorer = FeatureEvidence(residual=False).to(device)
         saved["scorer"] = {k: v for k, v in saved["scorer"].items() if not k.startswith("residual.")}
@@ -2613,12 +2822,14 @@ def evidence_training(args, cache, dev_cache, resources):
         config=config, frozen=True, selected=True, complete=True, selection=best, final_val19_evaluated=False))
     (args.output / "selected.pt").unlink()
     report = dict(version=EVIDENCE_VERSION, complete=True, selected=best,
-        trainable_parameters=sum(p.numel() for p in scorer.parameters()), training_seconds=time.perf_counter()-started,
+        trainable_parameters=sum(p.numel() for p in scorer.parameters() if p.requires_grad),
+        model_parameters=sum(p.numel() for p in scorer.parameters()), training_seconds=time.perf_counter()-started,
         gpu_peak_bytes=torch.cuda.max_memory_allocated(), val19_used_for_selection=False,
         no_synthetic_anomalies=False, backbone_frozen=True, evaluation_status="not yet repeated")
     write_json(args.output / "result.json", report)
     print("evidence complete " + json.dumps(dict(selected_epoch=best["epoch"], residual=config["residual"],
         synthetic=best["synthetic"]["metrics"], normal_mIoU=best["development"]["semantics"]["mean_iou_gt"],
+        normal_controls=best["synthetic"].get("normal_controls"),
         seconds=report["training_seconds"])), flush=True)
 
 
@@ -2639,8 +2850,24 @@ def normal_main():
     parser.add_argument("--auxiliary-manifest",type=Path)
     parser.add_argument("--initial-module",type=Path)
     parser.add_argument("--readout",action="store_true")
+    parser.add_argument("--tail-refine",type=Path,
+        help="initialize selected feature evidence and refine only its anomaly head with training-normal tail ranking")
     parser.add_argument("--auxiliary-cache",type=Path)
+    parser.add_argument("--control-cache",type=Path,
+        help="optional train/development normal-control feature cache for readout learning")
+    parser.add_argument("--normal-control-mass",type=float,default=.25,
+        help="inserted-normal BCE coefficient mass; strictly between zero and .5, with remaining normal mass .5 minus this value")
+    parser.add_argument("--cache-controls",type=Path,nargs=2,metavar=("TRAIN_MANIFEST","DEV_MANIFEST"),
+        help="extract the specified STU206/STU201 normal controls without training")
+    parser.add_argument("--anomaly-weighting",choices=("point","view"),default="point",
+        help="feature-evidence anomaly BCE weighting; retain every cached point")
+    parser.add_argument("--learning-rate",type=float,default=.001,
+        help="initial learning rate for feature-evidence readout training")
     args=parser.parse_args()
+    if args.tail_refine is not None and not args.readout:
+        raise ValueError("tail refinement requires the existing feature-evidence readout entry")
+    if not math.isfinite(args.normal_control_mass) or not 0 < args.normal_control_mass < .5:
+        raise ValueError("normal-control BCE mass must be finite and strictly between zero and .5")
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("use an empty output directory")
     # Measured full inference is about 22 minutes; retain 45 minutes for
@@ -2654,6 +2881,28 @@ def normal_main():
     torch.set_num_interop_threads(1);torch.backends.cuda.matmul.allow_tf32=False
     seed_all(206)
     resources=runtime_snapshot();disk_check(500_000_000)
+    if args.cache_controls is not None:
+        if args.readout or args.control_cache is not None:
+            raise ValueError("normal-control extraction and readout training are separate operations")
+        manifests = [json.loads(path.read_text()) for path in args.cache_controls]
+        for manifest, sequence, split in zip(manifests, (206, 201), ("train", "validation")):
+            if (manifest.get("role") != "normal_control" or manifest.get("source_sequence") != sequence
+                    or manifest.get("split") != split or not manifest.get("records")):
+                raise ValueError("control extraction requires normal-control train206 and validation201 manifests")
+        args.output.mkdir(parents=True)
+        write_json(args.output/"resources.json",resources)
+        write_json(args.output/"config.json",dict(operation="normal_control_feature_extraction", initial_sha256=WEIGHTS_SHA256,
+            manifests=[str(path.resolve()) for path in args.cache_controls], deadline=args.deadline))
+        for manifest, directory in zip(manifests, ("train", "development")):
+            if time.time() >= args.deadline-reserve_seconds:
+                raise TimeoutError("normal-control extraction reached the declared evaluation reserve")
+            output = args.output/directory
+            output.mkdir()
+            write_json(output/"manifest.json",manifest)
+            extracted = auxiliary_cache(manifest,output,torch.device("cuda"),args.workers)
+            del extracted
+            torch.cuda.empty_cache()
+        return
     cache_config=json.loads((args.features/"config.json").read_text())
     if cache_config["initial_sha256"]!=WEIGHTS_SHA256 or cache_config["trained_backbone_parameters"]!=0:
         raise ValueError("reuse only identified official frozen features")

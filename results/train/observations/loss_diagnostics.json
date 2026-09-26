@@ -1,0 +1,775 @@
+{
+  "role": "Read-only loss and ranking diagnosis using existing STU206 training and synthetic STU201 development; no optimizer updates, no val19 access",
+  "cpu_threads": 2,
+  "recording": "Numerical diagnostics below were computed in CPU calls in this audit and are recorded without repeating evaluation",
+  "sources": {
+    "normal_training": "results/train/normal/features/training.json",
+    "normal_training_sequence": "206 original prefix only",
+    "synthetic_training": "results/train/auxiliary/auxiliary.npz",
+    "synthetic_training_views": "results/train/auxiliary/auxiliary_views.json",
+    "synthetic_development": "results/train/auxiliary/synthetic_development/features.json",
+    "normal_controls_used": false
+  },
+  "gradient_definition": {
+    "points": 3041948,
+    "normal_points": 2822144,
+    "anomaly_points": 219804,
+    "batches": 8,
+    "batch_points": 8192,
+    "rng": "numpy.default_rng(983); eight sequential choice(3041948,8192,replace=False); identical diagnostic batches for both selected models",
+    "representation": "Full252 frozen features; fixed normalizer and learned shared residual in selected checkpoint",
+    "parameters": "Concatenation of gradients over every shared residual parameter; separate autograd.grad calls for semantic CE and anomaly BCE; Euclidean norms and cosine",
+    "weights": "Exact current class-balanced semantic CE and matching run point/view BCE; each diagnostic batch uses original full-training frequencies",
+    "scope": "Independent uniform training samples, not original chronological optimizer batches; local gradients cannot establish the effect of changing a loss coefficient"
+  },
+  "runs": {
+    "readout": {
+      "checkpoint": "results/train/readout/frozen.pt",
+      "checkpoint_sha256": "eae2d85c4fba85f481ec5d2772c91ef715425401ab6aa39e81de2b967d34498f",
+      "selected_epoch": 3,
+      "weighting": "point",
+      "selected_synthetic201": {
+        "AP": 59.06087439805632,
+        "AUROC": 99.47249930093155,
+        "FPR95": 2.3000078841150464,
+        "threshold": 1.3098649978637695
+      },
+      "normal201_miou": 0.37423859094290207,
+      "epochs": [
+        {
+          "epoch": 1,
+          "loss_total_ce_bce": [
+            0.6662459089853444,
+            0.5906672732383349,
+            0.07557863367366016
+          ],
+          "normal201_miou": 0.37393376101610465,
+          "synthetic201": {
+            "AP": 56.568113722066826,
+            "AUROC": 99.43415310810101,
+            "FPR95": 2.1849574930821696,
+            "threshold": 1.4369617700576782
+          }
+        },
+        {
+          "epoch": 2,
+          "loss_total_ce_bce": [
+            0.3177499371669104,
+            0.28399392810433877,
+            0.0337560090775931
+          ],
+          "normal201_miou": 0.37780617314550086,
+          "synthetic201": {
+            "AP": 57.97329698971736,
+            "AUROC": 99.42064804210553,
+            "FPR95": 2.340986052808187,
+            "threshold": 1.2924102544784546
+          }
+        },
+        {
+          "epoch": 3,
+          "loss_total_ce_bce": [
+            0.2573943511560467,
+            0.23068931194682568,
+            0.026705039294495143
+          ],
+          "normal201_miou": 0.37423859094290207,
+          "synthetic201": {
+            "AP": 59.06087439805632,
+            "AUROC": 99.47249930093155,
+            "FPR95": 2.3000078841150464,
+            "threshold": 1.3098649978637695
+          }
+        },
+        {
+          "epoch": 4,
+          "loss_total_ce_bce": [
+            0.22926346304627296,
+            0.20612754278716844,
+            0.02313591996647932
+          ],
+          "normal201_miou": 0.37790619432635614,
+          "synthetic201": {
+            "AP": 55.88437824340077,
+            "AUROC": 99.43683176919711,
+            "FPR95": 2.4677087800197293,
+            "threshold": 0.9928663969039917
+          }
+        },
+        {
+          "epoch": 5,
+          "loss_total_ce_bce": [
+            0.2127570590763452,
+            0.19206875307672389,
+            0.02068830631396063
+          ],
+          "normal201_miou": 0.37735003068811124,
+          "synthetic201": {
+            "AP": 58.13602611515706,
+            "AUROC": 99.48737040963654,
+            "FPR95": 2.326660038882148,
+            "threshold": 0.9737143516540527
+          }
+        },
+        {
+          "epoch": 6,
+          "loss_total_ce_bce": [
+            0.20380626141236993,
+            0.18452290556733092,
+            0.01928335603897785
+          ],
+          "normal201_miou": 0.3807556617149822,
+          "synthetic201": {
+            "AP": 58.08425392441092,
+            "AUROC": 99.46676204935987,
+            "FPR95": 2.4874575267338805,
+            "threshold": 1.0605366230010986
+          }
+        }
+      ],
+      "shared_residual_gradients": [
+        {
+          "batch": 0,
+          "ce_norm": 0.22779332101345062,
+          "bce_norm": 0.1295802742242813,
+          "ce_to_bce_norm": 1.7579320801496323,
+          "cosine": 0.009950142353773117
+        },
+        {
+          "batch": 1,
+          "ce_norm": 0.19357764720916748,
+          "bce_norm": 0.15717585384845734,
+          "ce_to_bce_norm": 1.2315991449666772,
+          "cosine": -0.012435845099389553
+        },
+        {
+          "batch": 2,
+          "ce_norm": 0.2514297068119049,
+          "bce_norm": 0.1328999251127243,
+          "ce_to_bce_norm": 1.8918724491277545,
+          "cosine": -0.004304989706724882
+        },
+        {
+          "batch": 3,
+          "ce_norm": 0.17723874747753143,
+          "bce_norm": 0.13797618448734283,
+          "ce_to_bce_norm": 1.2845604343682249,
+          "cosine": 0.006864294875413179
+        },
+        {
+          "batch": 4,
+          "ce_norm": 0.20957784354686737,
+          "bce_norm": 0.11502110958099365,
+          "ce_to_bce_norm": 1.8220815666822474,
+          "cosine": 0.024288946762681007
+        },
+        {
+          "batch": 5,
+          "ce_norm": 0.18770955502986908,
+          "bce_norm": 0.0994693711400032,
+          "ce_to_bce_norm": 1.8871090957805268,
+          "cosine": 0.019086455926299095
+        },
+        {
+          "batch": 6,
+          "ce_norm": 0.21584805846214294,
+          "bce_norm": 0.14351798593997955,
+          "ce_to_bce_norm": 1.503979149710284,
+          "cosine": 0.0173057671636343
+        },
+        {
+          "batch": 7,
+          "ce_norm": 0.258577823638916,
+          "bce_norm": 0.16477066278457642,
+          "ce_to_bce_norm": 1.5693195576750483,
+          "cosine": -0.0025092223659157753
+        }
+      ]
+    },
+    "observations": {
+      "checkpoint": "results/train/observations/frozen.pt",
+      "checkpoint_sha256": "e643e5075b195d9e757425540d3b1d96a3c32636c8db44e58ab7617795aeaeb4",
+      "selected_epoch": 13,
+      "weighting": "view",
+      "selected_synthetic201": {
+        "AP": 61.499486731218056,
+        "AUROC": 99.41036167797172,
+        "FPR95": 2.400559195281838,
+        "threshold": 1.3006166219711304
+      },
+      "normal201_miou": 0.36173788681881935,
+      "epochs": [
+        {
+          "epoch": 1,
+          "loss_total_ce_bce": [
+            0.7597215624919774,
+            0.6251155740817111,
+            0.13460598735360793
+          ],
+          "normal201_miou": 0.36988183689287146,
+          "synthetic201": {
+            "AP": 47.74562984537846,
+            "AUROC": 99.44612026577515,
+            "FPR95": 2.4064626667922995,
+            "threshold": 1.1606606245040894
+          }
+        },
+        {
+          "epoch": 2,
+          "loss_total_ce_bce": [
+            0.374644069586258,
+            0.30307751875190647,
+            0.07156655090463117
+          ],
+          "normal201_miou": 0.37202629438755774,
+          "synthetic201": {
+            "AP": 51.48612342006721,
+            "AUROC": 99.4327821365136,
+            "FPR95": 2.414519847778891,
+            "threshold": 1.8576239347457886
+          }
+        },
+        {
+          "epoch": 3,
+          "loss_total_ce_bce": [
+            0.29869481580334667,
+            0.24467322173739142,
+            0.05402159360452571
+          ],
+          "normal201_miou": 0.3706846322286489,
+          "synthetic201": {
+            "AP": 57.03045318048559,
+            "AUROC": 99.5039317541395,
+            "FPR95": 1.968278936144437,
+            "threshold": 1.7179937362670898
+          }
+        },
+        {
+          "epoch": 4,
+          "loss_total_ce_bce": [
+            0.26477472584138395,
+            0.21668693311921058,
+            0.048087793334194426
+          ],
+          "normal201_miou": 0.36637635019825243,
+          "synthetic201": {
+            "AP": 59.18639678468309,
+            "AUROC": 99.50603068953097,
+            "FPR95": 2.003872831147254,
+            "threshold": 1.4091838598251343
+          }
+        },
+        {
+          "epoch": 5,
+          "loss_total_ce_bce": [
+            0.24236627226232552,
+            0.2006628524793323,
+            0.04170341961408112
+          ],
+          "normal201_miou": 0.36713417397184267,
+          "synthetic201": {
+            "AP": 57.1389214431701,
+            "AUROC": 99.4554470562236,
+            "FPR95": 2.1264419757976896,
+            "threshold": 1.4978891611099243
+          }
+        },
+        {
+          "epoch": 6,
+          "loss_total_ce_bce": [
+            0.22641210680829094,
+            0.18786757586891104,
+            0.038544530737098806
+          ],
+          "normal201_miou": 0.37184433069096795,
+          "synthetic201": {
+            "AP": 44.700433370167644,
+            "AUROC": 99.31757772077897,
+            "FPR95": 2.7815927066166957,
+            "threshold": 0.7464653253555298
+          }
+        },
+        {
+          "epoch": 7,
+          "loss_total_ce_bce": [
+            0.2158619220817354,
+            0.18083322139586525,
+            0.03502870069590241
+          ],
+          "normal201_miou": 0.35824342845189183,
+          "synthetic201": {
+            "AP": 61.15628492974838,
+            "AUROC": 99.38612237964539,
+            "FPR95": 2.7062128749521666,
+            "threshold": 0.8406676054000854
+          }
+        },
+        {
+          "epoch": 8,
+          "loss_total_ce_bce": [
+            0.2096308733549934,
+            0.17503354676913918,
+            0.03459732634175414
+          ],
+          "normal201_miou": 0.3618430280927561,
+          "synthetic201": {
+            "AP": 59.13928753398993,
+            "AUROC": 99.41700450911442,
+            "FPR95": 2.3616578178692507,
+            "threshold": 0.8009046316146851
+          }
+        },
+        {
+          "epoch": 9,
+          "loss_total_ce_bce": [
+            0.20004248734209437,
+            0.16949951693524173,
+            0.03054296979155936
+          ],
+          "normal201_miou": 0.36361383895943794,
+          "synthetic201": {
+            "AP": 58.4403644512407,
+            "AUROC": 99.37147309960498,
+            "FPR95": 2.824032321025781,
+            "threshold": 0.2997349500656128
+          }
+        },
+        {
+          "epoch": 10,
+          "loss_total_ce_bce": [
+            0.1937303011800381,
+            0.16549974549819624,
+            0.028230555362472973
+          ],
+          "normal201_miou": 0.35979039013114955,
+          "synthetic201": {
+            "AP": 59.34124829924821,
+            "AUROC": 99.35681586556807,
+            "FPR95": 2.7374801214538307,
+            "threshold": 1.3719743490219116
+          }
+        },
+        {
+          "epoch": 11,
+          "loss_total_ce_bce": [
+            0.18996045094694933,
+            0.16191649599959046,
+            0.02804395494904887
+          ],
+          "normal201_miou": 0.35800522533952245,
+          "synthetic201": {
+            "AP": 60.966867640331316,
+            "AUROC": 99.35619214686402,
+            "FPR95": 2.7456719092826805,
+            "threshold": 1.3039666414260864
+          }
+        },
+        {
+          "epoch": 12,
+          "loss_total_ce_bce": [
+            0.18472092420760045,
+            0.15753451760401707,
+            0.02718640643805128
+          ],
+          "normal201_miou": 0.3642011562257824,
+          "synthetic201": {
+            "AP": 57.46701270560796,
+            "AUROC": 99.3225765567012,
+            "FPR95": 2.942774785446308,
+            "threshold": 0.37801992893218994
+          }
+        },
+        {
+          "epoch": 13,
+          "loss_total_ce_bce": [
+            0.17801316439682438,
+            0.15433890727767027,
+            0.02367425725712446
+          ],
+          "normal201_miou": 0.36173788681881935,
+          "synthetic201": {
+            "AP": 61.499486731218056,
+            "AUROC": 99.41036167797172,
+            "FPR95": 2.400559195281838,
+            "threshold": 1.3006166219711304
+          }
+        },
+        {
+          "epoch": 14,
+          "loss_total_ce_bce": [
+            0.17395897572805832,
+            0.1515265512756104,
+            0.022432424724163645
+          ],
+          "normal201_miou": 0.36177260552777885,
+          "synthetic201": {
+            "AP": 58.218281292890104,
+            "AUROC": 99.3100741838723,
+            "FPR95": 2.910180700070957,
+            "threshold": 0.2129673957824707
+          }
+        },
+        {
+          "epoch": 15,
+          "loss_total_ce_bce": [
+            0.1709027276467013,
+            0.14922856753220778,
+            0.021674160129568847
+          ],
+          "normal201_miou": 0.3615572338485027,
+          "synthetic201": {
+            "AP": 57.953051240914135,
+            "AUROC": 99.2426750645144,
+            "FPR95": 3.2051042914584262,
+            "threshold": 0.3403247594833374
+          }
+        },
+        {
+          "epoch": 16,
+          "loss_total_ce_bce": [
+            0.1680133692080311,
+            0.14705592290591948,
+            0.020957446221008612
+          ],
+          "normal201_miou": 0.36029322090498456,
+          "synthetic201": {
+            "AP": 59.07595411439035,
+            "AUROC": 99.32775807819755,
+            "FPR95": 2.819744131622416,
+            "threshold": 0.34726667404174805
+          }
+        },
+        {
+          "epoch": 17,
+          "loss_total_ce_bce": [
+            0.1653815408743531,
+            0.1452373308865966,
+            0.02014420984144389
+          ],
+          "normal201_miou": 0.363180234521597,
+          "synthetic201": {
+            "AP": 58.01257979704042,
+            "AUROC": 99.27826928632722,
+            "FPR95": 2.899469841336992,
+            "threshold": 0.5890001058578491
+          }
+        },
+        {
+          "epoch": 18,
+          "loss_total_ce_bce": [
+            0.16265975784037423,
+            0.14368188858704622,
+            0.018977868995815668
+          ],
+          "normal201_miou": 0.36146355420957615,
+          "synthetic201": {
+            "AP": 57.42337844472954,
+            "AUROC": 99.2677600219808,
+            "FPR95": 2.9997134797214793,
+            "threshold": 0.17030441761016846
+          }
+        },
+        {
+          "epoch": 19,
+          "loss_total_ce_bce": [
+            0.16050897023611807,
+            0.142142546401331,
+            0.0183664240931444
+          ],
+          "normal201_miou": 0.35984949840959846,
+          "synthetic201": {
+            "AP": 57.82207331011626,
+            "AUROC": 99.25329772950039,
+            "FPR95": 3.0620172181380796,
+            "threshold": -0.18278050422668457
+          }
+        },
+        {
+          "epoch": 20,
+          "loss_total_ce_bce": [
+            0.15867361527812404,
+            0.14086119705023037,
+            0.017812418145932228
+          ],
+          "normal201_miou": 0.3604237704384724,
+          "synthetic201": {
+            "AP": 58.23960783074797,
+            "AUROC": 99.26725707354255,
+            "FPR95": 2.8680102993463876,
+            "threshold": 0.19231414794921875
+          }
+        },
+        {
+          "epoch": 21,
+          "loss_total_ce_bce": [
+            0.15710610540885034,
+            0.13982247499632652,
+            0.017283630874034173
+          ],
+          "normal201_miou": 0.35961159928997366,
+          "synthetic201": {
+            "AP": 55.842081054591944,
+            "AUROC": 99.2124870138767,
+            "FPR95": 3.2561972028698176,
+            "threshold": -0.3939838409423828
+          }
+        },
+        {
+          "epoch": 22,
+          "loss_total_ce_bce": [
+            0.15596740935790115,
+            0.13901920941813647,
+            0.01694819958698638
+          ],
+          "normal201_miou": 0.35990231870231815,
+          "synthetic201": {
+            "AP": 57.26370916308413,
+            "AUROC": 99.25148302039993,
+            "FPR95": 3.062844088740522,
+            "threshold": -0.07328295707702637
+          }
+        },
+        {
+          "epoch": 23,
+          "loss_total_ce_bce": [
+            0.15495499904332155,
+            0.13835224116225864,
+            0.01660275816114781
+          ],
+          "normal201_miou": 0.3596630474462203,
+          "synthetic201": {
+            "AP": 56.863194546590925,
+            "AUROC": 99.19619259660317,
+            "FPR95": 3.2153151819211474,
+            "threshold": -0.25948822498321533
+          }
+        },
+        {
+          "epoch": 24,
+          "loss_total_ce_bce": [
+            0.1542578506766101,
+            0.13779385911944333,
+            0.016463991571343203
+          ],
+          "normal201_miou": 0.3591843795619806,
+          "synthetic201": {
+            "AP": 55.95642777591405,
+            "AUROC": 99.1992643809694,
+            "FPR95": 3.2128345701138197,
+            "threshold": -0.4478268623352051
+          }
+        }
+      ],
+      "shared_residual_gradients": [
+        {
+          "batch": 0,
+          "ce_norm": 0.2533518075942993,
+          "bce_norm": 0.12502585351467133,
+          "ce_to_bce_norm": 2.0263953452200942,
+          "cosine": -0.0038847331888973713
+        },
+        {
+          "batch": 1,
+          "ce_norm": 0.20282498002052307,
+          "bce_norm": 0.09939894825220108,
+          "ce_to_bce_norm": 2.0405143473540903,
+          "cosine": 0.0077942004427313805
+        },
+        {
+          "batch": 2,
+          "ce_norm": 0.24807745218276978,
+          "bce_norm": 0.11533185839653015,
+          "ce_to_bce_norm": 2.150988075903868,
+          "cosine": 0.0008219131268560886
+        },
+        {
+          "batch": 3,
+          "ce_norm": 0.22874321043491364,
+          "bce_norm": 0.20969577133655548,
+          "ce_to_bce_norm": 1.0908336824197926,
+          "cosine": -0.002543438458815217
+        },
+        {
+          "batch": 4,
+          "ce_norm": 0.19937649369239807,
+          "bce_norm": 0.2209455370903015,
+          "ce_to_bce_norm": 0.9023784608553189,
+          "cosine": 0.002588514005765319
+        },
+        {
+          "batch": 5,
+          "ce_norm": 0.21850767731666565,
+          "bce_norm": 0.11418331414461136,
+          "ce_to_bce_norm": 1.9136568153901115,
+          "cosine": 0.008651310577988625
+        },
+        {
+          "batch": 6,
+          "ce_norm": 0.2455199658870697,
+          "bce_norm": 0.1981007158756256,
+          "ce_to_bce_norm": 1.2393694025882043,
+          "cosine": 0.0008563947048969567
+        },
+        {
+          "batch": 7,
+          "ce_norm": 0.24590399861335754,
+          "bce_norm": 0.12555362284183502,
+          "ce_to_bce_norm": 1.9585575712389658,
+          "cosine": 0.003990282770246267
+        }
+      ]
+    }
+  },
+  "training_normal_tail": {
+    "model": "observations selected epoch13",
+    "points": 2822144,
+    "scope": "Every cached genuine-semantic normal point in original206 plus synthetic206; all normal-control caches excluded because not present in these completed runs",
+    "gradient_definition": "For normal y=0, d softplus(score)/d score = sigmoid(score); fractions sum this nonnegative scalar derivative, before feature Jacobian. Not parameter-gradient norms.",
+    "loss_definition": "normal BCE softplus(score)",
+    "average_logit_gradient": 0.013759272173047066,
+    "average_bce": 0.036153774708509445,
+    "tails": [
+      {
+        "fraction": 0.01,
+        "threshold": 0.47129955887794495,
+        "points": 28222,
+        "logit_gradient_fraction": 0.631555438041687,
+        "bce_fraction": 0.8286457657814026
+      },
+      {
+        "fraction": 0.001,
+        "threshold": 5.785096645355225,
+        "points": 2823,
+        "logit_gradient_fraction": 0.07262514531612396,
+        "bce_fraction": 0.21343453228473663
+      },
+      {
+        "fraction": 0.0001,
+        "threshold": 10.160761833190918,
+        "points": 283,
+        "logit_gradient_fraction": 0.0072879609651863575,
+        "bce_fraction": 0.033020973205566406
+      }
+    ],
+    "classes": [
+      {
+        "category": 0,
+        "points": 126622,
+        "fraction": 0.044867306558417995,
+        "score_at_least_zero": 3361,
+        "score_at_least_10_175876": 58,
+        "max_score": 14.693696975708008
+      },
+      {
+        "category": 8,
+        "points": 423034,
+        "fraction": 0.14989809166364296,
+        "score_at_least_zero": 11528,
+        "score_at_least_10_175876": 69,
+        "max_score": 18.096385955810547
+      },
+      {
+        "category": 10,
+        "points": 90757,
+        "fraction": 0.03215888345881713,
+        "score_at_least_zero": 6021,
+        "score_at_least_10_175876": 54,
+        "max_score": 18.44762420654297
+      },
+      {
+        "category": 13,
+        "points": 216753,
+        "fraction": 0.07680437284560958,
+        "score_at_least_zero": 1655,
+        "score_at_least_10_175876": 7,
+        "max_score": 16.3702335357666
+      },
+      {
+        "category": 16,
+        "points": 91525,
+        "fraction": 0.03243101698566763,
+        "score_at_least_zero": 2526,
+        "score_at_least_10_175876": 21,
+        "max_score": 18.475534439086914
+      }
+    ]
+  },
+  "development_normal_tail": {
+    "model": "observations selected epoch13",
+    "population": "All 5200330 valid normal points and 7914 anomaly points from the existing eligible60 synthetic201 scans; not 201 used as training",
+    "normal_points": 5200330,
+    "anomaly_points": 7914,
+    "threshold_definition": "np.quantile(normal_scores,1-tail_fraction); classify scores>=threshold; these are descriptive operating points, not fitted deployment thresholds",
+    "tails": [
+      {
+        "fraction": 0.01,
+        "threshold": 4.079602193832394,
+        "FP": 52004,
+        "TP": 7164,
+        "precision": 0.12107896160086533,
+        "recall": 0.9052312357846853
+      },
+      {
+        "fraction": 0.001,
+        "threshold": 10.175876294136106,
+        "FP": 5201,
+        "TP": 5264,
+        "precision": 0.5030100334448161,
+        "recall": 0.6651503664392217,
+        "class_FP": {
+          "13": 1737,
+          "10": 1478,
+          "0": 814,
+          "16": 388,
+          "8": 267,
+          "3": 234,
+          "18": 155,
+          "15": 56,
+          "5": 30,
+          "14": 16,
+          "12": 13,
+          "-1": 6,
+          "9": 4,
+          "17": 3
+        }
+      },
+      {
+        "fraction": 0.0001,
+        "threshold": 15.86208670463565,
+        "FP": 521,
+        "TP": 2503,
+        "precision": 0.8277116402116402,
+        "recall": 0.3162749557745767,
+        "class_FP": {
+          "13": 230,
+          "0": 128,
+          "10": 63,
+          "8": 36,
+          "16": 28,
+          "3": 23,
+          "18": 7,
+          "15": 5,
+          "5": 1
+        }
+      }
+    ]
+  },
+  "interpretation": [
+    "The semantic CE scalar is much larger than BCE, but measured shared gradients are only approximately 1-2 times larger and almost orthogonal; the audit does not show pervasive first-order gradient opposition.",
+    "Changing point weighting to view weighting coincides with different training duration and schedule; selected-model differences do not isolate weighting causally.",
+    "The observations run fits training BCE progressively better after epoch13 while all three synthetic201 metrics degrade by epoch24; more identical training is not supported by this trajectory.",
+    "BCE naturally focuses on difficult normal points, but its logit gradient saturates for the most severe false positives; the highest 0.1% normal points account for 21.34% of normal BCE and only 7.26% of scalar logit derivative.",
+    "High-score normal errors are concentrated in fence, sidewalk and car classes in synthetic201. These are descriptive associations, not a proof that particular semantics cause mistakes."
+  ],
+  "candidate": {
+    "status": "proposal only; not implemented or run; first await authorized normal-control baseline",
+    "name": "fixed-representation anomaly-head tail ranking",
+    "fixed": "Shared residual and 19-class head; normal semantic outputs unchanged",
+    "loss": "L = existing full-point BCE + 0.1 * E[i~q_positive,j~Uniform(H)] softplus(1+s_j-s_i)",
+    "positive_distribution": "q_i=1/(V*n_view(i)); preserve view-equal positive observation mass",
+    "hard_normals": "H contains the top0.1% scores across all training206 normal cache points, including normal controls; rebuild once per epoch using training labels only",
+    "computation": "Sample32 hard-normal indices per existing training batch and pair with its positives; importance weights implement q without changing cached sample identity",
+    "normal_coverage": "Every original normal and inserted normal point still participates in the unchanged full-point BCE once per epoch with existing coefficient masses; extra tail comparisons do not discard easy normal points",
+    "selection": "Compare against the same fixed expanded synthetic201 controls baseline; require AP increase with non-worsening AUROC/FPR95; no val19 inspection"
+  }
+}

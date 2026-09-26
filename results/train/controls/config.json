@@ -1,0 +1,9 @@
+{
+  "operation": "normal_control_feature_extraction",
+  "initial_sha256": "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30",
+  "manifests": [
+    "/home/jasongao/Study/AJAE-v4/results/data/controls/train.json",
+    "/home/jasongao/Study/AJAE-v4/results/data/controls/validation.json"
+  ],
+  "deadline": 1790395200.0
+}

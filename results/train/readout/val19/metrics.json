@@ -1,0 +1,23 @@
+{
+  "version": "AJAE-feature-evidence",
+  "complete": true,
+  "seed": 206,
+  "mode": "frozen_support",
+  "method": "frozen_support",
+  "architecture": "frozen_litept_shared_feature_evidence",
+  "score_version": "supervised_shared_feature_anomaly_logit",
+  "evaluation_role": "repeated val19 evaluation after development selection",
+  "checkpoint_update": null,
+  "checkpoint": "/home/jasongao/Study/AJAE-v4/results/train/readout/frozen.pt",
+  "metrics": {
+    "AP": 3.3406126040301825,
+    "FPR95": 6.664037565546277,
+    "AUROC": 98.42938549665664,
+    "threshold": -3.833650588989258
+  },
+  "scans": 1960,
+  "points": 193879969,
+  "seconds": 497.25535848899744,
+  "manifest_sha256": "918524fd271f896bf9288ebfe4131941a20cbd00a0925e91c8ccedf4d7574855",
+  "official_commit": "8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2"
+}

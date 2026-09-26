@@ -108,6 +108,108 @@ def test_feature_evidence_both_supervisions_update_shared_residual_not_statistic
         assert name not in parameters and not value.requires_grad and value.grad is None
 
 
+def test_evidence_binary_weights_preserve_class_mass_and_equalize_only_anomaly_views():
+    from src.train import evidence_binary_weights
+    targets = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
+    views = torch.tensor([-1, -1, 0, 1, 0, 1, 1, 1])
+    counts = torch.tensor([1, 3])
+    point = evidence_binary_weights(targets, views, counts, "point")
+    old = (len(targets)/(2*torch.bincount(targets).float()))[targets]
+    assert torch.equal(point, old)
+    weighted = evidence_binary_weights(targets, views, counts, "view")
+    assert torch.equal(weighted[targets == 0], point[targets == 0])
+    for target in (0, 1):
+        assert float(weighted[targets == target].sum()/len(targets)) == pytest.approx(.5)
+    for view in (0, 1):
+        selected = (targets == 1) & (views == view)
+        assert float(weighted[selected].sum()/len(targets)) == pytest.approx(.25)
+    with pytest.raises(ValueError, match="recorded positive anomaly count"):
+        evidence_binary_weights(targets, views, torch.tensor([2, 2]), "view")
+    with pytest.raises(ValueError, match="recorded positive anomaly count"):
+        evidence_binary_weights(targets, views, torch.tensor([1, 3, 0]), "point")
+    control = torch.tensor([False, True, True, False, False, False, False, False])
+    controlled = evidence_binary_weights(targets, views, counts, "view", control)
+    assert torch.equal(controlled[targets == 1], weighted[targets == 1])
+    assert float(controlled[control].sum()/len(targets)) == pytest.approx(.25)
+    assert float(controlled[(targets == 0) & ~control].sum()/len(targets)) == pytest.approx(.25)
+    with pytest.raises(ValueError, match="genuine inserted normal"):
+        evidence_binary_weights(targets, views, counts, "view", targets == 1)
+
+
+def test_evidence_refinement_updates_only_anomaly_head_and_preserves_semantics():
+    from src.normal import FeatureEvidence
+    from src.train import evidence_refinement, evidence_tail_loss
+    with torch.random.fork_rng():
+        torch.manual_seed(916)
+        original, model = FeatureEvidence(), FeatureEvidence()
+        with torch.no_grad():
+            original.residual[-1].weight.normal_(0, .03)
+        features = torch.randn(9, 252)
+    evidence_refinement(model, original.state_dict())
+    frozen = {key: value.clone() for key, value in model.state_dict().items() if not key.startswith("anomaly.")}
+    before = model.components(features)
+    assert torch.equal(before["logits"], original.normal_logits(features))
+    assert [name for name, p in model.named_parameters() if p.requires_grad] == ["anomaly.weight", "anomaly.bias"]
+    targets = torch.tensor([0, 0, 0, 0, 0, 1, 1, 1, 1])
+    loss = torch.nn.functional.binary_cross_entropy_with_logits(before["score"], targets.float())
+    loss += .1 * evidence_tail_loss(before["score"], targets, torch.ones(9), before["score"][:3])
+    optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=.03)
+    loss.backward()
+    assert model.anomaly.weight.grad.abs().sum() > 0
+    assert all(p.grad is None for name, p in model.named_parameters() if not name.startswith("anomaly."))
+    optimizer.step()
+    for key, value in frozen.items():
+        assert torch.equal(value, model.state_dict()[key])
+    after = model.components(features)
+    assert torch.equal(before["logits"], after["logits"])
+    assert not torch.equal(before["score"], after["score"])
+
+
+def test_normal_control_mass_moves_only_normal_coefficients_and_preserves_all_points():
+    from src.train import evidence_binary_weights
+    targets = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
+    views = torch.tensor([-1, -1, 0, 1, 0, 1, 1, 1])
+    counts = torch.tensor([1, 3])
+    control = torch.tensor([True, False, False, False, False, False, False, False])
+    default = evidence_binary_weights(targets, views, counts, "view", control)
+    explicit = evidence_binary_weights(targets, views, counts, "view", control, .25)
+    assert torch.equal(default, explicit)
+    adjusted = evidence_binary_weights(targets, views, counts, "view", control, .05)
+    assert torch.equal(adjusted[targets == 1], default[targets == 1])
+    assert (adjusted > 0).all()
+    assert float(adjusted[control].sum()/len(targets)) == pytest.approx(.05)
+    assert float(adjusted[(targets == 0) & ~control].sum()/len(targets)) == pytest.approx(.45)
+    assert float(adjusted[targets == 1].sum()/len(targets)) == pytest.approx(.5)
+    for invalid in (0, .5, -.1, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="strictly between"):
+            evidence_binary_weights(targets, views, counts, "view", control, invalid)
+
+
+def test_evidence_tail_weights_reproduce_global_view_ranking_across_point_batches():
+    from src.train import evidence_binary_weights, evidence_tail_loss
+    targets = torch.tensor([0, 0, 0, 0, 1, 1, 1, 1])
+    views = torch.tensor([-1, -1, 0, 1, 0, 1, 1, 1])
+    counts = torch.tensor([1, 3])
+    control = torch.tensor([True, False, False, False, False, False, False, False])
+    weights = evidence_binary_weights(targets, views, counts, "view", control)
+    scores = torch.tensor([-.2, 1., .1, -.5, .4, .8, 1.2, 2.], requires_grad=True)
+    hard = torch.tensor([1., 2.], requires_grad=True)
+    # Unequal point batches expose accidental normalization by batch positive mass.
+    batches = (torch.tensor([0, 1, 4]), torch.tensor([2, 3, 5, 6, 7]))
+    actual = sum(len(at)/len(scores) * evidence_tail_loss(scores[at], targets[at], weights[at], hard) for at in batches)
+    pair = torch.nn.functional.softplus(1 + hard[None] - scores[targets == 1, None]).mean(1)
+    q = 1/(len(counts)*counts[views[targets == 1]].float())
+    expected = (q * pair).sum()
+    torch.testing.assert_close(actual, expected)
+    ag = torch.autograd.grad(actual, (scores, hard), retain_graph=True)
+    eg = torch.autograd.grad(expected, (scores, hard))
+    for a, e in zip(ag, eg):
+        torch.testing.assert_close(a, e)
+    assert (ag[0][targets == 1] < 0).all() and (ag[1] > 0).all()
+    empty = evidence_tail_loss(scores[:4], targets[:4], weights[:4], hard)
+    assert empty.item() == 0 and torch.isfinite(empty)
+
+
 def test_target_cache_view_excludes_every_auxiliary_point(tmp_path):
     from src.train import target_normal_cache
     path = tmp_path / "source.npy"
@@ -287,10 +389,74 @@ def point_records(scores, confidence):
     return records
 
 
+def test_normal_control_scan_keeps_all_insertions_and_only_samples_original_background(tmp_path, monkeypatch):
+    import src.data as data
+    from src.train import AuxiliaryScans, file_sha256
+    # More than 512 inserted points must survive the background sampling limit.
+    xyzi = np.zeros((1121, 4), np.float32)
+    xyzi[:520, 0] = xyzi[-1, 0] = 10
+    packed = np.zeros(1121, np.uint32)
+    packed[:520], packed[-1] = 40, 1
+    original = data.Frame(0, xyzi, np.eye(4), packed, sequence_id=206)
+    monkeypatch.setattr(data, "STUSequence", lambda root: [original])
+    delta = tmp_path / "normal.npz"
+    slots = np.arange(520, 1120, dtype=np.int32)
+    np.savez(delta, format="stu-normal-control-frame", normal_semantic=np.uint16(10),
+        source_identity=data.legacy_source_identity(original), world_identity="normal-object",
+        source_slot=slots, inserted_slot=slots, occluded_slot=np.array([], np.int32),
+        xyzi=np.tile(np.array([[10, 0, 1, .5]], np.float32), (600, 1)),
+        packed_labels=np.full(600, 10, np.uint32))
+    record = dict(frame=0, delta=str(delta), delta_sha256=file_sha256(delta), world="normal-object",
+                  recorded_anomalies=0, inserted_normal_points=600, role="normal_control")
+    manifest = dict(records=[record], source_sequence=206, split="train", role="normal_control")
+    sample = AuxiliaryScans(manifest)[0]
+    assert len(sample["slots"]) == 1112 and sample["inserted"].sum() == 600
+    assert (sample["targets"] == 0).all()
+    assert (sample["semantic"][sample["inserted"]] == 0).all()
+    assert (sample["semantic"][~sample["inserted"]] == 8).all()
+    complete = AuxiliaryScans(manifest, full=True)[0]
+    assert complete["slots"].tolist() == list(range(1121))
+    assert complete["inserted"].sum() == 600 and complete["semantic"][-1] == -1
+    record["inserted_normal_points"] = 599
+    with pytest.raises(ValueError, match="inserted normal count"):
+        AuxiliaryScans(manifest)[0]
+
+
+@pytest.mark.parametrize("sequence", [206, 201])
+def test_normal_control_cache_preserves_insertion_identity_without_anomaly_points(tmp_path, monkeypatch, sequence):
+    import src.train as train
+    import src.model as model
+    sample = dict(queries=torch.arange(3), targets=torch.zeros(3, dtype=torch.int8),
+        semantic=torch.tensor([8, 0, 0]), conditions=torch.zeros(3, 2),
+        slots=torch.arange(3), inserted=torch.tensor([False, True, True]), frame=0, index=0)
+    class Perception(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.seg_head = torch.nn.Linear(72, 19)
+        def encode(self, batch, indices):
+            return dict(features=torch.zeros(len(indices), 252))
+    monkeypatch.setattr(model, "FrozenPerception", Perception)
+    monkeypatch.setattr(train, "AuxiliaryScans", lambda manifest, full: [sample])
+    monkeypatch.setattr(train, "disk_check", lambda size: None)
+    manifest = dict(source_sequence=sequence, role="normal_control", sha256="normal-controls",
+                    records=[dict(recorded_anomalies=0, inserted_normal_points=2)])
+    result = train.auxiliary_cache(manifest, tmp_path, torch.device("cpu"), workers=0)
+    if sequence == 201:
+        metadata, path = result, result["frames"][0]
+    else:
+        metadata = json.loads((tmp_path/"auxiliary.json").read_text())
+        path = tmp_path/"auxiliary.npz"
+    assert metadata["role"] == "normal_control" and metadata["source_sequence"] == sequence
+    assert metadata["anomalies"] == 0 and metadata["normals"] == 3 and metadata["inserted_points"] == 2
+    with np.load(path) as saved:
+        np.testing.assert_array_equal(saved["inserted"], sample["inserted"].numpy())
+        assert (saved["targets"] == 0).all()
+
+
 def test_synthetic_development_preserves_background_and_separates_few_point_frames(tmp_path):
     from src.train import auxiliary_development
     class Scores(torch.nn.Module):
-        def forward(self, features, conditions, predicted):
+        def forward(self, features, conditions, predicted=None):
             return features[:, 0]
     normal = np.array([.1, .2, .3, .5, .8, .9], np.float32)
     anomaly = np.array([.3, .4, .7, .8, 1.], np.float32)
@@ -310,6 +476,31 @@ def test_synthetic_development_preserves_background_and_separates_few_point_fram
     assert result["frames"] == 2 and result["eligible_frames"] == 1
     assert result["normal_points"] == 12 and result["anomaly_points"] == 9
     assert result["all_positive_frame_metrics"]["AP"] != result["metrics"]["AP"]
+
+
+def test_control_development_pools_all_normals_without_changing_original_population(tmp_path):
+    from src.train import auxiliary_development
+    from src.evaluate import rank_metrics
+    class Scores(torch.nn.Module):
+        def forward(self, features, conditions):
+            return features[:, 0]
+    path, control_path = tmp_path / "anomaly.npz", tmp_path / "control.npz"
+    normal, anomaly, control = np.array([0., 1.]), np.arange(2., 7.), np.array([3., 7., 0.])
+    score = np.r_[normal, anomaly]
+    np.savez(path, features=score[:, None], targets=np.r_[np.zeros(2), np.ones(5)],
+        conditions=np.zeros((7, 2)), predicted=np.zeros(7))
+    np.savez(control_path, features=control[:, None], targets=np.zeros(3),
+        conditions=np.zeros((3, 2)), predicted=np.zeros(3), inserted=np.array([True, True, False]))
+    cache = dict(frames=[str(path)])
+    control_cache = dict(frames=[str(control_path)], source_sequence=201, role="normal_control")
+    original = auxiliary_development(Scores(), cache, torch.device("cpu"))
+    expanded = auxiliary_development(Scores(), cache, torch.device("cpu"), controls=control_cache)
+    assert expanded["original60_metrics"] == original["metrics"]
+    assert expanded["metrics"] == rank_metrics(np.r_[normal, control], anomaly)
+    assert expanded["expanded_normal_points"] == 5
+    assert expanded["normal_controls"]["FPR95"] == pytest.approx(200/3)
+    assert expanded["normal_controls"]["inserted_FPR95"] == 100
+    assert expanded["metrics"]["AP"] < original["metrics"]["AP"]
 
 
 def test_official_population_preserves_raw_slot_order_and_boundary_rules():

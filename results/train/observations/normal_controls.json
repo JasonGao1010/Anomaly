@@ -1,0 +1,39 @@
+{
+  "metrics": {
+    "AP": 39.180598616674665,
+    "AUROC": 99.32241211388217,
+    "FPR95": 2.7366081488594265,
+    "threshold": 1.3006166219711304
+  },
+  "all_positive_frame_metrics": {
+    "AP": 57.65378638828322,
+    "AUROC": 99.37664402014774,
+    "FPR95": 2.635491224301696,
+    "threshold": 1.1611238718032837
+  },
+  "frames": 80,
+  "normal_points": 6722428,
+  "anomaly_points": 7959,
+  "eligible_frames": 60,
+  "scope": "synthetic STU201; primary metrics require at least five valid anomalies per frame; all_positive_frame_metrics also retain 1-4-point observations; selection metrics pool the original eligible scans with every normal-control point; original60_metrics retains the earlier population",
+  "original60_metrics": {
+    "AP": 61.499486731218056,
+    "AUROC": 99.41036167797172,
+    "FPR95": 2.400559195281838,
+    "threshold": 1.3006166219711304
+  },
+  "normal_controls": {
+    "frames": 76,
+    "points": 5947046,
+    "inserted_points": 44660,
+    "threshold": 1.3006166219711304,
+    "FPR95": 3.0304625187025627,
+    "inserted_FPR95": 41.97716077026421,
+    "fpr_at_zero": 4.248663958543452,
+    "inserted_fpr_at_zero": 47.43618450515002,
+    "threshold_source": "95% recall operating point from the expanded STU201 development; zero is the fixed binary-logit decision"
+  },
+  "expanded_normal_points": 11147376,
+  "checkpoint": "results/train/observations/frozen.pt",
+  "seconds": 11.352605599997332
+}

@@ -1,0 +1,1811 @@
+{
+  "role": "Read-only score calibration diagnosis; selected network unchanged; no val19 access",
+  "checkpoint": "results/train/readout/frozen.pt",
+  "checkpoint_sha256": "eae2d85c4fba85f481ec5d2772c91ef715425401ab6aa39e81de2b967d34498f",
+  "normal_cache": "results/train/normal/features/development_features.json",
+  "normal_source_sequence": 201,
+  "normal_reference_points": 668912,
+  "normal_holdout_points": 644238,
+  "normal_partition": "Even 64-frame blocks fit quantiles; odd 64-frame blocks evaluate 1% normal-score tails",
+  "conditional_class": "Frozen official 16-class argmax reconstructed from deep features[:,180:] for normal cache; existing predicted array for synthetic cache",
+  "new_19class_prediction_counts": {
+    "reference": [
+      5837,
+      244,
+      80,
+      1044,
+      690,
+      3479,
+      0,
+      66,
+      239827,
+      0,
+      55190,
+      1689,
+      111080,
+      12289,
+      190620,
+      18314,
+      14996,
+      9047,
+      4420
+    ],
+    "holdout": [
+      10452,
+      126,
+      37,
+      1023,
+      702,
+      2641,
+      0,
+      123,
+      184158,
+      0,
+      39123,
+      1012,
+      149791,
+      13682,
+      196597,
+      18420,
+      16027,
+      6707,
+      3617
+    ],
+    "role": "Descriptive only; not used for calibration grouping"
+  },
+  "api_reuse": "Existing ScoreCalibration and select_score_calibration unchanged; one fit per preset bandwidth; global candidate uses only its fitted global quantile row.",
+  "synthetic_views_identity": "30704aff7ea6c89241d10a6560d68e89e8c3a94d02d70adbd5228948b6e608a0",
+  "candidate_bandwidths": [
+    0.0,
+    0.25,
+    0.5,
+    1.0
+  ],
+  "candidates": [
+    {
+      "name": "raw",
+      "bandwidth": null,
+      "kind": "raw",
+      "normal_holdout": {
+        "points": 644238,
+        "threshold": 2.843867778778076,
+        "overall_normal_fpr": 0.012909825250916586,
+        "mean_populated_class_tail_error": 0.02465313198397463,
+        "classes": [
+          {
+            "category": 0,
+            "points": 728,
+            "false_positives": 309,
+            "fpr": 0.42445054945054944,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 3,
+            "points": 6931,
+            "false_positives": 708,
+            "fpr": 0.10214976193911413,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 4,
+            "points": 83,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 6,
+            "points": 982,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 7,
+            "points": 697,
+            "false_positives": 79,
+            "fpr": 0.1133428981348637,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 8,
+            "points": 37,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 9,
+            "points": 442,
+            "false_positives": 1,
+            "fpr": 0.0022624434389140274,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 10,
+            "points": 95528,
+            "false_positives": 292,
+            "fpr": 0.003056695419144125,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 11,
+            "points": 23,
+            "false_positives": 3,
+            "fpr": 0.13043478260869565,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 12,
+            "points": 56295,
+            "false_positives": 1601,
+            "fpr": 0.028439470645705657,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 13,
+            "points": 85748,
+            "false_positives": 2365,
+            "fpr": 0.027580818211503474,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 14,
+            "points": 222537,
+            "false_positives": 2911,
+            "fpr": 0.013080970804854923,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 15,
+            "points": 174207,
+            "false_positives": 48,
+            "fpr": 0.00027553427818629564,
+            "included_in_tail_error": true
+          }
+        ]
+      },
+      "primary_60": {
+        "normal_points": 5200330,
+        "anomaly_points": 7914,
+        "AP": 59.06089940798493,
+        "AUROC": 99.47249928149303,
+        "FPR95": 2.3000078841150464,
+        "threshold": 1.3098669052124023
+      },
+      "all80": {
+        "normal_points": 6722428,
+        "anomaly_points": 7959,
+        "AP": 53.5579543406149,
+        "AUROC": 99.4285667222519,
+        "FPR95": 2.5095992102853315,
+        "threshold": 1.223602056503296
+      },
+      "strata": [
+        {
+          "stratum": "1-4",
+          "frames": 20,
+          "normal_points": 1522098,
+          "anomaly_points": 45,
+          "AP": 0.04851991048331633,
+          "AUROC": 94.60266611538081,
+          "FPR95": 16.349998488927785,
+          "threshold": -4.350564956665039
+        },
+        {
+          "stratum": "5-20",
+          "frames": 20,
+          "normal_points": 1664805,
+          "anomaly_points": 211,
+          "AP": 0.533323336902132,
+          "AUROC": 96.49997250720524,
+          "FPR95": 15.906667747874376,
+          "threshold": -4.474102973937988
+        },
+        {
+          "stratum": "21-100",
+          "frames": 20,
+          "normal_points": 1771362,
+          "anomaly_points": 876,
+          "AP": 9.051853229799194,
+          "AUROC": 97.83187505861586,
+          "FPR95": 11.355217058963667,
+          "threshold": -3.457888126373291
+        },
+        {
+          "stratum": ">100",
+          "frames": 20,
+          "normal_points": 1764163,
+          "anomaly_points": 6827,
+          "AP": 81.17459297727274,
+          "AUROC": 99.80234669122565,
+          "FPR95": 0.8690806915234023,
+          "threshold": 3.2054524421691895
+        }
+      ],
+      "normal_selection_report": null
+    },
+    {
+      "name": "global",
+      "bandwidth": 0.0,
+      "kind": "global",
+      "normal_holdout": {
+        "points": 644238,
+        "threshold": 4.605170185988092,
+        "overall_normal_fpr": 0.012909825250916586,
+        "mean_populated_class_tail_error": 0.02465313198397463,
+        "classes": [
+          {
+            "category": 0,
+            "points": 728,
+            "false_positives": 309,
+            "fpr": 0.42445054945054944,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 3,
+            "points": 6931,
+            "false_positives": 708,
+            "fpr": 0.10214976193911413,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 4,
+            "points": 83,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 6,
+            "points": 982,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 7,
+            "points": 697,
+            "false_positives": 79,
+            "fpr": 0.1133428981348637,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 8,
+            "points": 37,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 9,
+            "points": 442,
+            "false_positives": 1,
+            "fpr": 0.0022624434389140274,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 10,
+            "points": 95528,
+            "false_positives": 292,
+            "fpr": 0.003056695419144125,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 11,
+            "points": 23,
+            "false_positives": 3,
+            "fpr": 0.13043478260869565,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 12,
+            "points": 56295,
+            "false_positives": 1601,
+            "fpr": 0.028439470645705657,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 13,
+            "points": 85748,
+            "false_positives": 2365,
+            "fpr": 0.027580818211503474,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 14,
+            "points": 222537,
+            "false_positives": 2911,
+            "fpr": 0.013080970804854923,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 15,
+            "points": 174207,
+            "false_positives": 48,
+            "fpr": 0.00027553427818629564,
+            "included_in_tail_error": true
+          }
+        ]
+      },
+      "primary_60": {
+        "normal_points": 5200330,
+        "anomaly_points": 7914,
+        "AP": 59.060899405773085,
+        "AUROC": 99.47249928878247,
+        "FPR95": 2.3000078841150464,
+        "threshold": 3.9467949867248535
+      },
+      "all80": {
+        "normal_points": 6722428,
+        "anomaly_points": 7959,
+        "AP": 53.5579441133785,
+        "AUROC": 99.42856672598994,
+        "FPR95": 2.5095992102853315,
+        "threshold": 3.909770965576172
+      },
+      "strata": [
+        {
+          "stratum": "1-4",
+          "frames": 20,
+          "normal_points": 1522098,
+          "anomaly_points": 45,
+          "AP": 0.04851990973037945,
+          "AUROC": 94.60266538539422,
+          "FPR95": 16.349998488927785,
+          "threshold": 1.984522819519043
+        },
+        {
+          "stratum": "5-20",
+          "frames": 20,
+          "normal_points": 1664805,
+          "anomaly_points": 211,
+          "AP": 0.5333228116173792,
+          "AUROC": 96.49997222252706,
+          "FPR95": 15.906667747874376,
+          "threshold": 1.9552593231201172
+        },
+        {
+          "stratum": "21-100",
+          "frames": 20,
+          "normal_points": 1771362,
+          "anomaly_points": 876,
+          "AP": 9.051852423982485,
+          "AUROC": 97.8318750263934,
+          "FPR95": 11.355217058963667,
+          "threshold": 2.1959784030914307
+        },
+        {
+          "stratum": ">100",
+          "frames": 20,
+          "normal_points": 1764163,
+          "anomaly_points": 6827,
+          "AP": 81.1745929610292,
+          "AUROC": 99.80234671198298,
+          "FPR95": 0.8690806915234023,
+          "threshold": 4.776004791259766
+        }
+      ],
+      "normal_selection_report": {
+        "points": 668912,
+        "minimum_points": 2048,
+        "class_counts": [
+          382,
+          1,
+          0,
+          4256,
+          121,
+          1,
+          1115,
+          666,
+          24,
+          99,
+          119186,
+          17,
+          87323,
+          101619,
+          191327,
+          162775
+        ],
+        "fallback_classes": [
+          0,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          11
+        ],
+        "class_quantile_counts": [
+          0,
+          0,
+          0,
+          11,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11,
+          0,
+          11,
+          11,
+          11,
+          11
+        ],
+        "conditions": "frozen official 16-class prediction only; no range or spacing bins"
+      }
+    },
+    {
+      "name": "class16_range_0",
+      "bandwidth": 0.0,
+      "kind": "class16",
+      "normal_holdout": {
+        "points": 644238,
+        "threshold": 4.605170185988092,
+        "overall_normal_fpr": 0.011831031389020828,
+        "mean_populated_class_tail_error": 0.0035749386870017803,
+        "classes": [
+          {
+            "category": 0,
+            "points": 728,
+            "false_positives": 309,
+            "fpr": 0.42445054945054944,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 3,
+            "points": 6931,
+            "false_positives": 86,
+            "fpr": 0.012408021930457366,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 4,
+            "points": 83,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 6,
+            "points": 982,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 7,
+            "points": 697,
+            "false_positives": 79,
+            "fpr": 0.1133428981348637,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 8,
+            "points": 37,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 9,
+            "points": 442,
+            "false_positives": 1,
+            "fpr": 0.0022624434389140274,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 10,
+            "points": 95528,
+            "false_positives": 895,
+            "fpr": 0.009368980822376685,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 11,
+            "points": 23,
+            "false_positives": 3,
+            "fpr": 0.13043478260869565,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 12,
+            "points": 56295,
+            "false_positives": 1031,
+            "fpr": 0.018314237498889777,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 13,
+            "points": 85748,
+            "false_positives": 1347,
+            "fpr": 0.015708821196995848,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 14,
+            "points": 222537,
+            "false_positives": 2600,
+            "fpr": 0.011683450392518996,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 15,
+            "points": 174207,
+            "false_positives": 1271,
+            "fpr": 0.007295918074474619,
+            "included_in_tail_error": true
+          }
+        ]
+      },
+      "primary_60": {
+        "normal_points": 5200330,
+        "anomaly_points": 7914,
+        "AP": 51.706646403123116,
+        "AUROC": 99.03467873516071,
+        "FPR95": 2.8181480790642133,
+        "threshold": 3.6839053630828857
+      },
+      "all80": {
+        "normal_points": 6722428,
+        "anomaly_points": 7959,
+        "AP": 45.46904160765449,
+        "AUROC": 98.9786284338149,
+        "FPR95": 3.21206861568469,
+        "threshold": 3.6115026473999023
+      },
+      "strata": [
+        {
+          "stratum": "1-4",
+          "frames": 20,
+          "normal_points": 1522098,
+          "anomaly_points": 45,
+          "AP": 0.04960871757955492,
+          "AUROC": 94.24656333268656,
+          "FPR95": 17.092132044060236,
+          "threshold": 2.026721715927124
+        },
+        {
+          "stratum": "5-20",
+          "frames": 20,
+          "normal_points": 1664805,
+          "anomaly_points": 211,
+          "AP": 0.7128183841371547,
+          "AUROC": 92.75481290800876,
+          "FPR95": 48.157291694823115,
+          "threshold": 0.7721409797668457
+        },
+        {
+          "stratum": "21-100",
+          "frames": 20,
+          "normal_points": 1771362,
+          "anomaly_points": 876,
+          "AP": 8.507803178167988,
+          "AUROC": 95.41089635388735,
+          "FPR95": 28.09499131177027,
+          "threshold": 1.3382477760314941
+        },
+        {
+          "stratum": ">100",
+          "frames": 20,
+          "normal_points": 1764163,
+          "anomaly_points": 6827,
+          "AP": 77.02768952389168,
+          "AUROC": 99.73630759213493,
+          "FPR95": 0.9547870576585044,
+          "threshold": 4.493771553039551
+        }
+      ],
+      "normal_selection_report": {
+        "enabled": true,
+        "range_bandwidth": 0.0,
+        "selected_source": "normal",
+        "candidates": [
+          {
+            "source": "normal",
+            "range_bandwidth": 0.0,
+            "classes": [
+              {
+                "category": 0,
+                "points": 728,
+                "raw_fpr01": 0.42445054945054944,
+                "calibrated_fpr01": 0.42445054945054944
+              },
+              {
+                "category": 3,
+                "points": 6931,
+                "raw_fpr01": 0.10214976193911413,
+                "calibrated_fpr01": 0.012408021930457366
+              },
+              {
+                "category": 4,
+                "points": 83,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 6,
+                "points": 982,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 7,
+                "points": 697,
+                "raw_fpr01": 0.1133428981348637,
+                "calibrated_fpr01": 0.1133428981348637
+              },
+              {
+                "category": 8,
+                "points": 37,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 9,
+                "points": 442,
+                "raw_fpr01": 0.0022624434389140274,
+                "calibrated_fpr01": 0.0022624434389140274
+              },
+              {
+                "category": 10,
+                "points": 95528,
+                "raw_fpr01": 0.003056695419144125,
+                "calibrated_fpr01": 0.009368980822376685
+              },
+              {
+                "category": 11,
+                "points": 23,
+                "raw_fpr01": 0.13043478260869565,
+                "calibrated_fpr01": 0.13043478260869565
+              },
+              {
+                "category": 12,
+                "points": 56295,
+                "raw_fpr01": 0.028439470645705657,
+                "calibrated_fpr01": 0.018314237498889777
+              },
+              {
+                "category": 13,
+                "points": 85748,
+                "raw_fpr01": 0.027580818211503474,
+                "calibrated_fpr01": 0.015708821196995848
+              },
+              {
+                "category": 14,
+                "points": 222537,
+                "raw_fpr01": 0.013080970804854923,
+                "calibrated_fpr01": 0.011683450392518996
+              },
+              {
+                "category": 15,
+                "points": 174207,
+                "raw_fpr01": 0.00027553427818629564,
+                "calibrated_fpr01": 0.007295918074474619
+              }
+            ],
+            "fit": {
+              "points": 668912,
+              "minimum_points": 2048,
+              "class_counts": [
+                382,
+                1,
+                0,
+                4256,
+                121,
+                1,
+                1115,
+                666,
+                24,
+                99,
+                119186,
+                17,
+                87323,
+                101619,
+                191327,
+                162775
+              ],
+              "fallback_classes": [
+                0,
+                1,
+                2,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                11
+              ],
+              "class_quantile_counts": [
+                0,
+                0,
+                0,
+                11,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                11,
+                0,
+                11,
+                11,
+                11,
+                11
+              ],
+              "conditions": "frozen official 16-class prediction only; no range or spacing bins"
+            },
+            "mean_class_tail_error": 0.0035749386870017803
+          }
+        ],
+        "raw_mean_class_tail_error": 0.02465313198397463,
+        "calibrated_mean_class_tail_error": 0.0035749386870017803,
+        "normal_blocks_only": true,
+        "selection": "mean absolute deviation from 1% normal FPR across frozen prediction groups with at least 2048 holdout points; whole 64-frame blocks remain disjoint"
+      }
+    },
+    {
+      "name": "class16_range_0.25",
+      "bandwidth": 0.25,
+      "kind": "class16",
+      "normal_holdout": {
+        "points": 644238,
+        "threshold": 4.605170185988092,
+        "overall_normal_fpr": 0.010328481089286879,
+        "mean_populated_class_tail_error": 0.0034492496849707205,
+        "classes": [
+          {
+            "category": 0,
+            "points": 728,
+            "false_positives": 309,
+            "fpr": 0.42445054945054944,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 3,
+            "points": 6931,
+            "false_positives": 81,
+            "fpr": 0.011686625306593566,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 4,
+            "points": 83,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 6,
+            "points": 982,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 7,
+            "points": 697,
+            "false_positives": 79,
+            "fpr": 0.1133428981348637,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 8,
+            "points": 37,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 9,
+            "points": 442,
+            "false_positives": 1,
+            "fpr": 0.0022624434389140274,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 10,
+            "points": 95528,
+            "false_positives": 900,
+            "fpr": 0.00942132149736203,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 11,
+            "points": 23,
+            "false_positives": 3,
+            "fpr": 0.13043478260869565,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 12,
+            "points": 56295,
+            "false_positives": 1008,
+            "fpr": 0.017905675459632293,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 13,
+            "points": 85748,
+            "false_positives": 1325,
+            "fpr": 0.015452255446191165,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 14,
+            "points": 222537,
+            "false_positives": 1600,
+            "fpr": 0.0071898156261655365,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 15,
+            "points": 174207,
+            "false_positives": 1348,
+            "fpr": 0.007737920979065135,
+            "included_in_tail_error": true
+          }
+        ]
+      },
+      "primary_60": {
+        "normal_points": 5200330,
+        "anomaly_points": 7914,
+        "AP": 41.259147634139104,
+        "AUROC": 98.85123646589832,
+        "FPR95": 4.103239602102175,
+        "threshold": 3.2476303577423096
+      },
+      "all80": {
+        "normal_points": 6722428,
+        "anomaly_points": 7959,
+        "AP": 35.72218678440966,
+        "AUROC": 98.7795091672671,
+        "FPR95": 4.607085416162136,
+        "threshold": 3.1886086463928223
+      },
+      "strata": [
+        {
+          "stratum": "1-4",
+          "frames": 20,
+          "normal_points": 1522098,
+          "anomaly_points": 45,
+          "AP": 0.06959871182938969,
+          "AUROC": 94.26630435972804,
+          "FPR95": 20.01783065216563,
+          "threshold": 1.8259902000427246
+        },
+        {
+          "stratum": "5-20",
+          "frames": 20,
+          "normal_points": 1664805,
+          "anomaly_points": 211,
+          "AP": 1.5671119412401502,
+          "AUROC": 92.5024812905589,
+          "FPR95": 53.0696988536195,
+          "threshold": 0.6638885736465454
+        },
+        {
+          "stratum": "21-100",
+          "frames": 20,
+          "normal_points": 1771362,
+          "anomaly_points": 876,
+          "AP": 9.079367536907696,
+          "AUROC": 95.74401250532193,
+          "FPR95": 26.021784367057666,
+          "threshold": 1.3838589191436768
+        },
+        {
+          "stratum": ">100",
+          "frames": 20,
+          "normal_points": 1764163,
+          "anomaly_points": 6827,
+          "AP": 64.19399978932508,
+          "AUROC": 99.50856122196245,
+          "FPR95": 2.0785494310899844,
+          "threshold": 3.7878429889678955
+        }
+      ],
+      "normal_selection_report": {
+        "enabled": true,
+        "range_bandwidth": 0.25,
+        "selected_source": "normal",
+        "candidates": [
+          {
+            "source": "normal",
+            "range_bandwidth": 0.25,
+            "classes": [
+              {
+                "category": 0,
+                "points": 728,
+                "raw_fpr01": 0.42445054945054944,
+                "calibrated_fpr01": 0.42445054945054944
+              },
+              {
+                "category": 3,
+                "points": 6931,
+                "raw_fpr01": 0.10214976193911413,
+                "calibrated_fpr01": 0.011686625306593566
+              },
+              {
+                "category": 4,
+                "points": 83,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 6,
+                "points": 982,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 7,
+                "points": 697,
+                "raw_fpr01": 0.1133428981348637,
+                "calibrated_fpr01": 0.1133428981348637
+              },
+              {
+                "category": 8,
+                "points": 37,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 9,
+                "points": 442,
+                "raw_fpr01": 0.0022624434389140274,
+                "calibrated_fpr01": 0.0022624434389140274
+              },
+              {
+                "category": 10,
+                "points": 95528,
+                "raw_fpr01": 0.003056695419144125,
+                "calibrated_fpr01": 0.00942132149736203
+              },
+              {
+                "category": 11,
+                "points": 23,
+                "raw_fpr01": 0.13043478260869565,
+                "calibrated_fpr01": 0.13043478260869565
+              },
+              {
+                "category": 12,
+                "points": 56295,
+                "raw_fpr01": 0.028439470645705657,
+                "calibrated_fpr01": 0.017905675459632293
+              },
+              {
+                "category": 13,
+                "points": 85748,
+                "raw_fpr01": 0.027580818211503474,
+                "calibrated_fpr01": 0.015452255446191165
+              },
+              {
+                "category": 14,
+                "points": 222537,
+                "raw_fpr01": 0.013080970804854923,
+                "calibrated_fpr01": 0.0071898156261655365
+              },
+              {
+                "category": 15,
+                "points": 174207,
+                "raw_fpr01": 0.00027553427818629564,
+                "calibrated_fpr01": 0.007737920979065135
+              }
+            ],
+            "fit": {
+              "points": 668912,
+              "minimum_points": 2048,
+              "class_counts": [
+                382,
+                1,
+                0,
+                4256,
+                121,
+                1,
+                1115,
+                666,
+                24,
+                99,
+                119186,
+                17,
+                87323,
+                101619,
+                191327,
+                162775
+              ],
+              "fallback_classes": [
+                0,
+                1,
+                2,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                11
+              ],
+              "class_quantile_counts": [
+                0,
+                0,
+                0,
+                11,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                11,
+                0,
+                11,
+                11,
+                11,
+                11
+              ],
+              "conditions": "continuous log range for sufficiently populated frozen 16-class groups; sparse classes use the range-independent global CDF; no spacing",
+              "range_bandwidth": 0.25,
+              "range_groups_enabled": [
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                true,
+                true,
+                true,
+                true
+              ],
+              "range_fallback_anchors": [
+                16,
+                16,
+                16,
+                16,
+                11,
+                16,
+                16,
+                16,
+                16,
+                16,
+                16,
+                1,
+                16,
+                2,
+                1,
+                1,
+                0
+              ]
+            },
+            "mean_class_tail_error": 0.0034492496849707205
+          }
+        ],
+        "raw_mean_class_tail_error": 0.02465313198397463,
+        "calibrated_mean_class_tail_error": 0.0034492496849707205,
+        "normal_blocks_only": true,
+        "selection": "mean absolute deviation from 1% normal FPR across frozen prediction groups with at least 2048 holdout points; whole 64-frame blocks remain disjoint"
+      }
+    },
+    {
+      "name": "class16_range_0.5",
+      "bandwidth": 0.5,
+      "kind": "class16",
+      "normal_holdout": {
+        "points": 644238,
+        "threshold": 4.605170185988092,
+        "overall_normal_fpr": 0.010725849763596683,
+        "mean_populated_class_tail_error": 0.003198541941280874,
+        "classes": [
+          {
+            "category": 0,
+            "points": 728,
+            "false_positives": 309,
+            "fpr": 0.42445054945054944,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 3,
+            "points": 6931,
+            "false_positives": 65,
+            "fpr": 0.009378156110229404,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 4,
+            "points": 83,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 6,
+            "points": 982,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 7,
+            "points": 697,
+            "false_positives": 79,
+            "fpr": 0.1133428981348637,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 8,
+            "points": 37,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 9,
+            "points": 442,
+            "false_positives": 1,
+            "fpr": 0.0022624434389140274,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 10,
+            "points": 95528,
+            "false_positives": 921,
+            "fpr": 0.009641152332300477,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 11,
+            "points": 23,
+            "false_positives": 3,
+            "fpr": 0.13043478260869565,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 12,
+            "points": 56295,
+            "false_positives": 1011,
+            "fpr": 0.01795896616040501,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 13,
+            "points": 85748,
+            "false_positives": 1374,
+            "fpr": 0.016023697345710686,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 14,
+            "points": 222537,
+            "false_positives": 1839,
+            "fpr": 0.008263794335324013,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 15,
+            "points": 174207,
+            "false_positives": 1308,
+            "fpr": 0.007508309080576555,
+            "included_in_tail_error": true
+          }
+        ]
+      },
+      "primary_60": {
+        "normal_points": 5200330,
+        "anomaly_points": 7914,
+        "AP": 43.651308592708176,
+        "AUROC": 98.94848000672238,
+        "FPR95": 3.5340257252905105,
+        "threshold": 3.4044620990753174
+      },
+      "all80": {
+        "normal_points": 6722428,
+        "anomaly_points": 7959,
+        "AP": 37.57837823048822,
+        "AUROC": 98.88535782247966,
+        "FPR95": 3.836798252060119,
+        "threshold": 3.3813278675079346
+      },
+      "strata": [
+        {
+          "stratum": "1-4",
+          "frames": 20,
+          "normal_points": 1522098,
+          "anomaly_points": 45,
+          "AP": 0.06330716063756538,
+          "AUROC": 94.58520629639705,
+          "FPR95": 19.387516441122713,
+          "threshold": 1.8598706722259521
+        },
+        {
+          "stratum": "5-20",
+          "frames": 20,
+          "normal_points": 1664805,
+          "anomaly_points": 211,
+          "AP": 1.2815261293811906,
+          "AUROC": 92.95496600508454,
+          "FPR95": 47.99408939785741,
+          "threshold": 0.7721409797668457
+        },
+        {
+          "stratum": "21-100",
+          "frames": 20,
+          "normal_points": 1771362,
+          "anomaly_points": 876,
+          "AP": 9.073728034279197,
+          "AUROC": 95.56821328838522,
+          "FPR95": 26.204525105540256,
+          "threshold": 1.3838589191436768
+        },
+        {
+          "stratum": ">100",
+          "frames": 20,
+          "normal_points": 1764163,
+          "anomaly_points": 6827,
+          "AP": 68.30355835187251,
+          "AUROC": 99.62092776148312,
+          "FPR95": 1.5558653026959528,
+          "threshold": 4.0408220291137695
+        }
+      ],
+      "normal_selection_report": {
+        "enabled": true,
+        "range_bandwidth": 0.5,
+        "selected_source": "normal",
+        "candidates": [
+          {
+            "source": "normal",
+            "range_bandwidth": 0.5,
+            "classes": [
+              {
+                "category": 0,
+                "points": 728,
+                "raw_fpr01": 0.42445054945054944,
+                "calibrated_fpr01": 0.42445054945054944
+              },
+              {
+                "category": 3,
+                "points": 6931,
+                "raw_fpr01": 0.10214976193911413,
+                "calibrated_fpr01": 0.009378156110229404
+              },
+              {
+                "category": 4,
+                "points": 83,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 6,
+                "points": 982,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 7,
+                "points": 697,
+                "raw_fpr01": 0.1133428981348637,
+                "calibrated_fpr01": 0.1133428981348637
+              },
+              {
+                "category": 8,
+                "points": 37,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 9,
+                "points": 442,
+                "raw_fpr01": 0.0022624434389140274,
+                "calibrated_fpr01": 0.0022624434389140274
+              },
+              {
+                "category": 10,
+                "points": 95528,
+                "raw_fpr01": 0.003056695419144125,
+                "calibrated_fpr01": 0.009641152332300477
+              },
+              {
+                "category": 11,
+                "points": 23,
+                "raw_fpr01": 0.13043478260869565,
+                "calibrated_fpr01": 0.13043478260869565
+              },
+              {
+                "category": 12,
+                "points": 56295,
+                "raw_fpr01": 0.028439470645705657,
+                "calibrated_fpr01": 0.01795896616040501
+              },
+              {
+                "category": 13,
+                "points": 85748,
+                "raw_fpr01": 0.027580818211503474,
+                "calibrated_fpr01": 0.016023697345710686
+              },
+              {
+                "category": 14,
+                "points": 222537,
+                "raw_fpr01": 0.013080970804854923,
+                "calibrated_fpr01": 0.008263794335324013
+              },
+              {
+                "category": 15,
+                "points": 174207,
+                "raw_fpr01": 0.00027553427818629564,
+                "calibrated_fpr01": 0.007508309080576555
+              }
+            ],
+            "fit": {
+              "points": 668912,
+              "minimum_points": 2048,
+              "class_counts": [
+                382,
+                1,
+                0,
+                4256,
+                121,
+                1,
+                1115,
+                666,
+                24,
+                99,
+                119186,
+                17,
+                87323,
+                101619,
+                191327,
+                162775
+              ],
+              "fallback_classes": [
+                0,
+                1,
+                2,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                11
+              ],
+              "class_quantile_counts": [
+                0,
+                0,
+                0,
+                11,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                11,
+                0,
+                11,
+                11,
+                11,
+                11
+              ],
+              "conditions": "continuous log range for sufficiently populated frozen 16-class groups; sparse classes use the range-independent global CDF; no spacing",
+              "range_bandwidth": 0.5,
+              "range_groups_enabled": [
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                true,
+                true,
+                true,
+                true
+              ],
+              "range_fallback_anchors": [
+                16,
+                16,
+                16,
+                16,
+                6,
+                16,
+                16,
+                16,
+                16,
+                16,
+                16,
+                0,
+                16,
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "mean_class_tail_error": 0.003198541941280874
+          }
+        ],
+        "raw_mean_class_tail_error": 0.02465313198397463,
+        "calibrated_mean_class_tail_error": 0.003198541941280874,
+        "normal_blocks_only": true,
+        "selection": "mean absolute deviation from 1% normal FPR across frozen prediction groups with at least 2048 holdout points; whole 64-frame blocks remain disjoint"
+      }
+    },
+    {
+      "name": "class16_range_1",
+      "bandwidth": 1.0,
+      "kind": "class16",
+      "normal_holdout": {
+        "points": 644238,
+        "threshold": 4.605170185988092,
+        "overall_normal_fpr": 0.011135636208978669,
+        "mean_populated_class_tail_error": 0.0030049052803231315,
+        "classes": [
+          {
+            "category": 0,
+            "points": 728,
+            "false_positives": 309,
+            "fpr": 0.42445054945054944,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 3,
+            "points": 6931,
+            "false_positives": 76,
+            "fpr": 0.010965228682729766,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 4,
+            "points": 83,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 6,
+            "points": 982,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 7,
+            "points": 697,
+            "false_positives": 79,
+            "fpr": 0.1133428981348637,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 8,
+            "points": 37,
+            "false_positives": 0,
+            "fpr": 0.0,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 9,
+            "points": 442,
+            "false_positives": 1,
+            "fpr": 0.0022624434389140274,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 10,
+            "points": 95528,
+            "false_positives": 948,
+            "fpr": 0.009923791977221338,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 11,
+            "points": 23,
+            "false_positives": 3,
+            "fpr": 0.13043478260869565,
+            "included_in_tail_error": false
+          },
+          {
+            "category": 12,
+            "points": 56295,
+            "false_positives": 1007,
+            "fpr": 0.017887911892708056,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 13,
+            "points": 85748,
+            "false_positives": 1365,
+            "fpr": 0.015918738629472406,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 14,
+            "points": 222537,
+            "false_positives": 2100,
+            "fpr": 0.009436633009342266,
+            "included_in_tail_error": true
+          },
+          {
+            "category": 15,
+            "points": 174207,
+            "false_positives": 1286,
+            "fpr": 0.007382022536407837,
+            "included_in_tail_error": true
+          }
+        ]
+      },
+      "primary_60": {
+        "normal_points": 5200330,
+        "anomaly_points": 7914,
+        "AP": 47.88638556404648,
+        "AUROC": 99.03694755951028,
+        "FPR95": 3.023346595312221,
+        "threshold": 3.574812173843384
+      },
+      "all80": {
+        "normal_points": 6722428,
+        "anomaly_points": 7959,
+        "AP": 41.603025433864644,
+        "AUROC": 98.97995384703975,
+        "FPR95": 3.4658608467059815,
+        "threshold": 3.4967830181121826
+      },
+      "strata": [
+        {
+          "stratum": "1-4",
+          "frames": 20,
+          "normal_points": 1522098,
+          "anomaly_points": 45,
+          "AP": 0.05499672325005464,
+          "AUROC": 94.74146722338364,
+          "FPR95": 14.735582071588032,
+          "threshold": 2.1530754566192627
+        },
+        {
+          "stratum": "5-20",
+          "frames": 20,
+          "normal_points": 1664805,
+          "anomaly_points": 211,
+          "AP": 0.948799511272495,
+          "AUROC": 93.31264007678568,
+          "FPR95": 44.510438159424076,
+          "threshold": 0.8616413474082947
+        },
+        {
+          "stratum": "21-100",
+          "frames": 20,
+          "normal_points": 1771362,
+          "anomaly_points": 876,
+          "AP": 8.831268989169546,
+          "AUROC": 95.65311068274328,
+          "FPR95": 26.39731460875868,
+          "threshold": 1.3917624950408936
+        },
+        {
+          "stratum": ">100",
+          "frames": 20,
+          "normal_points": 1764163,
+          "anomaly_points": 6827,
+          "AP": 73.11966237979863,
+          "AUROC": 99.69398996882366,
+          "FPR95": 1.19263356050433,
+          "threshold": 4.283472061157227
+        }
+      ],
+      "normal_selection_report": {
+        "enabled": true,
+        "range_bandwidth": 1.0,
+        "selected_source": "normal",
+        "candidates": [
+          {
+            "source": "normal",
+            "range_bandwidth": 1.0,
+            "classes": [
+              {
+                "category": 0,
+                "points": 728,
+                "raw_fpr01": 0.42445054945054944,
+                "calibrated_fpr01": 0.42445054945054944
+              },
+              {
+                "category": 3,
+                "points": 6931,
+                "raw_fpr01": 0.10214976193911413,
+                "calibrated_fpr01": 0.010965228682729766
+              },
+              {
+                "category": 4,
+                "points": 83,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 6,
+                "points": 982,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 7,
+                "points": 697,
+                "raw_fpr01": 0.1133428981348637,
+                "calibrated_fpr01": 0.1133428981348637
+              },
+              {
+                "category": 8,
+                "points": 37,
+                "raw_fpr01": 0.0,
+                "calibrated_fpr01": 0.0
+              },
+              {
+                "category": 9,
+                "points": 442,
+                "raw_fpr01": 0.0022624434389140274,
+                "calibrated_fpr01": 0.0022624434389140274
+              },
+              {
+                "category": 10,
+                "points": 95528,
+                "raw_fpr01": 0.003056695419144125,
+                "calibrated_fpr01": 0.009923791977221338
+              },
+              {
+                "category": 11,
+                "points": 23,
+                "raw_fpr01": 0.13043478260869565,
+                "calibrated_fpr01": 0.13043478260869565
+              },
+              {
+                "category": 12,
+                "points": 56295,
+                "raw_fpr01": 0.028439470645705657,
+                "calibrated_fpr01": 0.017887911892708056
+              },
+              {
+                "category": 13,
+                "points": 85748,
+                "raw_fpr01": 0.027580818211503474,
+                "calibrated_fpr01": 0.015918738629472406
+              },
+              {
+                "category": 14,
+                "points": 222537,
+                "raw_fpr01": 0.013080970804854923,
+                "calibrated_fpr01": 0.009436633009342266
+              },
+              {
+                "category": 15,
+                "points": 174207,
+                "raw_fpr01": 0.00027553427818629564,
+                "calibrated_fpr01": 0.007382022536407837
+              }
+            ],
+            "fit": {
+              "points": 668912,
+              "minimum_points": 2048,
+              "class_counts": [
+                382,
+                1,
+                0,
+                4256,
+                121,
+                1,
+                1115,
+                666,
+                24,
+                99,
+                119186,
+                17,
+                87323,
+                101619,
+                191327,
+                162775
+              ],
+              "fallback_classes": [
+                0,
+                1,
+                2,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                11
+              ],
+              "class_quantile_counts": [
+                0,
+                0,
+                0,
+                11,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                11,
+                0,
+                11,
+                11,
+                11,
+                11
+              ],
+              "conditions": "continuous log range for sufficiently populated frozen 16-class groups; sparse classes use the range-independent global CDF; no spacing",
+              "range_bandwidth": 1.0,
+              "range_groups_enabled": [
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                true,
+                true,
+                true,
+                true
+              ],
+              "range_fallback_anchors": [
+                16,
+                16,
+                16,
+                16,
+                0,
+                16,
+                16,
+                16,
+                16,
+                16,
+                16,
+                0,
+                16,
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "mean_class_tail_error": 0.0030049052803231315
+          }
+        ],
+        "raw_mean_class_tail_error": 0.02465313198397463,
+        "calibrated_mean_class_tail_error": 0.0030049052803231315,
+        "normal_blocks_only": true,
+        "selection": "mean absolute deviation from 1% normal FPR across frozen prediction groups with at least 2048 holdout points; whole 64-frame blocks remain disjoint"
+      }
+    }
+  ],
+  "normal_tail_best": "class16_range_1",
+  "synthetic_primary_best_subject_to_no_worse_normal_tail": "raw",
+  "selection_scope": "Diagnostic candidate ordering only, based on normal201 holdout and existing synthetic201; not deployed or used to change the already-selected model",
+  "stratum_comparison": "Strata have different anomaly prevalence; AP differences do not identify a causal effect of range or density.",
+  "cpu_threads": 4,
+  "seconds": 13.294318601023406
+}
