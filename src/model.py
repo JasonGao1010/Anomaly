@@ -16,10 +16,12 @@ WEIGHTS_REVISION = "a8e76e92efbb2061639f5c683968bc5d248ee002"
 WEIGHTS_SHA256 = "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"
 GRID_SIZE = .05
 POINT_CHUNK = 65536
-NORMAL_VERSION = "AJAE-normal-evidence"
-NORMAL_ARCHITECTURE = "multimode48_blind_density"
+NORMAL_VERSION = "SERVE"
+NORMAL_ARCHITECTURE = "multimode48_return_verification"
 NORMAL_SCORE_VERSION = "joint_density_logtail"
-NORMAL_VARIANTS = ("joint", "semantic", "separate")
+NORMAL_VARIANTS = ("joint", "semantic", "separate", "standard", "cssr", "target_available",
+                   "single_component", "no_nll", "no_compactness")
+NORMAL_READOUTS = ("joint", "appearance", "common_density", "independent_minima", "energy", "softmax")
 NORMAL_LOSS_WEIGHTS = dict(classification=1., semantic=.5, normal=.05, geometry=.2, context=.2)
 CALIBRATION_PROBABILITIES = np.r_[np.linspace(0., .9, 33), 1 - np.geomspace(.1, 1e-4, 97)[1:]]
 CALIBRATION_LEVELS = -np.log1p(-CALIBRATION_PROBABILITIES)
@@ -86,13 +88,29 @@ class NormalHypothesis(nn.Module):
         self.backbone = LitePT(shuffle_orders=False, fp32_attention=True)
         self.detail = mlp(7, 32, 32)
         self.embedding = mlp(104, 96, 48)
-        self.hypotheses = SemanticHypotheses()
         self.appearance_modes = nn.Parameter(torch.randn(19, 4, 48) * .05)
+        # Optional heads must not change common initialization or the training RNG.
+        with torch.random.fork_rng(devices=[]):
+            torch.random.default_generator.manual_seed((torch.initial_seed() + 104729) % (2 ** 63))
+            self.hypotheses = SemanticHypotheses(components=1 if variant == "single_component" else 3,
+                                               target_available=variant == "target_available")
+        with torch.random.fork_rng(devices=[]):
+            torch.random.default_generator.manual_seed((torch.initial_seed() + 130363) % (2 ** 63))
+            if variant == "standard":
+                self.classifier = nn.Linear(48, 19)
+            if variant == "cssr":
+                self.autoencoders = nn.ModuleList(nn.Sequential(nn.Linear(48, 12), nn.Tanh(),
+                                                                nn.Linear(12, 48)) for _ in range(19))
+                self.register_buffer("cssr_mean", torch.zeros(19, 48, dtype=torch.float64))
+                self.register_buffer("cssr_gram", torch.zeros(19, 48, 48, dtype=torch.float64))
+                self.register_buffer("cssr_location", torch.zeros(3, dtype=torch.float64))
+                self.register_buffer("cssr_scale", torch.zeros(3, dtype=torch.float64))
+                self.register_buffer("cssr_fitted", torch.tensor(False))
         self.register_buffer("calibration", torch.zeros(len(CALIBRATION_PROBABILITIES)))
         self.register_buffer("calibrated", torch.tensor(False))
 
     @staticmethod
-    def validate_checkpoint(saved, *, require_calibrated=False):
+    def validate_checkpoint(saved, *, require_calibrated=False, require_fitted=False):
         config = saved.get("config", {})
         if (saved.get("version") != NORMAL_VERSION
                 or config.get("architecture") != NORMAL_ARCHITECTURE
@@ -104,6 +122,8 @@ class NormalHypothesis(nn.Module):
             raise ValueError("incompatible normal reference shape")
         if require_calibrated and not bool(state.get("calibrated", False)):
             raise ValueError("normal reference calibration is required for anomaly inference")
+        if require_fitted and config.get("variant") == "cssr" and not bool(state.get("cssr_fitted", False)):
+            raise ValueError("CSSR normal activation statistics must be fitted before unknown inference")
 
     def load_pretrained(self, path):
         path = Path(path)
@@ -122,17 +142,33 @@ class NormalHypothesis(nn.Module):
 
     def loss_weights(self):
         weights = dict(NORMAL_LOSS_WEIGHTS)
-        if self.variant == "semantic":
+        if self.variant in ("semantic", "standard", "cssr"):
             weights.update(geometry=0., context=0.)
+        if self.variant in ("standard", "cssr", "no_compactness"):
+            weights["normal"] = 0.
+        if self.variant == "standard":
+            weights["semantic"] = 0.
+        if self.variant == "no_nll":
+            weights["geometry"] = 0.
         return weights
 
-    def semantic(self, sample, *, modes=False):
+    def features(self, sample):
         point = self.backbone(dict(coord=sample["voxel_xyzi"][:, :3], feat=sample["voxel_xyzi"],
             grid_coord=sample["grid"], grid_size=GRID_SIZE,
             offset=torch.tensor([len(sample["grid"])], device=sample["xyzi"].device)))
         xyzi = sample["xyzi"]
         detail = self.detail(torch.cat((xyzi[:, :3] / 50, xyzi[:, 3:4], sample["offset"]), -1))
-        features = self.embedding(torch.cat((point.feat[sample["inverse"]], detail), -1))
+        return self.embedding(torch.cat((point.feat[sample["inverse"]], detail), -1))
+
+    def reconstruction_error(self, features):
+        return torch.stack([(features - autoencoder(features)).abs().sum(-1)
+                            for autoencoder in self.autoencoders], -1)
+
+    def feature_energy(self, features, *, modes=False, mode_indices=None):
+        if self.variant == "standard":
+            return -self.classifier(features)
+        if self.variant == "cssr":
+            return .1 * self.reconstruction_error(features)
         # Several equally scaled appearance modes preserve normal intra-class diversity.
         centers = F.normalize(self.hypotheses.queries[:, None] + self.appearance_modes, dim=-1) * (48 ** .5)
         centers = centers.flatten(0, 1)
@@ -140,48 +176,74 @@ class NormalHypothesis(nn.Module):
                     - 2 * features @ centers.T).clamp_min(0) / 48
         costs = -distance.reshape(-1, 19, 4) / .2
         energy = -(torch.logsumexp(costs, -1) - np.log(4.))
-        return (energy, costs[sample["queries"]].softmax(-1)) if modes else energy
+        if modes:
+            selected = costs if mode_indices is None else costs[mode_indices]
+            return energy, selected.softmax(-1)
+        return energy
 
-    def components(self, sample, indices=None, *, semantic_energy=None):
+    def semantic(self, sample, *, modes=False):
+        if modes and self.variant in ("standard", "cssr"):
+            raise ValueError("appearance mode responsibilities require the multimodal appearance head")
+        return self.feature_energy(self.features(sample), modes=modes,
+                                   mode_indices=sample["queries"] if modes else None)
+
+    def components(self, sample, indices=None, *, semantic_energy=None, features=None, require_reference=True):
         from .normal import geometry_energy
+        if self.variant == "cssr" and features is None:
+            features = self.features(sample)
+            semantic_energy = self.feature_energy(features)
         semantic_energy = self.semantic(sample) if semantic_energy is None else semantic_energy
         if indices is None:
             indices = torch.arange(len(sample["xyzi"]), device=semantic_energy.device)
         semantic_energy = semantic_energy[indices]
-        prediction = None if self.variant == "semantic" else self.hypotheses(sample["observation"], indices)
+        prediction = (None if self.variant in ("semantic", "standard", "cssr")
+                      else self.hypotheses(sample["observation"], indices))
         geometry = torch.zeros_like(semantic_energy) if prediction is None else geometry_energy(prediction)
         energy = semantic_energy + geometry
+        raw_score = energy.amin(-1)
+        if self.variant == "standard":
+            raw_score = -torch.logsumexp(-energy, -1)
+        if self.variant == "cssr":
+            if not bool(self.cssr_fitted) and require_reference:
+                raise ValueError("CSSR normal activation statistics must be fitted before unknown inference")
+            raw_score = (self.cssr_score(features[indices], energy / .1)
+                         if bool(self.cssr_fitted) else None)
         return dict(logits=-energy, semantic_energy=semantic_energy, geometry_energy=geometry,
-                    energy=energy, raw_score=energy.amin(-1), prediction=prediction)
+                    energy=energy, raw_score=raw_score, prediction=prediction)
 
     def loss(self, sample):
         from .normal import allowed_loss, hypothesis_loss, observation_diagnostics
         indices, allowed = sample["queries"], sample["allowed"]
-        if self.training:
+        features = self.features(sample) if self.variant == "cssr" else None
+        if self.variant in ("standard", "cssr"):
+            semantic_energy = self.feature_energy(features) if features is not None else self.semantic(sample)
+        elif self.training:
             semantic_energy = self.semantic(sample)
         else:
             semantic_energy, appearance = self.semantic(sample, modes=True)
-        parts = self.components(sample, indices if self.training else None, semantic_energy=semantic_energy)
+        parts = self.components(sample, indices if self.training else None, semantic_energy=semantic_energy,
+                                features=features, require_reference=False)
         if self.training:
             logits, prediction = parts["logits"], parts["prediction"]
         else:
             # Development measures the exact full-point classifier used at inference.
             self.development_prediction = parts["logits"].argmax(-1).detach()
             self.development_semantic_prediction = semantic_energy.argmin(-1).detach()
-            self.development_raw_score = parts["raw_score"].detach()
+            self.development_raw_score = (parts["raw_score"].detach() if parts["raw_score"] is not None else None)
             logits = parts["logits"][indices]
             prediction = ({key: value[indices] for key, value in parts["prediction"].items()}
                           if parts["prediction"] is not None else None)
-            self.development_diagnostics = observation_diagnostics(
-                prediction, sample["observation"], indices, allowed[indices], appearance)
+            self.development_diagnostics = ({} if self.variant in ("standard", "cssr") else observation_diagnostics(
+                prediction, sample["observation"], indices, allowed[indices], appearance))
         # The control removes observation costs from supervised class competition.
         # Shared class parameters and predictive losses remain; inference uses E.
-        if self.variant != "joint":
+        if self.variant in ("semantic", "separate", "standard", "cssr"):
             logits = -semantic_energy[indices]
-        classification = allowed_loss(logits, allowed[indices])
-        semantic = allowed_loss(-semantic_energy, allowed)
+        classification = (allowed_loss(-semantic_energy, allowed) if self.variant == "standard"
+                          else allowed_loss(logits, allowed[indices]))
+        semantic = classification if self.variant == "standard" else allowed_loss(-semantic_energy, allowed)
         valid = allowed[indices].any(1)
-        if bool(valid.any()):
+        if self.variant not in ("standard", "cssr") and bool(valid.any()):
             admitted = allowed[indices][valid]
             support = (-semantic_energy[indices][valid]).masked_fill(~admitted, -torch.inf)
             normal = (-torch.logsumexp(support, -1) + admitted.sum(-1).float().log()).mean()
@@ -195,6 +257,77 @@ class NormalHypothesis(nn.Module):
         details.update(supervised=allowed.any(1).sum().detach(), queries=len(indices),
                        supported=prediction["supported"].sum().detach() if prediction is not None else 0)
         return loss, details
+
+    def cssr_support(self, features, errors):
+        """First- and second-order activation support use the predicted class."""
+        values = features.double().abs()
+        classes = errors.argmin(-1)
+        relative = -errors.double().amin(-1) / (values.sum(-1).square() + 1e-8)
+        first = (values * self.cssr_mean[classes]).sum(-1)
+        # Evaluate b^T G_c b by class to avoid an N x D x D temporary.
+        second = torch.zeros_like(first)
+        for category in classes.unique():
+            selected = classes == category
+            group = values[selected]
+            second[selected] = ((group @ self.cssr_gram[category]) * group).sum(-1)
+        return torch.stack((relative, first, second), -1)
+
+    def cssr_score(self, features, errors):
+        return -((self.cssr_support(features, errors) - self.cssr_location)
+                 / (self.cssr_scale + 1e-8)).sum(-1).to(features.dtype)
+
+    @torch.no_grad()
+    def fit_cssr_reference(self, unaugmented, augmented, device):
+        """Fit the paper's two normal-training references with bounded memory."""
+        if self.variant != "cssr":
+            raise ValueError("activation references only apply to the CSSR-style control")
+        self.eval()
+        count = torch.zeros(19, dtype=torch.float64, device=device)
+        sums = torch.zeros_like(self.cssr_mean)
+        grams = torch.zeros_like(self.cssr_gram)
+        frames = 0
+        for sample in unaugmented:
+            sample = to_device(sample, device)
+            features = self.features(sample)[sample["allowed"].any(1)]
+            classes = self.reconstruction_error(features).argmin(-1)
+            values = features.double().abs()
+            count += torch.bincount(classes, minlength=19)
+            sums.index_add_(0, classes, values)
+            for category in classes.unique():
+                group = values[classes == category]
+                grams[category] += group.T @ group
+            frames += 1
+        if not bool(count.sum()):
+            raise ValueError("CSSR statistics require nonempty normal training points")
+        mean = sums / count.clamp_min(1)[:, None]
+        self.cssr_mean.copy_(mean / (mean.sum(0) + 1e-8))
+        self.cssr_gram.copy_(grams / count.clamp_min(1)[:, None, None])
+        # Parallel Welford updates avoid cancellation in the activation variances.
+        total, augmented_frames = 0, 0
+        location = torch.zeros_like(self.cssr_location)
+        squared = torch.zeros_like(location)
+        for sample in augmented:
+            sample = to_device(sample, device)
+            features = self.features(sample)[sample["allowed"].any(1)]
+            support = self.cssr_support(features, self.reconstruction_error(features))
+            size = len(support)
+            if size:
+                current = support.mean(0)
+                delta = current - location
+                squared += (support - current).square().sum(0) + delta.square() * total * size / (total + size)
+                location += delta * size / (total + size)
+                total += size
+            augmented_frames += 1
+        if not total or not bool(torch.isfinite(location).all() & torch.isfinite(squared).all()):
+            raise ValueError("CSSR standardization requires finite augmented normal training points")
+        self.cssr_location.copy_(location)
+        self.cssr_scale.copy_((squared / total).clamp_min(0).sqrt())
+        self.cssr_fitted.fill_(True)
+        return dict(unaugmented_frames=frames, augmented_frames=augmented_frames,
+                    unaugmented_points=int(count.sum()), augmented_points=total,
+                    predicted_class_points=count.long().cpu().tolist(),
+                    population="reliably labeled normal source and target training returns; all returns remain encoder inputs",
+                    location=location.cpu().tolist(), scale=self.cssr_scale.cpu().tolist())
 
     def calibrate_score(self, raw_score):
         if not bool(self.calibrated):
@@ -214,15 +347,52 @@ class NormalHypothesis(nn.Module):
         # A shared monotone transform retains the joint ranking and extrapolates tails.
         return levels[indices - 1] + fraction * (levels[indices] - levels[indices - 1])
 
-    def predict(self, sample):
+    def _readout(self, parts, readout):
+        if readout not in NORMAL_READOUTS:
+            raise ValueError(f"unknown inference readout: {readout}")
+        energy = parts["energy"]
+        raw_score = parts["raw_score"]
+        if self.variant == "standard":
+            if readout not in ("joint", "energy", "softmax"):
+                raise ValueError("the standard classifier supports energy and softmax readouts")
+            if readout == "softmax":
+                raw_score = 1 - (-energy).softmax(-1).amax(-1)
+        elif readout in ("energy", "softmax"):
+            raise ValueError("energy and softmax readouts require the standard classifier")
+        elif self.variant == "cssr" and readout != "joint":
+            raise ValueError("the CSSR-style control uses its fitted activation score")
+        elif readout == "appearance":
+            energy = parts["semantic_energy"]
+            raw_score = energy.amin(-1)
+        elif readout == "common_density":
+            # Averaging densities, rather than energies, preserves normalization.
+            common = (-torch.logsumexp(-parts["geometry_energy"], -1) + np.log(19.)).clamp_min(0)
+            energy = parts["semantic_energy"] + common[:, None]
+            raw_score = parts["semantic_energy"].amin(-1) + common
+        elif readout == "independent_minima":
+            raw_score = parts["semantic_energy"].amin(-1) + parts["geometry_energy"].amin(-1)
+        score = (self.calibrate_score(raw_score)
+                 if readout == "joint" and bool(self.calibrated) else raw_score)
+        label_energy = parts["semantic_energy"] if readout == "common_density" else energy
+        return dict(semantic=label_energy.argmin(-1), semantic_only=parts["semantic_energy"].argmin(-1),
+                    raw_score=raw_score, score=score,
+                    confidence=(-label_energy).softmax(-1).amax(-1),
+                    semantic_confidence=(-parts["semantic_energy"]).softmax(-1).amax(-1),
+                    semantic_score=parts["semantic_energy"].amin(-1))
+
+    def predict(self, sample, readout="joint"):
+        with torch.autocast(sample["xyzi"].device.type, enabled=False):
+            return self._readout(self.components(sample), readout)
+
+    def predict_readouts(self, sample):
         with torch.autocast(sample["xyzi"].device.type, enabled=False):
             parts = self.components(sample)
-            return dict(semantic=parts["energy"].argmin(-1),
-                        semantic_only=parts["semantic_energy"].argmin(-1),
-                        raw_score=parts["raw_score"], score=self.calibrate_score(parts["raw_score"]),
-                        confidence=(-parts["energy"]).softmax(-1).amax(-1),
-                        semantic_confidence=(-parts["semantic_energy"]).softmax(-1).amax(-1),
-                        semantic_score=parts["semantic_energy"].amin(-1))
+            readouts = ("joint", "appearance", "common_density", "independent_minima")
+            if self.variant == "standard":
+                readouts = ("energy", "softmax")
+            elif self.variant in ("semantic", "cssr"):
+                readouts = ("joint",)
+            return {name: self._readout(parts, name) for name in readouts}
 
     def forward(self, sample):
         return self.predict(sample)["score"]

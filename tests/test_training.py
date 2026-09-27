@@ -24,13 +24,14 @@ def test_evaluation_record_preserves_official_population_and_ignored_returns(tmp
                   targets=torch.tensor([1, 1, 1, 1, 1, 0, 0, -1, -1]),
                   prediction=torch.tensor([2., 1., 3., 1., 4., .5, 1.5, 100., -100.]))
     monkeypatch.setattr(evaluation, "PreparedScans", lambda manifest, **kwargs: [sample])
+    monkeypatch.setattr(evaluation, "Scans", lambda manifest: [{key: sample[key].numpy() for key in ("slots", "targets")}])
     manifest = dict(kind="val", sha256="fixture", records=[dict(eligible=True, normal=2, anomaly=5, points=9, slots=19)])
     expected = evaluation.evaluate(Score(), manifest, torch.device("cpu"), 0)
     actual = evaluation.evaluate(Score(), manifest, torch.device("cpu"), 0, tmp_path / "val1.npy", record_points=True)
     assert actual["metrics"] == expected["metrics"]
     np.testing.assert_array_equal(np.load(tmp_path / "val1.npy"), sample["prediction"][:7].numpy())
     np.testing.assert_array_equal(np.load(tmp_path / "val1_all.npy"), sample["prediction"].numpy())
-    identities = np.load(tmp_path / "val_points.npy")
+    identities = np.load(tmp_path / "val1_points.npy")
     np.testing.assert_array_equal(identities["slot"], sample["slots"].numpy())
     np.testing.assert_array_equal(identities["target"], sample["targets"].numpy())
     independent = evaluation.recompute_metrics(tmp_path / "val1.npy", manifest)
@@ -275,7 +276,7 @@ def test_normal_development_keeps_all_point_semantics_and_additive_diagnostics(m
     from src.train import normal_development
 
     class Dataset:
-        def __init__(self, records, queries):
+        def __init__(self, records, queries, seed=206):
             self.records = records
 
         def __getitem__(self, index):
@@ -315,7 +316,7 @@ def test_normal_calibration_reuses_development_with_identical_samples_quantiles_
     loads = []
 
     class Dataset:
-        def __init__(self, records, queries):
+        def __init__(self, records, queries, seed=206):
             self.records, self.queries = records, queries
 
         def __len__(self):
@@ -429,3 +430,92 @@ def test_normal_calibration_reuses_development_with_identical_samples_quantiles_
         normal_calibration(fresh, records, device, 0, tmp_path / "partial", deadline=10.)
     assert fresh.reference_forwards == before + 1
     assert not (tmp_path / "partial" / "calibration.json").exists()
+
+
+def test_training_accumulates_frames_and_resumes_exact_rng_and_schedule(tmp_path, monkeypatch):
+    import src.train as training
+    import src.data as data
+
+    class Dataset:
+        def __init__(self, records, **kwargs):
+            self.records = records
+
+        def __getitem__(self, key):
+            epoch, index = key
+            return dict(x=torch.tensor([[float(index + 1), float(epoch + 1)]]))
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(2, 1)
+            self.dropout = nn.Dropout(.2)
+
+        def loss(self, sample):
+            value = self.linear(self.dropout(sample['x'])).square().mean()
+            return value, dict(classification=value.detach())
+
+    def optimizer(model, stage):
+        return torch.optim.SGD([dict(params=list(model.parameters()), lr=.01, peak_lr=.01)])
+
+    def development(model, *args, **kwargs):
+        model.eval()
+        # Evaluation may consume RNG; it must not change subsequent training.
+        torch.rand(9)
+        return dict(mean_iou_gt=.5, objective=float(model.linear.weight.detach().square().sum()))
+
+    monkeypatch.setattr(data, 'NormalScans', Dataset)
+    monkeypatch.setattr(training, 'normal_optimizer', optimizer)
+    monkeypatch.setattr(training, 'normal_development', development)
+    monkeypatch.setattr(training, 'disk_check', lambda *args: {})
+    config = dict(batch=2, queries=19, seed=206, eval_every=2, target_eval_every=2)
+    order = [(0, i) for i in range(6)] + [(1, 0)]
+    full, interrupted = tmp_path / 'full', tmp_path / 'interrupted'
+    full.mkdir()
+    interrupted.mkdir()
+    torch.manual_seed(99)
+    reference = Model()
+    candidate = deepcopy(reference)
+    training.seed_all(206)
+    full_stages = {}
+    training.train_stage(reference, list(range(6)), [{}], [0], order, config, 'source',
+                         full, torch.device('cpu'), 0, stages=full_stages, checkpoint_every=2)
+    expected_rng = training.rng_state(torch.device('cpu'))
+    save = training.atomic_save
+
+    def stop_after_checkpoint(path, value):
+        save(path, value)
+        if path.name == 'last.pt' and value['trained_updates'] == 2:
+            raise InterruptedError('test interruption after a complete saved update')
+
+    monkeypatch.setattr(training, 'atomic_save', stop_after_checkpoint)
+    training.seed_all(206)
+    stages = {}
+    with pytest.raises(InterruptedError):
+        training.train_stage(candidate, list(range(6)), [{}], [0], order, config, 'source',
+                             interrupted, torch.device('cpu'), 0, stages=stages, checkpoint_every=2)
+    monkeypatch.setattr(training, 'atomic_save', save)
+    checkpoint = torch.load(interrupted / 'last.pt', weights_only=False)
+    training.train_stage(candidate, list(range(6)), [{}], [0], order, config, 'source',
+                         interrupted, torch.device('cpu'), 0, stages=stages,
+                         resume=checkpoint, checkpoint_every=2)
+    assert stages == full_stages
+    assert stages['source']['trained_frames'] == 7
+    assert stages['source']['trained_updates'] == 4
+    assert stages['source']['budget_complete']
+    for name, value in reference.state_dict().items():
+        torch.testing.assert_close(value, candidate.state_dict()[name], rtol=0, atol=0)
+    assert torch.equal(expected_rng['torch'], torch.get_rng_state())
+    assert (full / 'training.jsonl').read_text() == (interrupted / 'training.jsonl').read_text()
+
+
+def test_source_development_uses_distinct_scene_centers_and_fixed_update_rates():
+    from src.train import development_indices, learning_rate_factor, normal_order
+    rows = [dict(scene=f'{scene:03d}') for scene in range(150) for _ in range(5)]
+    chosen = development_indices(rows, 50, by_scene=True)
+    assert len(chosen) == len({rows[index]['scene'] for index in chosen}) == 50
+    assert all(index % 5 == 2 for index in chosen)
+    assert development_indices([{}] * 682, 68) == np.linspace(0, 681, 68, dtype=int).tolist()
+    assert len(normal_order(28130, 449, 2, 206, 'source')) // 2 == 28130
+    assert len(normal_order(28130, 449, 8, 206, 'target')) // 2 == 2244
+    assert learning_rate_factor(30, 1000) == 1
+    assert learning_rate_factor(1000, 1000) == .05

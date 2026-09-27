@@ -87,12 +87,19 @@ def test_paired_rescue_counts_and_complete_ties_use_official_scores():
     assert rows[1]["confident_unknown_lost"] == 1
     assert rows[1]["equal_actual_fpr"]
     assert rows[2]["actual_fpr"] == .2
-    assert result["methods"]["semantic"]["individual_operating_points"][2]["actual_fpr"] == .4
-    assert result["methods"]["semantic"]["operating_points"][2]["actual_fpr"] == .2
+    assert result["methods"]["semantic"]["operating_points"][2]["actual_fpr"] == .4
+    assert not rows[2]["equal_actual_fpr"]
+    assert rows[1]["confident_unknown_recovered_fraction"] == .5
+    assert rows[1]["confident_unknown_lost_fraction"] == .25
+    assert rows[1]["confident_unknown_net_recall_change"] == .25
     for name, records in (("semantic", baseline), ("joint", joint)):
         reference = PointOODMetricsCalculator()
         reference.all_labels, reference.all_scores = [labels], [records["score"]]
-        assert result["methods"][name]["metrics"] == reference.compute_metrics()
+        expected = reference.compute_metrics()
+        measured = result["methods"][name]["metrics"]
+        assert measured["threshold"] == expected["threshold"]
+        for key in ("AP", "AUROC", "FPR95"):
+            assert measured[key] == pytest.approx(expected[key], abs=1e-12, rel=0)
     # Every method shares one identity array; a common reorder cannot alter any
     # paired statistic, including confidence-selected rescue and loss counts.
     order = np.random.default_rng(7).permutation(len(labels))
@@ -140,7 +147,8 @@ def test_independent_variants_must_have_matched_actual_training_exposure():
         comparison_conditions(checkpoints, exploratory=True)
 
 
-def test_compare_records_one_shared_preparation_and_exact_point_identity(tmp_path, monkeypatch):
+@pytest.mark.parametrize("retain_fixed_records", [True, False])
+def test_compare_records_one_shared_preparation_and_exact_point_identity(tmp_path, monkeypatch, retain_fixed_records):
     import src.evaluate as evaluation
     import src.train as training
     from torch import nn
@@ -171,6 +179,9 @@ def test_compare_records_one_shared_preparation_and_exact_point_identity(tmp_pat
             return dict(score=score, raw_score=score + 1, confidence=torch.full((12,), .95),
                         semantic=torch.arange(12) % 19)
 
+        def predict_readouts(self, sample):
+            return {name: self.predict(sample) for name in ("joint", "appearance", "common_density", "independent_minima")}
+
     monkeypatch.setattr(evaluation, "PreparedScans", lambda *args, **kwargs: Prepared())
     monkeypatch.setattr(evaluation, "load_model", lambda path, device: (Model(path), matched_checkpoint(path)))
     monkeypatch.setattr(evaluation, "memory_available", lambda: 10 ** 15)
@@ -179,7 +190,8 @@ def test_compare_records_one_shared_preparation_and_exact_point_identity(tmp_pat
     manifest = dict(kind="val", version="unit-fixture", sha256="unit-fixture", records=[
         dict(eligible=True, normal=6, anomaly=5, points=12, scan=f"unit-fixture/{i}.bin") for i in range(2)])
     result = evaluation.compare(dict(semantic="semantic", joint="joint"), manifest, tmp_path,
-                                torch.device("cpu"), workers=0)
+                                torch.device("cpu"), workers=0, fixed_readouts=True,
+                                retain_fixed_records=retain_fixed_records)
     assert calls == [0, 1]
     identities = np.load(tmp_path / "returns.npy")
     labels = np.load(tmp_path / "labels.npy")
@@ -194,6 +206,10 @@ def test_compare_records_one_shared_preparation_and_exact_point_identity(tmp_pat
         np.testing.assert_array_equal(values["raw_score"], expected + 1)
     assert result["points"] == 22 and result["scans"] == 2
     assert result["conditions"]["matched"]
+    for name in ("joint_appearance", "joint_common_density", "joint_independent_minima"):
+        assert (tmp_path / (name + ".npy")).exists() == retain_fixed_records
+        assert (name in result["omitted_reproducible_readouts"]) != retain_fixed_records
+        assert name in result["methods"] and name in result["instance_coverage"]["methods"]
 
 
 def test_observation_diagnostics_matches_independent_student_mixture_quantiles():
@@ -255,6 +271,15 @@ def test_observation_diagnostics_matches_independent_student_mixture_quantiles()
         expected["geometry_scale_sum"][category] += sigma
         expected["geometry_mode_entropy_sum"][category] += entr(posterior).sum()
         expected["mean_pair_separation_sum"][category] += np.abs(mu[:, None] - mu[None, :])[np.triu_indices(3, 1)].sum()
+        if 2.5 <= distances[row] <= 50:
+            index = np.searchsorted([10., 20., 35.], distances[row], side="right")
+            quantities = dict(prediction_count=1, finite_interval_count=1,
+                nll_sum=-logsumexp(np.log(prior) + log_density[row, category]),
+                coverage90_count=.05 <= cdf(values[row]) <= .95,
+                width90_m_sum=quantiles[2] - quantiles[0],
+                abs_median_error_m_sum=abs(quantiles[1] - distances[row]))
+            for key, value in quantities.items():
+                expected["range_" + key][index] += value
     for key, value in expected.items():
         np.testing.assert_allclose(actual[key], value, rtol=2e-10, atol=2e-10, err_msg=key)
     assert actual["coarse_query_count"] == 1 and actual["unsupported_query_count"] == 2

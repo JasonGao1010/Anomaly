@@ -7,6 +7,11 @@ __pycache__/
 /results/train/**
 !/results/train/**/
 !/results/train/**/*.json
+# Prior implementation outputs retain their provenance and are never current results.
+/results/previous/**
+!/results/previous/**/
+!/results/previous/evidence/val19/metrics.json
+!/results/previous/evidence/val19/val.json
 /assets/val.json
 /assets/nuscenes.pth
 /results/data/**

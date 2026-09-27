@@ -26,7 +26,6 @@ LABELS = {
 }
 
 
-RAYS_PATH = Path(__file__).resolve().parents[1] / "assets" / "rays.npz"
 SOURCE_VERSION = "AJAE-V4-NS"
 MANIFEST_VERSION = "AJAE-V4-F240-R1"
 DATA_ROOT = Path("/home/jasongao/Data/STU")
@@ -114,58 +113,6 @@ class Frame:
         return np.flatnonzero(self.actual)
 
 
-class STUSequence:
-    """Stream the 449 original STU 206 normal training scans."""
-
-    def __init__(self, data_root):
-        self.directory = Path(data_root).expanduser().resolve(strict=True) / "train" / "206"
-        expected = [f"{index:06d}" for index in range(449)]
-        for name, suffix in (("velodyne", ".bin"), ("labels", ".label")):
-            if sorted(path.stem for path in (self.directory / name).glob(f"*{suffix}")) != expected:
-                raise ValueError(f"{name} must cover every 206 frame 0..448 exactly")
-        calibration = {}
-        for line in (self.directory / "calib.txt").read_text().splitlines():
-            if not line.strip():
-                continue
-            key, text = line.split(":", 1)
-            if key in calibration:
-                raise ValueError(f"duplicate calibration key: {key}")
-            matrix = np.eye(4)
-            matrix[:3] = np.asarray([float(v) for v in text.split()]).reshape(3, 4)
-            if not np.isfinite(matrix).all():
-                raise ValueError("calibration contains nonfinite values")
-            calibration[key] = matrix
-        transform = calibration["Tr"]
-        rigid(transform)
-        camera = np.loadtxt(self.directory / "poses.txt")
-        if camera.shape != (449, 12):
-            raise ValueError("206 poses must contain one 3 x 4 matrix per scan")
-        poses = np.broadcast_to(np.eye(4), (449, 4, 4)).copy()
-        poses[:, :3] = camera.reshape(449, 3, 4)
-        # KITTI camera poses are conjugated by Tr; they are not LiDAR poses directly.
-        inverse = np.linalg.inv(transform)
-        self.poses = readonly(np.stack([inverse @ pose @ transform for pose in poses]))
-        for pose in self.poses:
-            rigid(pose)
-
-    def __len__(self):
-        return len(self.poses)
-
-    def __getitem__(self, frame_id):
-        if type(frame_id) is not int or not 0 <= frame_id < len(self):
-            raise IndexError(frame_id)
-        scan = self.directory / "velodyne" / f"{frame_id:06d}.bin"
-        label = self.directory / "labels" / f"{frame_id:06d}.label"
-        if scan.stat().st_size != 131072 * 16 or label.stat().st_size != 131072 * 4:
-            raise ValueError(f"invalid 206 point/label byte lengths at frame {frame_id}")
-        frame = Frame(frame_id, np.fromfile(scan, dtype="<f4").reshape(-1, 4),
-                      self.poses[frame_id], np.fromfile(label, dtype="<u4"))
-        unknown = set(map(int, np.unique(frame.semantic))) - set(LABELS)
-        if unknown:
-            raise ValueError(f"unknown 206 raw semantics at frame {frame_id}: {unknown}")
-        return frame
-
-
 def point_targets(frame):
     """Return -1/0/1 for ignored/normal/anomalous points before frame selection."""
     if frame.labels is None:
@@ -209,65 +156,6 @@ def supervision(frame, *, allow_normal=False):
     return Supervision(readonly(targets), normal, anomaly, allow_normal)
 
 
-@dataclass(frozen=True, slots=True)
-class Rays:
-    """Calibrated origins and directions in original file-slot order."""
-
-    directions: np.ndarray
-    origins: np.ndarray
-    canonical_ids: np.ndarray
-    local: np.ndarray
-    beam_ids: np.ndarray | None = None
-    returned: np.ndarray | None = None
-
-    def __post_init__(self):
-        count = len(self.directions)
-        if self.directions.shape != (count, 3) or self.origins.shape != (count, 3):
-            raise ValueError("ray origins and directions must be aligned [N,3]")
-        if not np.isfinite(self.directions).all() or not np.isfinite(self.origins).all():
-            raise ValueError("ray geometry must be finite")
-        if not np.allclose(np.linalg.norm(self.directions, axis=1), 1, atol=1e-7, rtol=1e-7):
-            raise ValueError("ray directions must be unit vectors")
-        if self.canonical_ids.shape != (count,) or not np.issubdtype(self.canonical_ids.dtype, np.integer) or not np.array_equal(np.sort(self.canonical_ids), np.arange(count)):
-            raise ValueError("canonical ray IDs must form a complete permutation")
-        if self.local.ndim != 2 or self.local.shape[1] != 3 or not len(self.local) or count % len(self.local) or not np.isfinite(self.local).all():
-            raise ValueError("local beam vectors must be finite [beam,3] dividing the slot count")
-        for name in ("directions", "origins", "canonical_ids", "local"):
-            object.__setattr__(self, name, readonly(getattr(self, name).copy()))
-        if self.beam_ids is not None:
-            beam = np.asarray(self.beam_ids)
-            if beam.shape != (count,) or not np.issubdtype(beam.dtype, np.integer) or np.any((beam < 0) | (beam >= len(self.local))):
-                raise ValueError("explicit beam IDs must identify every native firing slot")
-            object.__setattr__(self, "beam_ids", readonly(beam.copy()))
-        if self.returned is not None:
-            returned = np.asarray(self.returned)
-            if returned.shape != (count,) or returned.dtype != np.bool_:
-                raise ValueError("native return flags must align with the firing slots")
-            object.__setattr__(self, "returned", readonly(returned.copy()))
-
-
-def read_rays(path=RAYS_PATH):
-    """Read the measured 206 ray parameters; historical passed flags are not evidence."""
-    with np.load(path, allow_pickle=False) as saved:
-        parameters = np.asarray(saved["even_params"], dtype=np.float64)
-        local = np.asarray(saved["even_local"], dtype=np.float64)
-        shifts = saved["integer_shift"]
-    if parameters.shape != (3,) or local.shape != (128, 3) or shifts.shape != (128,):
-        raise ValueError("invalid 206 ray calibration array shapes")
-    if not np.issubdtype(shifts.dtype, np.integer) or not np.isfinite(parameters).all():
-        raise ValueError("invalid 206 ray calibration parameters")
-    gamma, origin_x, origin_z = parameters
-    # Keep the measured encoder gauge and integer row shifts, including empty slots.
-    angle = math.pi + gamma - 2 * math.pi * (np.arange(1024)[None] - shifts[:, None]) / 1024
-    cosine, sine = np.cos(angle), np.sin(angle)
-    directions = np.stack((cosine * local[:, None, 0] - sine * local[:, None, 1],
-                           sine * local[:, None, 0] + cosine * local[:, None, 1],
-                           np.broadcast_to(local[:, None, 2], angle.shape)), axis=-1)
-    origins = np.stack((origin_x * cosine, origin_x * sine, np.full_like(cosine, origin_z)), axis=-1)
-    canonical = np.arange(128)[:, None] * 1024 + (np.arange(1024)[None] - shifts[:, None]) % 1024
-    return Rays(directions.reshape(-1, 3), origins.reshape(-1, 3), canonical.ravel(), local)
-
-
 def file_sha256(path):
     with open(path, "rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -309,8 +197,10 @@ def read_scan(scan, label=None, *, partition="val", expected=None, io_timing=Non
             raise ValueError(f"point/label count mismatch: {scan}")
         packed = np.frombuffer(raw_label, dtype="<u4")
         unified_labels(packed)
-        if expected is not None and (hashlib.sha256(raw_scan).hexdigest(),
-                                     hashlib.sha256(raw_label).hexdigest()) != expected:
+    if expected is not None:
+        actual = (hashlib.sha256(raw_scan).hexdigest(),
+                  None if label is None else hashlib.sha256(raw_label).hexdigest())
+        if actual != tuple(expected):
             raise ValueError(f"STU observation changed after manifest creation: {scan}")
     result = Frame(int(scan.stem), xyzi, np.eye(4), packed,
                    sequence_id=int(scan.parent.parent.name), partition=partition)
@@ -322,27 +212,34 @@ def read_scan(scan, label=None, *, partition="val", expected=None, io_timing=Non
 def _census_real(task):
     scan, label, partition = task
     frame = read_scan(scan, label, partition=partition)
-    selected = supervision(frame)
+    selected = supervision(frame) if label is not None else None
     return dict(sequence=frame.sequence_id, frame=frame.frame_id, scan=str(scan),
-                label=str(label), scan_sha256=hashlib.sha256(frame.xyzi.tobytes()).hexdigest(),
-                label_sha256=hashlib.sha256(frame.labels.tobytes()).hexdigest(),
+                label=None if label is None else str(label), scan_sha256=hashlib.sha256(frame.xyzi.tobytes()).hexdigest(),
+                label_sha256=None if label is None else hashlib.sha256(frame.labels.tobytes()).hexdigest(),
                 points=int(frame.actual.sum()), slots=len(frame.xyzi),
-                normal=selected.normal_count, anomaly=selected.anomaly_count,
-                eligible=selected.eligible)
+                normal=None if selected is None else selected.normal_count,
+                anomaly=None if selected is None else selected.anomaly_count,
+                eligible=None if selected is None else selected.eligible)
 
 
 def make_real_manifest(directory, *, partition="val", workers=4):
+    if partition not in ("val", "test") or workers < 1:
+        raise ValueError("STU manifests require val/test and positive workers")
     directory = Path(directory).resolve(strict=True)
-    sequences = sorted(p for p in directory.glob("1[0-9][0-9]") if p.is_dir())
+    sequences = sorted(p for p in directory.iterdir() if p.is_dir() and p.name.isdigit())
     if not sequences:
         raise ValueError(f"no official STU sequences in {directory}")
     tasks = []
     for sequence in sequences:
         scans = sorted((sequence / "velodyne").glob("*.bin"))
         labels = sorted((sequence / "labels").glob("*.label"))
-        if not scans or [p.stem for p in scans] != [p.stem for p in labels]:
+        if not scans or (labels and [p.stem for p in scans] != [p.stem for p in labels]) or (partition == "val" and not labels):
             raise ValueError(f"missing or unmatched STU scans/labels: {sequence}")
+        if not labels:
+            labels = [None] * len(scans)
         tasks.extend((s, t, partition) for s, t in zip(scans, labels))
+    if len({t is None for _, t, _ in tasks}) != 1:
+        raise ValueError("a STU evaluation population cannot mix labeled and hidden scans")
     with ProcessPoolExecutor(max_workers=workers) as executor:
         records = list(executor.map(_census_real, tasks, chunksize=8))
     result = dict(version=MANIFEST_VERSION, kind=partition, directory=str(directory),
@@ -478,7 +375,7 @@ def normal_cycle_annotations(root, metadata_sha256):
     return grouped
 
 
-def attach_normal_annotations(records, root):
+def attach_normal_annotations(records, root, *, directory=None):
     """Attach observed point labels and official cycle attributes to their own scans."""
     names = ("category", "instance", "attribute", "sample_annotation")
     provenance = {name: file_sha256(Path(root) / "v1.0-trainval" / (name + ".json")) for name in names}
@@ -492,7 +389,10 @@ def attach_normal_annotations(records, root):
         if row["sample_token"] in cycles:
             row["normal_cycles"] = cycles[row["sample_token"]]
         if row.get("normal_slots"):
-            path = Path(row["normal_annotation"])
+            # Reviewed annotations travel with their manifest, not an old workspace.
+            path = (Path(directory) / Path(row["normal_annotation"]).name
+                    if directory is not None else Path(row["normal_annotation"]))
+            row["normal_annotation"] = str(path.resolve())
             annotations = json.loads(path.read_text())["records"]
             match = [a for a in annotations if a["token"] == row["token"]]
             if (len(match) != 1 or match[0]["semantic"] != "building"
@@ -555,8 +455,9 @@ def refine_normal_labels(record, xyzi, label, allowed, slots):
                     allowed[np.ix_(points, fine)] = True
     claimed = set()
     for annotation in record.get("normal_fine", ()):
-        points = np.asarray(annotation["point_slots"], dtype=np.int64)
-        if (points.ndim != 1 or len(points) != len(np.unique(points))
+        points = np.asarray(annotation["point_slots"])
+        if (points.ndim != 1 or points.dtype.kind not in "iu" or not len(points)
+                or len(points) != len(np.unique(points))
                 or np.any(points < 0) or claimed.intersection(points.tolist())):
             raise ValueError("reviewed normal slots are invalid or overlap")
         claimed.update(points.tolist())
@@ -570,14 +471,28 @@ def refine_normal_labels(record, xyzi, label, allowed, slots):
         allowed[position, category] = True
 
 
-def normal_records(source, *, development=False):
+def normal_records(source, *, development=False, directory=None, root=None):
     """Only original source scans or the explicitly allowed normal STU sequences."""
     if source == "nuscenes":
-        path = Path("results/data/background") / ("val.json" if development else "train.json")
-        manifest = json.loads(path.read_text())
+        directory = Path(directory or "results/data/background")
+        kind = "val" if development else "train"
+        manifest = load_manifest(directory / (kind + ".json"), kind)
+        other_kind = "train" if development else "val"
+        other = load_manifest(directory / (other_kind + ".json"), other_kind)
+        # Partition identity is checked before labels are attached or scans trained.
+        for split, value in ((kind, manifest), (other_kind, other)):
+            rows = value["records"]
+            if (value["version"] != SOURCE_VERSION
+                    or any(row.get("source") != "nuscenes" or row.get("subset") != split
+                           or row.get("delta") or row.get("anomaly", 0) for row in rows)):
+                raise ValueError("normal source records do not belong to their original partition")
+            for key in ("token", "sample_token", "scan", "label"):
+                if len({row[key] for row in rows}) != len(rows):
+                    raise ValueError("duplicate normal source identity: " + key)
+        for key in ("scene", "log_token", "token", "sample_token", "scan", "label"):
+            if {row[key] for row in manifest["records"]} & {row[key] for row in other["records"]}:
+                raise ValueError("normal source training/development overlap: " + key)
         records = manifest["records"]
-        if any(row.get("source") != "nuscenes" or row.get("delta") or row.get("anomaly", 0) for row in records):
-            raise ValueError("normal-only training cannot consume inserted foregrounds")
         for row in records:
             for key in ("scan", "label"):
                 digest = file_sha256(row[key])
@@ -586,14 +501,16 @@ def normal_records(source, *, development=False):
                     raise ValueError("normal annotation source file changed: " + key)
                 # The run identity must include the bytes, including unrefined source scans.
                 row[key + "_sha256"] = digest
-        return attach_normal_annotations(records, manifest["root"])
+        return attach_normal_annotations(records, manifest["root"], directory=directory)
     if source not in ("206", "201") or development != (source == "201"):
         raise ValueError("normal protocol permits 206 training and 201 development only")
-    directory = DATA_ROOT / "train" / source
+    directory = Path(root or DATA_ROOT) / "train" / source
     calibration = {}
     for line in (directory / "calib.txt").read_text().splitlines():
         if line.strip():
             key, value = line.split(":", 1)
+            if key in calibration:
+                raise ValueError("duplicate normal sequence calibration: " + key)
             matrix = np.eye(4)
             matrix[:3] = np.fromstring(value, sep=" ").reshape(3, 4)
             calibration[key] = matrix
@@ -601,11 +518,18 @@ def normal_records(source, *, development=False):
     poses = np.broadcast_to(np.eye(4), (len(camera), 4, 4)).copy()
     poses[:, :3] = camera
     transform = calibration["Tr"]
+    rigid(transform)
     poses = np.linalg.inv(transform) @ poses @ transform
     scans = sorted((directory / "velodyne").glob("*.bin"))
-    if len(scans) != len(poses):
-        raise ValueError("normal sequence poses and scans differ")
+    labels = sorted((directory / "labels").glob("*.label"))
+    expected = [f"{index:06d}" for index in range(449 if source == "206" else 682)]
+    if ([p.stem for p in scans] != expected or [p.stem for p in labels] != expected
+            or len(scans) != len(poses)):
+        raise ValueError("normal sequence must preserve all original scan, label and pose identities")
+    for pose in poses:
+        rigid(pose)
     return [dict(source="normal_stu", scene=source, frame=int(scan.stem), scan=str(scan),
+                 subset="val" if development else "train",
                  label=str(directory / "labels" / (scan.stem + ".label")),
                  scan_sha256=file_sha256(scan),
                  label_sha256=file_sha256(directory / "labels" / (scan.stem + ".label")),
@@ -614,6 +538,8 @@ def normal_records(source, *, development=False):
 
 
 def read_normal_record(record):
+    if record["source"] not in ("nuscenes", "normal_stu"):
+        raise ValueError("normal training requires original nuScenes or STU records")
     source = record["source"] == "nuscenes"
     buffers = {}
     for key in ("scan", "label"):
@@ -628,8 +554,14 @@ def read_normal_record(record):
     # Decode the exact verified bytes; do not reopen a potentially replaced file.
     raw = np.frombuffer(buffers["scan"], dtype="<f4").reshape(-1, 5 if source else 4)
     label = np.frombuffer(buffers["label"], dtype=np.uint8 if source else "<u4")
-    if len(raw) != len(label) or not np.isfinite(raw).all():
+    if not len(raw) or len(raw) != len(label) or not np.isfinite(raw).all():
         raise ValueError("normal scan and point labels do not correspond")
+    if source and (np.any(label >= 32) or np.any((raw[:, 4] < 0) | (raw[:, 4] > 31))):
+        raise ValueError("unknown original nuScenes category or beam identity")
+    if not source:
+        unified_labels(label)
+    pose = np.asarray(record["pose"], dtype=np.float64)
+    rigid(pose)
     label = label.astype(np.int64) & 65535
     if not source and np.any(label == 2):
         raise ValueError("anomaly label entered normal-only training/development")
@@ -647,16 +579,16 @@ def read_normal_record(record):
     distance = np.linalg.norm(xyzi[:, :3], axis=1)
     allowed[(distance < 2.5) | (distance > 50)] = False
     return dict(xyzi=xyzi, allowed=allowed, slots=np.flatnonzero(actual), slot_count=len(raw),
-                pose=np.asarray(record["pose"], dtype=np.float64))
+                pose=pose)
 
 
 class NormalScans:
     """Real normal labels, full input context and bounded supervised queries."""
 
-    def __init__(self, records, *, augment=False, queries=4096):
+    def __init__(self, records, *, augment=False, queries=4096, seed=206):
         if queries <= 0:
             raise ValueError("normal supervision requires a positive query budget")
-        self.records, self.augment, self.queries = records, augment, queries
+        self.records, self.augment, self.queries, self.seed = records, augment, queries, seed
 
     def __len__(self):
         return len(self.records)
@@ -668,7 +600,7 @@ class NormalScans:
         epoch, index = index if isinstance(index, tuple) else (0, index)
         raw = read_normal_record(self.records[index])
         if self.augment:
-            angle = np.random.default_rng(np.random.SeedSequence([index, epoch, 613])).uniform(-np.pi, np.pi)
+            angle = np.random.default_rng(np.random.SeedSequence([self.seed, index, epoch, 613])).uniform(-np.pi, np.pi)
             rotation = np.array([[np.cos(angle), -np.sin(angle), 0],
                                  [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
             raw["xyzi"][:, :3] = raw["xyzi"][:, :3] @ rotation.T
@@ -678,7 +610,7 @@ class NormalScans:
                       observation=hypothesis_observation(raw["xyzi"]))
         valid = np.flatnonzero(raw["allowed"].any(1))
         # Fixed class-balanced query inclusion; the backbone still sees every return.
-        rng = np.random.default_rng(np.random.SeedSequence([index, epoch, 7291]))
+        rng = np.random.default_rng(np.random.SeedSequence([self.seed, index, epoch, 7291]))
         chosen = []
         for category in range(19):
             candidates = np.flatnonzero(raw["allowed"][:, category])
@@ -707,6 +639,13 @@ class Scans:
         record = self.records[index]
         frame = read_scan(record["scan"], record["label"], partition=self.manifest["kind"],
                           expected=(record["scan_sha256"], record["label_sha256"]))
+        if frame.labels is None:
+            if self.manifest["kind"] != "test":
+                raise ValueError("only hidden test scans may omit labels")
+            if (int(frame.actual.sum()), len(frame.xyzi)) != (record["points"], record["slots"]):
+                raise ValueError("hidden test point identities differ from manifest")
+            return dict(xyzi=frame.xyzi[frame.actual].copy(), slots=frame.return_slots,
+                        targets=None, instance=None, slot_count=len(frame.xyzi), index=index)
         targets = point_targets(frame)
         observed = (int(frame.actual.sum()), int((targets == 0).sum()),
                     int((targets == 1).sum()), len(frame.xyzi))
@@ -714,13 +653,14 @@ class Scans:
         if observed != expected:
             raise ValueError(f"decoded counts differ from manifest: {observed} != {expected}")
         return dict(xyzi=frame.xyzi[frame.actual].copy(), slots=frame.return_slots,
-                    targets=targets[frame.actual].copy(), slot_count=len(frame.xyzi), index=index)
+                    targets=targets[frame.actual].copy(), instance=frame.instance[frame.actual].copy(),
+                    slot_count=len(frame.xyzi), index=index)
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Prepare normal nuScenes sources or real STU validation scans.")
-    parser.add_argument("operation", choices=("nuscenes", "val"))
+    parser.add_argument("operation", choices=("nuscenes", "val", "test"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--nuscenes-root", type=Path, default=NUSCENES_ROOT)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
@@ -737,13 +677,14 @@ def main():
         return
     if args.normal_annotations is not None:
         parser.error("--normal-annotations requires nuscenes")
-    output = args.output or Path("assets/val.json")
+    output = args.output or Path(f"assets/{args.operation}.json")
     if output.exists():
-        parser.error("validation manifest already exists")
-    manifest = make_real_manifest(args.data_root / "val", workers=args.workers)
+        parser.error("evaluation manifest already exists")
+    manifest = make_real_manifest(args.data_root / args.operation, partition=args.operation, workers=args.workers)
     write_json(output, manifest)
     print(json.dumps(dict(scans=len(manifest["records"]),
-        eligible=sum(r["eligible"] for r in manifest["records"]), sha256=manifest["sha256"])))
+        eligible=sum(bool(r["eligible"]) for r in manifest["records"]),
+        labeled=all(r["label"] is not None for r in manifest["records"]), sha256=manifest["sha256"])))
 
 
 if __name__ == "__main__":

@@ -35,11 +35,14 @@ def network(inputs, hidden, outputs):
 
 def hypothesis_observation(xyzi, cell_degrees=.5):
     """Independent angular cells; withheld cell values never construct its state."""
+    xyzi = np.asarray(xyzi)
+    if xyzi.ndim != 2 or xyzi.shape[1] != 4:
+        raise ValueError("normal hypotheses require XYZI returns")
     xyz = np.asarray(xyzi[:, :3], dtype=np.float64)
     distance = np.linalg.norm(xyz, axis=1)
     if not len(xyz) or np.any(distance <= 0) or not np.isfinite(xyzi).all():
         raise ValueError("normal hypotheses require finite actual returns")
-    if cell_degrees <= 0 or not np.isclose(180 / cell_degrees, round(180 / cell_degrees)):
+    if not np.isfinite(cell_degrees) or cell_degrees <= 0 or not np.isclose(180 / cell_degrees, round(180 / cell_degrees)):
         raise ValueError("angular cell size must divide 180 degrees")
     rays = xyz / distance[:, None]
     azimuth = (np.rad2deg(np.arctan2(rays[:, 1], rays[:, 0])) + 180) % 360
@@ -74,8 +77,11 @@ def hypothesis_observation(xyzi, cell_degrees=.5):
 class SemanticHypotheses(nn.Module):
     """Nineteen normal explanations, each predicting a held-out return surface."""
 
-    def __init__(self):
+    def __init__(self, components=3, target_available=False):
         super().__init__()
+        if components not in (1, 3):
+            raise ValueError("the paper specifies one or three predictive components")
+        self.components, self.target_available = components, target_available
         self.encoder = network(7, 32, 32)
         self.pool = nn.Linear(64, 48)
         self.position = nn.Linear(3, 48)
@@ -85,12 +91,14 @@ class SemanticHypotheses(nn.Module):
             attention=nn.MultiheadAttention(48, 3, batch_first=True),
             norm=nn.LayerNorm(48), feedforward=network(48, 96, 48), final_norm=nn.LayerNorm(48),
         )) for _ in range(2))
-        self.surface = nn.Linear(48, 3 * 8)
         self.belief = nn.Linear(48, 1)
-        nn.init.normal_(self.surface.weight, std=.001)
-        nn.init.zeros_(self.surface.bias)
-        with torch.no_grad():
-            self.surface.bias.reshape(3, 8)[:, 6] = -2.
+        # Varying mixture size must not advance the common-module random stream.
+        with torch.random.fork_rng(devices=[]):
+            self.surface = nn.Linear(48, components * 8)
+            nn.init.normal_(self.surface.weight, std=.001)
+            nn.init.zeros_(self.surface.bias)
+            with torch.no_grad():
+                self.surface.bias.reshape(components, 8)[:, 6] = -2.
 
     def encode(self, observation):
         features = self.encoder(observation["features"])
@@ -112,6 +120,8 @@ class SemanticHypotheses(nn.Module):
     def propose(self, observation, encoded, groups, projected=None):
         tokens, depth = encoded
         neighbors = observation["neighbors"][groups]
+        if self.target_available:
+            neighbors = torch.cat((neighbors, groups[:, None]), 1)
         present = neighbors < len(tokens)
         # An explicit empty token keeps completely isolated cells numerically valid.
         neighbors = F.pad(neighbors, (0, 1), value=len(tokens))
@@ -132,7 +142,7 @@ class SemanticHypotheses(nn.Module):
             state = layer["final_norm"](state + layer["feedforward"](state))
         base = (F.pad(depth, (0, 1))[neighbors[:, :-1]] * present).sum(1) / present.sum(1).clamp_min(1)
         base = torch.where(present.any(1), base, torch.full_like(base, math.log(20)))
-        raw = self.surface(state).reshape(-1, 19, 3, 8)
+        raw = self.surface(state).reshape(-1, 19, self.components, 8)
         # Unbounded, normalized quadratic coefficients can represent the steep
         # angular range changes of distant ground without a hand-set slope limit.
         return dict(mean=base[:, None, None] + raw[..., 0],
@@ -144,11 +154,11 @@ class SemanticHypotheses(nn.Module):
         encoded = self.encode(observation)
         if not len(indices):
             zero = encoded[0].sum() * 0
-            return dict(log_prob=zero.expand(0, 19, 3), log_compatibility=zero.expand(0, 19, 3),
-                        weight=zero.expand(0, 19, 3), belief=zero.expand(0, 19),
+            return dict(log_prob=zero.expand(0, 19, self.components), log_compatibility=zero.expand(0, 19, self.components),
+                        weight=zero.expand(0, 19, self.components), belief=zero.expand(0, 19),
                         supported=observation["group"].new_empty(0, dtype=torch.bool),
-                        group=observation["group"][indices], scale=zero.expand(0, 19, 3),
-                        mean=zero.expand(0, 19, 3))
+                        group=observation["group"][indices], scale=zero.expand(0, 19, self.components),
+                        mean=zero.expand(0, 19, self.components))
         projected = self.project_context(encoded[0])
         groups, inverse = observation["group"][indices].unique(sorted=True, return_inverse=True)
         parts = [self.propose(observation, encoded, part, projected) for part in groups.split(HYPOTHESIS_CHUNK)]
@@ -220,9 +230,13 @@ def observation_diagnostics(prediction, observation, indices, allowed, appearanc
                 "abs_median_error_m_sum", "finite_interval_count", "geometry_mode_entropy_sum",
                 "mean_pair_separation_sum"):
         result[key] = torch.zeros(19, device=device, dtype=torch.float64)
-    result["geometry_mode_mass"] = torch.zeros(19, 3, device=device, dtype=torch.float64)
-    result["geometry_prior_mass"] = torch.zeros(19, 3, device=device, dtype=torch.float64)
-    result["geometry_scale_sum"] = torch.zeros(19, 3, device=device, dtype=torch.float64)
+    components = 3 if prediction is None else prediction["weight"].shape[-1]
+    result["geometry_mode_mass"] = torch.zeros(19, components, device=device, dtype=torch.float64)
+    result["geometry_prior_mass"] = torch.zeros(19, components, device=device, dtype=torch.float64)
+    result["geometry_scale_sum"] = torch.zeros(19, components, device=device, dtype=torch.float64)
+    for key in ("prediction_count", "nll_sum", "coverage90_count", "width90_m_sum",
+                "abs_median_error_m_sum", "finite_interval_count"):
+        result["range_" + key] = torch.zeros(4, device=device, dtype=torch.float64)
     result.update(coarse_query_count=0, coarse_nll_sum=0., unsupported_query_count=0)
     if prediction is None:
         return {key: value.cpu().numpy() if torch.is_tensor(value) else value for key, value in result.items()}
@@ -262,7 +276,7 @@ def observation_diagnostics(prediction, observation, indices, allowed, appearanc
             nll_sum=-torch.logsumexp(prediction["weight"][valid, c].double() + prediction["log_prob"][valid, c].double(), -1),
             coverage90_count=((pit >= .05) & (pit <= .95)).double(),
             geometry_mode_entropy_sum=-(posterior * posterior.clamp_min(1e-300).log()).sum(-1),
-            mean_pair_separation_sum=(mean[:, 0] - mean[:, 1]).abs() + (mean[:, 0] - mean[:, 2]).abs() + (mean[:, 1] - mean[:, 2]).abs(),
+            mean_pair_separation_sum=torch.triu((mean[:, :, None] - mean[:, None, :]).abs(), diagonal=1).sum((1, 2)),
             finite_interval_count=finite.double())
         for key, values in quantities.items():
             result[key].index_add_(0, c, values)
@@ -271,4 +285,13 @@ def observation_diagnostics(prediction, observation, indices, allowed, appearanc
         result["geometry_scale_sum"].index_add_(0, c, scale)
         result["width90_m_sum"].index_add_(0, c[finite], quantiles[finite, 2] - quantiles[finite, 0])
         result["abs_median_error_m_sum"].index_add_(0, c[finite], (quantiles[finite, 1] - value[finite].exp()).abs())
+        # Match interval boundaries in the recorded log-range precision.
+        edges = observation["log_distance"].new_tensor(np.log([2.5, 10., 20., 35., 50.])).double()
+        bins = torch.bucketize(value, edges[1:-1], right=True)
+        in_range = (value >= edges[0]) & (value <= edges[-1])
+        for key in ("prediction_count", "nll_sum", "coverage90_count", "finite_interval_count"):
+            result["range_" + key].index_add_(0, bins[in_range], quantities[key][in_range])
+        bounded = in_range & finite
+        result["range_width90_m_sum"].index_add_(0, bins[bounded], quantiles[bounded, 2] - quantiles[bounded, 0])
+        result["range_abs_median_error_m_sum"].index_add_(0, bins[bounded], (quantiles[bounded, 1] - value[bounded].exp()).abs())
     return {key: value.cpu().numpy() if torch.is_tensor(value) else value for key, value in result.items()}

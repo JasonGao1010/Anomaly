@@ -1,11 +1,9 @@
-"""Normal-only SERVE training, development and calibration utilities.
-
-The repository currently has no end-to-end SERVE training entry point.
-"""
+"""Normal-only SERVE training, normal selection and optional score calibration."""
 
 from collections import defaultdict
-import importlib.metadata
+import argparse
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -17,11 +15,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .data import file_sha256, identity, write_json
+from .data import identity, write_json
 from .evaluate import memory_available
-from .model import to_device, LITEPT_COMMIT, WEIGHTS_REVISION, WEIGHTS_SHA256
+from .model import to_device
 
-ROOT = Path(__file__).resolve().parents[1]
 NORMAL_SELECTION = "maximum mIoU over the fixed ground-truth-present normal development classes; minimum normal objective breaks exact ties; no anomaly labels"
 
 
@@ -84,23 +81,12 @@ def runtime_snapshot():
                 gpu=command(["nvidia-smi", "--query-gpu=name,memory.total,memory.free,utilization.gpu",
                              "--format=csv,noheader"]),
                 processes=command(["nvidia-smi", "--query-compute-apps=pid,process_name",
-                                   "--format=csv,noheader"]))
-
-
-def code_record():
-    files = sorted(list((ROOT / "src").glob("*.py")) + list((ROOT / "vendor").rglob("*.py")))
-    dependencies = {}
-    for name in ("torch", "numpy", "scipy", "scikit-learn", "timm", "addict",
-                 "flash_attn", "torch_scatter", "spconv-cu126", "cumm-cu126"):
-        dependencies[name] = importlib.metadata.version(name)
-    return dict(files={str(p.relative_to(ROOT)): file_sha256(p) for p in files},
-                dependencies=dependencies, python=sys.version,
-                litept_commit=LITEPT_COMMIT, stu_commit="8f0f09c2ca4bf7b665e0ae5919b4092ddae140a2",
-                weights_revision=WEIGHTS_REVISION, weights_sha256=WEIGHTS_SHA256)
+                                   "--format=csv,noheader"]),
+                cpu_processes=command(["ps", "-eo", "pid,pcpu,pmem,comm", "--sort=-pcpu"]))
 
 
 @torch.no_grad()
-def normal_development(model, records, indices, device, workers, *, queries=4096, calibration=None, deadline=None):
+def normal_development(model, records, indices, device, workers, *, queries=4096, calibration=None, deadline=None, seed=206):
     from .data import NormalScans
     model.eval()
     if calibration is not None:
@@ -108,9 +94,9 @@ def normal_development(model, records, indices, device, workers, *, queries=4096
                 or any(row.get("source") != "normal_stu" or row.get("scene") != "201" for row in records)):
             raise ValueError("calibration reuse requires the complete ordered STU 201 development population")
         calibration.update(frames=[], scores=[], data_identity=identity(records), variant=model.variant)
-    data = NormalScans(records, queries=queries)
+    data = NormalScans(records, queries=queries, seed=seed)
     loader = DataLoader(data, batch_size=None, sampler=indices, num_workers=workers,
-                        pin_memory=True, prefetch_factor=1 if workers else None)
+                        pin_memory=device.type == "cuda", prefetch_factor=1 if workers else None)
     totals, count = defaultdict(float), 0
     diagnostics = {}
     class_changes = np.zeros((19, 2), np.int64)
@@ -200,6 +186,7 @@ def normal_development(model, records, indices, device, workers, *, queries=4096
         row["bins"] = "right-closed intervals split at edges; the first and last bins include the remaining tails"
     counts = ("joint_set_correct", "semantic_set_correct", "set_points", "corrected_points", "worsened_points")
     measured = {key: value / count for key, value in totals.items() if key not in counts}
+    from .evaluate import predictive_summary
     return dict(**measured, **summaries["joint"], semantic_only=summaries["semantic"],
                 joint_comparison={key: int(totals[key]) for key in ("set_points", "corrected_points", "worsened_points")},
                 per_class_comparison=dict(corrected_points=class_changes[:, 0].tolist(),
@@ -208,6 +195,7 @@ def normal_development(model, records, indices, device, workers, *, queries=4096
                 semantic_definition="formal inference decision for this variant; semantic_only is an internal diagnostic of these same weights, not an independently trained baseline",
                 iou_definition="pooled reliable singleton-label points; mean_iou_gt averages the fixed ground-truth-present classes; mean_iou_present averages nonzero unions; set accuracy also includes coarse labels",
                 strata=strata, observation_diagnostics={key: value.tolist() for key, value in diagnostics.items()},
+                predictive=predictive_summary(diagnostics),
                 observation_diagnostics_scope="additive statistics over the deterministic reliable supervision queries; normal semantic confusion covers every reliable input point",
                 scans=count, seconds=time.monotonic() - start)
 
@@ -294,22 +282,6 @@ def normal_reference(path, config):
     return other, stages
 
 
-def normal_baseline_comparison(path, config, measured):
-    other, _ = normal_reference(path, config)
-    if other.get("variant") != "semantic":
-        raise ValueError("an independent normal semantic baseline must use variant=semantic")
-    baseline = json.loads((Path(path) / "normal201.json").read_text())
-    if baseline["ground_truth_points"] != measured["ground_truth_points"] or baseline["scans"] != measured["scans"]:
-        raise ValueError("normal baseline and method development must cover the identical labeled population")
-    difference = [None if first is None or second is None else first - second
-                  for first, second in zip(measured["iou"], baseline["iou"])]
-    return dict(baseline=str(Path(path).resolve()), comparison="independently trained semantic variant; identical normal data, frame order and nominal update schedule",
-                mean_iou_gt_difference=measured["mean_iou_gt"] - baseline["mean_iou_gt"],
-                set_accuracy_difference=measured["set_accuracy"] - baseline["set_accuracy"],
-                per_class_iou_difference=difference, ground_truth_points=measured["ground_truth_points"],
-                absent_classes=measured["absent_classes"])
-
-
 def normal_optimizer(model, stage):
     groups = []
     for backbone in (True, False):
@@ -349,7 +321,7 @@ def normal_calibration(model, records, device, workers, output, *, seed=206, ref
         torch.empty((), dtype=torch.int64).random_()
     else:
         scores = []
-        loader = DataLoader(NormalScans(records, queries=1), batch_size=None, num_workers=workers,
+        loader = DataLoader(NormalScans(records, queries=1, seed=seed), batch_size=None, num_workers=workers,
                             pin_memory=device.type == "cuda", prefetch_factor=1 if workers else None)
         for frame, sample in enumerate(loader):
             if deadline is not None and time.time() >= deadline:
@@ -382,7 +354,390 @@ def normal_calibration(model, records, device, workers, output, *, seed=206, ref
                   inference="reused from full normal development" if reused else "dedicated normal reference inference",
                   point_scope="actual returns with at least one reliable normal class in the 2.5–50 metre supervision range",
                   sampling="uniform without replacement within each frame's reliable normal points; no class balancing or support filtering",
-                  score_definition=f"minimum formal class energy for variant={model.variant}; identical raw_score as inference",
+                  score_definition=f"formal raw_score returned by components for variant={model.variant}; identical to inference",
                   meaning="one monotone normal-reference transform preserves the joint score ordering; not an anomaly probability or anomaly-performance estimate")
     write_json(output / "calibration.json", result)
     return result
+
+
+def development_indices(records, count, *, by_scene=False):
+    """Select normal checkpoints on central source frames or uniformly spaced target frames."""
+    if not records or count < 1:
+        raise ValueError("normal development selection requires nonempty records")
+    if not by_scene:
+        return np.linspace(0, len(records) - 1, min(count, len(records)), dtype=int).tolist()
+    scenes = defaultdict(list)
+    for index, row in enumerate(records):
+        scenes[row["scene"]].append(index)
+    names = sorted(scenes)
+    chosen = np.linspace(0, len(names), min(count, len(names)), endpoint=False, dtype=int)
+    return [scenes[names[i]][len(scenes[names[i]]) // 2] for i in chosen]
+
+
+def learning_rate_factor(update, updates):
+    """Use optimizer-update coordinates, independent of model speed or checkpoint selection."""
+    if not 1 <= update <= updates:
+        raise ValueError("learning-rate update must lie within the complete stage")
+    warmup = max(1, math.ceil(.03 * updates))
+    if update <= warmup:
+        return update / warmup
+    phase = (update - warmup) / max(1, updates - warmup)
+    return .05 + .95 * (1 + math.cos(math.pi * phase)) / 2
+
+
+def train_stage(model, records, development, selection, order, config, stage, output,
+                device, workers, *, stages, resume=None, checkpoint_every=250):
+    from .data import NormalScans
+    from .model import NORMAL_VERSION
+    optimizer = normal_optimizer(model, stage)
+    batch = config["batch"]
+    updates = math.ceil(len(order) / batch)
+    completed = 0
+    best = None
+    selected_update = None
+    if resume is not None:
+        if resume["stage"] != stage or resume["config"] != config:
+            raise ValueError("resume changes the model, data or training configuration")
+        model.load_state_dict(resume["model"], strict=True)
+        optimizer.load_state_dict(resume["optimizer"])
+        completed = resume["trained_updates"]
+        best = resume["best_selection"]
+        selected_update = resume["selected_update"]
+        restore_rng(resume["rng"], device)
+    if not 0 <= completed <= updates:
+        raise ValueError("resume update is outside the stage budget")
+    dataset = NormalScans(records, augment=True, queries=config["queries"], seed=config["seed"])
+    loader = DataLoader(dataset, batch_size=None, sampler=order[completed * batch:],
+                        num_workers=workers, pin_memory=device.type == "cuda",
+                        prefetch_factor=1 if workers else None,
+                        generator=torch.Generator().manual_seed(config["seed"]))
+    iterator = iter(loader)
+    frequency = config["eval_every" if stage == "source" else "target_eval_every"]
+    log_path = output / "training.jsonl"
+    # A resumed run discards reports newer than its last fully saved update.
+    if resume is not None and log_path.exists():
+        lines = [json.loads(line) for line in log_path.read_text().splitlines()]
+        lines = [row for row in lines if row["stage"] != stage or row["update"] <= completed]
+        log_path.write_text("".join(json.dumps(row, allow_nan=False) + "\n" for row in lines))
+    start = time.monotonic()
+    initial_update = completed
+    model.train()
+    for update in range(completed + 1, updates + 1):
+        count = min(batch, len(order) - (update - 1) * batch)
+        factor = learning_rate_factor(update, updates)
+        for group in optimizer.param_groups:
+            group["lr"] = group["peak_lr"] * factor
+        optimizer.zero_grad(set_to_none=True)
+        terms = defaultdict(float)
+        for _ in range(count):
+            sample = to_device(next(iterator), device)
+            # Sequential accumulation averages frame losses without mixing point populations.
+            loss, detail = model.loss(sample)
+            if not bool(torch.isfinite(loss)):
+                raise FloatingPointError(f"nonfinite {stage} loss at update {update}")
+            (loss / count).backward()
+            terms["objective"] += float(loss.detach()) / count
+            for key, value in detail.items():
+                terms[key] += float(value) / count
+        finite = [torch.isfinite(parameter.grad).all() for parameter in model.parameters()
+                  if parameter.grad is not None]
+        if not finite or not bool(torch.stack(finite).all()):
+            raise FloatingPointError(f"nonfinite or absent {stage} gradient at update {update}")
+        optimizer.step()
+        trained_frames = min(update * batch, len(order))
+        row = dict(stage=stage, update=update, frames=trained_frames,
+                   learning_rates=[group["lr"] for group in optimizer.param_groups], **terms)
+        with log_path.open("a") as stream:
+            stream.write(json.dumps(row, allow_nan=False) + "\n")
+        evaluate_now = update % frequency == 0 or update == updates
+        if evaluate_now:
+            state = rng_state(device)
+            measured = normal_development(model, development, selection, device, workers,
+                                          queries=config["queries"], seed=config["seed"])
+            restore_rng(state, device)
+            model.train()
+            quality = normal_selection(measured)
+            if best is None or quality > tuple(best):
+                best, selected_update = quality, update
+                atomic_save(output / f"{stage}_best.pt", dict(version=NORMAL_VERSION, config=config, mode="normal_hypothesis",
+                    model=model.state_dict(), stage=stage, update=update, development=measured))
+                write_json(output / f"{stage}_development.json", measured)
+            print(f"{stage} {update}/{updates}: normal mIoU={measured['mean_iou_gt']:.6f}; "
+                  f"selected={selected_update}", flush=True)
+        stages[stage] = dict(trained_frames=trained_frames, trained_updates=update,
+                             planned_frames=len(order), planned_updates=updates,
+                             budget_complete=update == updates, selected_update=selected_update)
+        if evaluate_now or update % checkpoint_every == 0:
+            # Only a completed optimizer update is resumable; no partial batch is published.
+            disk_check(500_000_000)
+            atomic_save(output / "last.pt", dict(version=NORMAL_VERSION, config=config, mode="normal_hypothesis",
+                model=model.state_dict(), optimizer=optimizer.state_dict(), stage=stage,
+                trained_updates=update, best_selection=best, selected_update=selected_update,
+                stages=stages, rng=rng_state(device)))
+            write_json(output / "stages.json", stages)
+        if update % 50 == 0 or update == updates:
+            elapsed = time.monotonic() - start
+            print(f"{stage} {update}/{updates}: objective={terms['objective']:.5f}, "
+                  f"{(update-initial_update)/max(elapsed,1e-9):.2f} updates/s", flush=True)
+    del iterator, loader
+    return stages[stage]
+
+
+def training_data(source_directory, stu_root):
+    from .data import normal_records
+    source = normal_records("nuscenes", directory=source_directory)
+    source_development = normal_records("nuscenes", development=True, directory=source_directory)
+    target = normal_records("206", root=stu_root)
+    target_development = normal_records("201", development=True, root=stu_root)
+    counts = tuple(map(len, (source, source_development, target, target_development)))
+    if counts != (28130, 6019, 449, 682):
+        raise ValueError(f"paper training populations require (28130, 6019, 449, 682), got {counts}")
+    return source, source_development, target, target_development
+
+
+def run(args):
+    from .data import (NormalScans, NORMAL_CLASSES, NUSCENES_NORMAL_SETS,
+                       STU_NORMAL_SEMANTICS)
+    from .model import (NormalHypothesis, NORMAL_ARCHITECTURE, NORMAL_SCORE_VERSION,
+                        NORMAL_VERSION)
+    device = torch.device(args.device)
+    resources = runtime_snapshot()
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable")
+    processors = len(resources["cpu_affinity"])
+    # Bounded CPU prefetch avoids replicating full scans across all available cores.
+    workers = (min(8, max(0, processors - 2), int(resources["memory_available"] // 1_500_000_000))
+               if args.workers is None else args.workers)
+    if workers < 0 or workers >= processors:
+        raise ValueError("workers must leave a CPU for model execution")
+    torch.set_num_threads(min(4, max(1, processors - workers)))
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+    disk_check(1_500_000_000)
+    source, source_dev, target, target_dev = training_data(args.source_directory, args.stu_root)
+    pools, present = normal_replay_pools(source, target)
+    orders = {stage: normal_order(len(source), len(target), epochs, args.seed, stage, pools)
+              for stage, epochs in (("source", 2), ("target", 8))}
+    selection = dict(source=development_indices(source_dev, 50, by_scene=True),
+                     target=development_indices(target_dev, 68))
+    seed_all(args.seed)
+    model = NormalHypothesis(args.variant).to(device)
+    initial = model.load_pretrained(args.initial)
+    config = dict(version=NORMAL_VERSION, architecture=NORMAL_ARCHITECTURE,
+                  score_version=NORMAL_SCORE_VERSION, variant=args.variant, seed=args.seed,
+                  classes=list(NORMAL_CLASSES), source_mapping=NUSCENES_NORMAL_SETS,
+                  target_mapping=STU_NORMAL_SEMANTICS, synthetic_anomalies=False,
+                  source_epochs=2, target_epochs=8, batch=2, queries=4096,
+                  eval_every=2000, target_eval_every=225, selection=NORMAL_SELECTION,
+                  initial_sha256=initial["sha256"], loss=model.loss_weights(),
+                  source_replay_fraction=.2,
+                  source_replay=dict(rule="one source replay per four target scans; half prioritize absent refined classes",
+                                     refinement_classes=sorted(pools), target_training_label_classes=present),
+                  data_identity={name: identity(rows) for name, rows in
+                                 (("source", source), ("source_validation", source_dev),
+                                  ("target", target), ("target_validation", target_dev))},
+                  source_validation_indices=selection["source"], target_validation_indices=selection["target"],
+                  budget={stage: dict(visits=len(order), updates=math.ceil(len(order)/2),
+                                      order_identity=identity(order),
+                                      schedule="3% linear warmup times cosine decay to 5%; indexed by optimizer update")
+                          for stage, order in orders.items()},
+                  precision="float32", calibrated_output=args.calibrate)
+    # JSON normalization also makes equality stable after restoring a saved run.
+    config = json.loads(json.dumps(config))
+    output = args.output
+    resume = None
+    if args.resume:
+        resume = torch.load(output / "last.pt", map_location="cpu", weights_only=False)
+        NormalHypothesis.validate_checkpoint(resume)
+        if resume["config"] != config:
+            raise ValueError("resume changes the data, seed, variant or scientific configuration")
+        stages = resume["stages"]
+    else:
+        if output.exists() and any(output.iterdir()):
+            raise FileExistsError("training output is not empty; use --resume for this exact run")
+        output.mkdir(parents=True, exist_ok=True)
+        stages = {}
+        write_json(output / "config.json", config)
+    if args.match_run:
+        normal_reference(args.match_run, config)
+    write_json(output / "resources.json", dict(**resources, workers=workers, threads=torch.get_num_threads()))
+    for stage, records, development in (("source", source, source_dev),
+                                        ("target", target + source, target_dev)):
+        if resume is not None and resume["stage"] == "target" and stage == "source":
+            continue
+        if resume is None or resume["stage"] != stage:
+            if stage == "target":
+                selected = torch.load(output / "source_best.pt", map_location="cpu", weights_only=False)
+                model.load_state_dict(selected["model"], strict=True)
+        train_stage(model, records, development, selection[stage], orders[stage], config,
+                    stage, output, device, workers, stages=stages,
+                    resume=resume if resume is not None and resume["stage"] == stage else None,
+                    checkpoint_every=args.checkpoint_every)
+        resume = None
+    selected = torch.load(output / "target_best.pt", map_location="cpu", weights_only=False)
+    model.load_state_dict(selected["model"], strict=True)
+    cssr_reference = None
+    if args.variant == "cssr":
+        def training_loader(augment):
+            return DataLoader(NormalScans(source + target, augment=augment, seed=args.seed),
+                              batch_size=None, num_workers=workers, pin_memory=device.type == "cuda",
+                              prefetch_factor=1 if workers else None,
+                              generator=torch.Generator().manual_seed(args.seed))
+        cssr_reference = model.fit_cssr_reference(training_loader(False), training_loader(True), device)
+    reference = dict(seed=args.seed) if args.calibrate else None
+    measured = normal_development(model, target_dev, list(range(len(target_dev))), device,
+                                  workers, seed=args.seed, calibration=reference)
+    write_json(output / "normal201.json", measured)
+    if args.calibrate:
+        normal_calibration(model, target_dev, device, workers, output, seed=args.seed, reference=reference)
+    normal201 = dict(mean_iou_gt=measured["mean_iou_gt"], scans=measured["scans"],
+                     predictive=measured["predictive"])
+    atomic_save(output / "model.pt", dict(version=NORMAL_VERSION, config=config, mode=model.mode, model=model.state_dict(),
+                stages=stages, frozen=True, update=selected["update"], cssr_reference=cssr_reference,
+                normal201=normal201))
+    result = dict(stages=stages, checkpoint="model.pt", budget_complete=True,
+                  normal201=normal201,
+                  anomaly_evaluated=False, cssr_reference=cssr_reference)
+    write_json(output / "result.json", result)
+    print(json.dumps(result, indent=2), flush=True)
+
+
+def suite(args):
+    """Run the complete matched study sequentially on the available validation data."""
+    from .evaluate import summarize_experiments
+    from .model import NormalHypothesis, NORMAL_VARIANTS
+    root = args.output
+    root.mkdir(parents=True, exist_ok=True)
+    variants = ("semantic", "joint", "separate", *[name for name in NORMAL_VARIANTS
+                                                  if name not in ("semantic", "joint", "separate")])
+    status = dict(seeds=[206, 307, 409], variants=list(variants), completed=[],
+                  test_status="unavailable: neither hidden test inputs nor an official evaluation service were supplied")
+    if (root / "progress.json").exists():
+        previous = json.loads((root / "progress.json").read_text())
+        if previous["seeds"] != status["seeds"] or previous["variants"] != status["variants"]:
+            raise ValueError("the existing study uses a different experiment matrix")
+        status["completed"] = previous["completed"]
+    common = ["--device", args.device]
+    if args.workers is not None:
+        common += ["--workers", str(args.workers)]
+
+    def command(module, arguments, task):
+        status["active"] = task
+        status.pop("failure", None)
+        write_json(root / "progress.json", status)
+        print(f"\nStudy task: {task}", flush=True)
+        try:
+            subprocess.run([sys.executable, "-u", "-m", module, *map(str, arguments)], check=True)
+        except subprocess.CalledProcessError as error:
+            status.update(active=None, failure=dict(task=task, exit_code=error.returncode))
+            write_json(root / "progress.json", status)
+            raise
+        if task not in status["completed"]:
+            status["completed"].append(task)
+        write_json(root / "progress.json", status)
+
+    for seed in status["seeds"]:
+        for variant in variants:
+            folder = root / f"{variant}-{seed}"
+            checkpoint = folder / "model.pt"
+            if checkpoint.exists():
+                saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+                NormalHypothesis.validate_checkpoint(saved, require_fitted=True)
+                if (saved["config"]["variant"] != variant or saved["config"]["seed"] != seed
+                        or not saved.get("frozen") or not all(row["budget_complete"] for row in saved["stages"].values())):
+                    raise ValueError(f"existing run does not complete this study task: {folder}")
+                normal_reference(folder, saved["config"])
+                del saved
+            else:
+                arguments = ["--variant", variant, "--seed", seed, "--output", folder,
+                             "--initial", args.initial, "--source-directory", args.source_directory,
+                             "--stu-root", args.stu_root, "--checkpoint-every", args.checkpoint_every, *common]
+                if (folder / "last.pt").exists():
+                    arguments.append("--resume")
+                if variant != "semantic":
+                    arguments += ["--match-run", root / f"semantic-{seed}"]
+                command("src.train", arguments, f"train {variant} seed {seed}")
+            if variant not in ("semantic", "joint", "separate"):
+                for readout in (("energy", "softmax") if variant == "standard" else ("joint",)):
+                    name = "val_" + readout if variant == "standard" else "val"
+                    destination = folder / (name + ".json")
+                    if not destination.exists():
+                        command("src.evaluate", ["validate", "--checkpoint", checkpoint, "--manifest", args.manifest,
+                                "--readout", readout, "--output", destination, *common],
+                                f"validate {variant}/{readout} seed {seed}")
+        paths = [item for name in ("semantic", "joint", "separate")
+                 for item in ("--" + name, root / f"{name}-{seed}" / "model.pt")]
+        paired = root / f"paired-{seed}"
+        comparison_path = paired / "comparison.json"
+        if not comparison_path.exists():
+            # Interrupted point exports are deterministic scratch arrays owned by this task.
+            if paired.exists():
+                expected = {f"{name}.npy" for name in ("semantic", "joint", "separate", "joint_appearance",
+                                                     "joint_common_density", "joint_independent_minima", "returns", "labels")}
+                files = list(paired.iterdir())
+                if any(not path.is_file() or path.name not in expected for path in files):
+                    raise ValueError(f"unrecognized incomplete comparison contents in {paired}")
+                for path in files:
+                    path.unlink()
+            command("src.evaluate", ["compare", *paths, "--manifest", args.manifest, "--output", paired,
+                    "--fixed-readouts", "--discard-fixed-records", "--normal-fpr", .001, .005, .01, .02, .05, *common],
+                    f"paired validation seed {seed}")
+        comparison = json.loads(comparison_path.read_text())
+        for variant in ("semantic", "joint", "separate"):
+            folder = root / f"{variant}-{seed}"
+            config = json.loads((folder / "config.json").read_text())
+            normal = json.loads((folder / "normal201.json").read_text())
+            # These metrics use the same forward pass as the paired decisions.
+            write_json(folder / "val.json", dict(variant=variant, seed=seed, readout="joint", split="val",
+                complete=True, version=config["version"], architecture=config["architecture"],
+                score_version=config["score_version"], manifest_sha256=comparison["manifest_sha256"],
+                metrics=comparison["methods"][variant]["metrics"], normal201=normal,
+                points=comparison["points"], scans=comparison["scans"], source=str(comparison_path)))
+        if not (paired / "normal.json").exists():
+            command("src.evaluate", ["compare-normal", *paths, "--data", args.stu_root, "--fixed-readouts",
+                    "--output", paired / "normal.json", *common], f"paired normal decisions seed {seed}")
+        for variant in ("semantic", "joint"):
+            folder = root / f"{variant}-{seed}"
+            if not (folder / "runtime.json").exists():
+                command("src.evaluate", ["benchmark", "--checkpoint", folder / "model.pt",
+                        "--manifest", args.manifest, "--output", folder / "runtime.json",
+                        "--device", args.device], f"runtime {variant} seed {seed}")
+    write_json(root / "summary.json", summarize_experiments(root))
+    subprocess.run([sys.executable, "figures/preview.py", "--comparisons",
+                    *[str(root / f"paired-{seed}" / "comparison.json") for seed in status["seeds"]]], check=True)
+    status.update(active=None, validation_complete=True, test_complete=False)
+    write_json(root / "progress.json", status)
+
+
+def main():
+    from .data import DATA_ROOT
+    from .model import NORMAL_VARIANTS
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--variant", choices=NORMAL_VARIANTS, default="joint")
+    parser.add_argument("--seed", type=int, choices=(206, 307, 409), default=206)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--initial", type=Path, default=Path("assets/nuscenes.pth"))
+    parser.add_argument("--source-directory", type=Path, default=Path("results/data/background"))
+    parser.add_argument("--stu-root", type=Path, default=DATA_ROOT)
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--workers", type=int)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--match-run", type=Path, help="completed paired run with the same seed and training budget")
+    parser.add_argument("--checkpoint-every", type=int, default=250)
+    parser.add_argument("--calibrate", action="store_true", help="fit the optional monotone normal-reference output scale")
+    parser.add_argument("--suite", action="store_true", help="run all nine variants and three seeds, validation, paired analyses and runtime")
+    parser.add_argument("--manifest", type=Path, default=Path("assets/val.json"))
+    args = parser.parse_args()
+    if args.checkpoint_every < 1:
+        parser.error("checkpoint interval must be positive")
+    if args.suite:
+        if args.calibrate or args.match_run or args.resume:
+            parser.error("--suite uses raw scores and resumes each completed stage automatically")
+        suite(args)
+    else:
+        run(args)
+
+
+if __name__ == "__main__":
+    main()

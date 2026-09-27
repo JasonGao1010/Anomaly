@@ -74,12 +74,13 @@ def test_normal_label_sets_do_not_invent_fine_source_labels():
     assert not ({0, 1, 2, 52, 99} & STU_NORMAL_SEMANTICS.keys())
 
 
-def test_hypothesis_density_matches_independent_student_t_in_log_distance():
+@pytest.mark.parametrize("components", [1, 3])
+def test_hypothesis_density_matches_independent_student_t_in_log_distance(components):
     from src.normal import hypothesis_observation, SemanticHypotheses, geometry_energy, LOG_RETURN_PEAK
     torch.manual_seed(13)
     xyzi, _ = angular_scan()
     observation = hypothesis_observation(xyzi)
-    model = SemanticHypotheses().double().eval()
+    model = SemanticHypotheses(components=components).double().eval()
     observation = {key: value.double() if value.is_floating_point() else value
                    for key, value in observation.items()}
     indices = torch.tensor([18, 73, 129])
@@ -592,13 +593,21 @@ def test_normal_source_identity_tracks_bytes_and_preserves_existing_hashes(tmp_p
     scan, label = tmp_path / "scan.bin", tmp_path / "label.bin"
     np.array([[5., 0., 0., 127.5, 0]], np.float32).tofile(scan)
     np.array([17], np.uint8).tofile(label)
-    row = dict(source="nuscenes", scan=str(scan), label=str(label), pose=np.eye(4).tolist())
+    row = dict(source="nuscenes", scan=str(scan), label=str(label), pose=np.eye(4).tolist(),
+               subset="train", token="scan", sample_token="sample", scene="scene", log_token="log")
     directory = tmp_path / "results/data/background"
     directory.mkdir(parents=True)
     manifest = directory / "train.json"
-    manifest.write_text(json.dumps(dict(root=str(tmp_path), records=[row])))
+    def save(rows):
+        value = dict(version=data.SOURCE_VERSION, kind="train", root=str(tmp_path), records=rows)
+        value["sha256"] = data.identity(value)
+        manifest.write_text(json.dumps(value))
+    save([row])
+    other = dict(version=data.SOURCE_VERSION, kind="val", root=str(tmp_path), records=[])
+    other["sha256"] = data.identity(other)
+    (directory / "val.json").write_text(json.dumps(other))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(data, "attach_normal_annotations", lambda records, root: records)
+    monkeypatch.setattr(data, "attach_normal_annotations", lambda records, root, **kwargs: records)
     records = data.normal_records("nuscenes")
     initial_identity = data.identity(records)
     assert records[0]["scan_sha256"] == data.file_sha256(scan)
@@ -612,7 +621,133 @@ def test_normal_source_identity_tracks_bytes_and_preserves_existing_hashes(tmp_p
         data.read_normal_record(records[0])
     # An unhashed source manifest can start a new run, whose actual input identity differs.
     assert data.identity(data.normal_records("nuscenes")) != initial_identity
-    manifest.write_text(json.dumps(dict(root=str(tmp_path), records=records)))
+    save(records)
     # Existing identities may never be silently replaced with the changed file's digest.
     with pytest.raises(ValueError, match="source file changed: " + changed_file):
         data.normal_records("nuscenes")
+
+
+def test_predictive_ablation_preserves_common_initialization_and_reveals_target_only_when_requested():
+    from src.normal import SemanticHypotheses, hypothesis_observation, observation_diagnostics
+    torch.manual_seed(71)
+    full = SemanticHypotheses()
+    after_full = torch.rand(3)
+    torch.manual_seed(71)
+    single = SemanticHypotheses(components=1)
+    torch.testing.assert_close(torch.rand(3), after_full, atol=0, rtol=0)
+    for key, value in single.state_dict().items():
+        if not key.startswith("surface."):
+            torch.testing.assert_close(value, full.state_dict()[key], atol=0, rtol=0)
+    observed = hypothesis_observation(np.array([[5., 0., 0., .5]], np.float32))
+    hidden = single(observed, torch.tensor([0]))
+    assert hidden["mean"].shape == (1, 19, 1)
+    assert not hidden["supported"].any()
+    assert single(observed, torch.empty(0, dtype=torch.long))["weight"].shape == (0, 19, 1)
+    single.target_available = True
+    observed["features"].requires_grad_()
+    observed["log_distance"].requires_grad_()
+    exposed = single(observed, torch.tensor([0]))
+    assert exposed["supported"].all()
+    exposed["mean"].sum().backward()
+    assert observed["log_distance"].grad.abs().sum() > 0
+    assert observed["features"].grad.abs().sum() > 0
+    allowed = torch.zeros(1, 19, dtype=torch.bool)
+    allowed[0, 8] = True
+    diagnostics = observation_diagnostics(exposed, observed, torch.tensor([0]), allowed,
+                                         torch.full((1, 19, 4), .25))
+    assert diagnostics["geometry_mode_mass"].shape == (19, 1)
+    assert diagnostics["prediction_count"][8] == 1
+    assert diagnostics["mean_pair_separation_sum"].sum() == 0
+
+
+def test_normal_source_partitions_cannot_overlap_even_with_valid_manifest_identity(tmp_path):
+    from src import data
+    row = dict(source="nuscenes", token="scan", sample_token="sample", scan="scan.bin",
+               label="labels.bin", scene="scene", log_token="log")
+    for split in ("train", "val"):
+        value = dict(version=data.SOURCE_VERSION, kind=split, root=str(tmp_path),
+                     records=[dict(row, subset=split)])
+        value["sha256"] = data.identity(value)
+        data.write_json(tmp_path / (split + ".json"), value)
+    with pytest.raises(ValueError, match="training/development overlap"):
+        data.normal_records("nuscenes", directory=tmp_path)
+
+
+def test_reviewed_annotations_follow_relocated_manifest_directory(tmp_path, monkeypatch):
+    import json
+    from src import data
+    scan, label = tmp_path / "scan.bin", tmp_path / "scan.label"
+    np.array([[5., 0., 0., 128., 0.]], np.float32).tofile(scan)
+    np.array([28], np.uint8).tofile(label)
+    annotation = dict(token="scan", scene="scene", subset="train", semantic="building", point_slots=[0])
+    (tmp_path / "annotations.json").write_text(json.dumps(dict(records=[annotation])))
+    fine = tmp_path / "fine.json"
+    fine.write_text(json.dumps(dict(records=[])))
+    monkeypatch.setattr(data, "NORMAL_ANNOTATIONS", fine)
+    monkeypatch.setattr(data, "normal_cycle_annotations", lambda *args: {})
+    monkeypatch.setattr(data, "file_sha256", lambda path: "test-source")
+    row = dict(source="nuscenes", scan=str(scan), label=str(label), pose=np.eye(4).tolist(),
+               token="scan", sample_token="sample", scene="scene", subset="train", normal_slots=[0],
+               normal_annotation="/absent/old-workspace/annotations.json")
+    attached = data.attach_normal_annotations([row], tmp_path, directory=tmp_path)[0]
+    assert attached["normal_annotation"] == str(tmp_path / "annotations.json")
+    assert attached["refinement_classes"] == [12]
+    assert data.read_normal_record(attached)["allowed"][0, 12]
+
+
+def test_hidden_test_reader_preserves_slots_without_fabricating_labels(tmp_path):
+    from src.data import make_real_manifest, Scans
+    directory = tmp_path / "110" / "velodyne"
+    directory.mkdir(parents=True)
+    xyzi = np.array([[8., 0, 0, .2], [0, 0, 0, 0], [10., 0, 0, .4]], np.float32)
+    scan = directory / "000000.bin"
+    xyzi.tofile(scan)
+    manifest = make_real_manifest(tmp_path, partition="test", workers=1)
+    sample = Scans(manifest)[0]
+    assert sample["targets"] is None and sample["instance"] is None
+    assert sample["slot_count"] == 3
+    np.testing.assert_array_equal(sample["slots"], [0, 2])
+    np.testing.assert_array_equal(sample["xyzi"], xyzi[[0, 2]])
+    xyzi[0, 0] = 9
+    xyzi.tofile(scan)
+    with pytest.raises(ValueError, match="observation changed"):
+        Scans(manifest)[0]
+
+
+def test_predictive_distance_strata_use_fine_supported_queries_and_closed_last_edge():
+    from src.normal import observation_diagnostics
+    ranges = np.array([2.5, 10., 20., 35., 50., 15., 25.])
+    values = torch.tensor(np.log(ranges), dtype=torch.float32)
+    n = len(values)
+    allowed = torch.zeros(n, 19, dtype=torch.bool)
+    allowed[:, 8] = True
+    allowed[-2, 9] = True
+    supported = torch.ones(n, dtype=torch.bool)
+    supported[-1] = False
+    prediction = dict(mean=values[:, None, None].expand(n, 19, 1),
+        scale=torch.full((n, 19, 1), .01), weight=torch.zeros(n, 19, 1),
+        log_prob=torch.zeros(n, 19, 1), belief=torch.zeros(n, 19), supported=supported)
+    result = observation_diagnostics(prediction, dict(log_distance=values), torch.arange(n),
+                                     allowed, torch.full((n, 19, 4), .25))
+    np.testing.assert_array_equal(result["range_prediction_count"], [1, 1, 1, 2])
+    np.testing.assert_array_equal(result["range_coverage90_count"], [1, 1, 1, 2])
+    np.testing.assert_allclose(result["range_abs_median_error_m_sum"], 0, atol=1e-10)
+    assert result["coarse_query_count"] == 1 and result["unsupported_query_count"] == 1
+
+
+def test_normal_query_and_augmentation_streams_are_paired_within_seed(monkeypatch):
+    from src import data
+    xyzi, _ = angular_scan()
+    allowed = np.zeros((len(xyzi), 19), dtype=bool)
+    allowed[:, 8] = True
+    def read(record):
+        return dict(xyzi=xyzi.copy(), allowed=allowed.copy(), slots=np.arange(len(xyzi)), slot_count=len(xyzi))
+    monkeypatch.setattr(data, "read_normal_record", read)
+    monkeypatch.setattr("src.model.voxelize", lambda points: dict(xyzi=torch.from_numpy(points.copy())))
+    first = data.NormalScans([{}], augment=True, queries=64, seed=206)[(1, 0)]
+    paired = data.NormalScans([{}], augment=True, queries=64, seed=206)[(1, 0)]
+    different = data.NormalScans([{}], augment=True, queries=64, seed=307)[(1, 0)]
+    torch.testing.assert_close(first["xyzi"], paired["xyzi"], atol=0, rtol=0)
+    torch.testing.assert_close(first["queries"], paired["queries"], atol=0, rtol=0)
+    assert not torch.equal(first["queries"], different["queries"])
+    assert not torch.equal(first["xyzi"], different["xyzi"])

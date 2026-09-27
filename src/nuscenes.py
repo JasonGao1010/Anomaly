@@ -160,7 +160,8 @@ def _backgrounds(root, output, workers, records, mapping):
 
 def _normal_annotations(records, mapping, path):
     """Attach exact reviewed slots; no category-wide or cross-frame propagation."""
-    annotations = json.loads(Path(path).read_text())["records"]
+    document = json.loads(Path(path).read_text())
+    annotations = document["records"]
     source = {r["token"]: r for rows in records.values() for r in rows}
     seen = set()
     for annotation in annotations:
@@ -174,11 +175,9 @@ def _normal_annotations(records, mapping, path):
         checked = dict(record, normal_slots=annotation["point_slots"])
         _, labels = _read(record)
         nuscenes_truth(checked, labels, mapping)
-        for rows in records.values():
-            for row in rows:
-                if row["token"] == token:
-                    row["normal_slots"] = annotation["point_slots"]
-                    row["normal_annotation"] = str(Path(path).resolve())
+        record["normal_slots"] = annotation["point_slots"]
+        record["normal_annotation"] = "annotations.json"
+    return document
 
 
 def build(root, output, workers, *, normal_annotations=None):
@@ -190,5 +189,6 @@ def build(root, output, workers, *, normal_annotations=None):
         raise ValueError("background construction requires an empty output directory")
     records, mapping = sources(root)
     if normal_annotations is not None:
-        _normal_annotations(records, mapping, normal_annotations)
+        annotations = _normal_annotations(records, mapping, normal_annotations)
+        write_json(output / "annotations.json", annotations)
     return _backgrounds(root, output, workers, records, mapping)
