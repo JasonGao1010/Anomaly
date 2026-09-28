@@ -104,12 +104,11 @@ def test_all_return_voxels_origin_and_slot_scattering():
     np.testing.assert_array_equal(batch["xyzi"], points)
     inv = batch["inverse"].numpy()
     assert inv[0] == inv[1] and inv[2] == inv[4]
-    np.testing.assert_allclose(batch["voxel_xyzi"][inv[0]], points[:2].mean(0), atol=1e-7)
+    np.testing.assert_array_equal(batch["voxel_xyzi"][inv[0]], points[0])
     raw_grid = np.floor(points[:, :3].astype(float) / .05).astype(int)
     translated = batch["grid"].numpy()[inv]
-    for level in range(5):
-        shift = translated // (2**level) - raw_grid // (2**level)
-        assert np.all(shift == shift[0])
+    np.testing.assert_array_equal(translated, raw_grid - raw_grid.min(0))
+    np.testing.assert_array_equal(batch["grid"].min(0).values, np.zeros(3, dtype=np.int64))
     np.testing.assert_allclose(batch["offset"], (points[:, :3] - (raw_grid + .5) * .05) / .05, atol=1e-6)
     output = scatter_scores(torch.arange(5.).requires_grad_(), torch.tensor([0, 2, 4, 6, 7]), 9)
     assert output[[1, 3, 5, 8]].tolist() == [0., 0., 0., 0.]
@@ -122,7 +121,7 @@ def test_all_return_voxels_origin_and_slot_scattering():
     boundary=np.array([[edge,0,3,.1],[np.nextafter(edge,np.float32(np.inf)),0,3,.1],
         [-edge,0,3,.1],[np.nextafter(-edge,np.float32(-np.inf)),0,3,.1]],np.float32)
     b=voxelize(boundary)
-    torch.testing.assert_close(b["grid"][b["inverse"],0]-16,torch.tensor([13,14,-14,-15]),rtol=0,atol=0)
+    torch.testing.assert_close(b["grid"][b["inverse"],0]-15,torch.tensor([13,14,-14,-15]),rtol=0,atol=0)
 
 
 def test_spatial_codes_roundtrip_without_axis_or_bit_loss():

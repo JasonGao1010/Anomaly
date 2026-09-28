@@ -10,7 +10,7 @@ from src.evaluate import comparison_conditions, comparison_metrics, official_pop
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
-def test_voxel_sort_preserves_exact_point_order_means_and_origin_grid():
+def test_voxel_sort_preserves_all_points_and_selects_actual_returns():
     from src.model import voxelize, GRID_SIZE
     rng = np.random.default_rng(107)
     cells = rng.integers(-5, 6, (400, 3))
@@ -18,7 +18,7 @@ def test_voxel_sort_preserves_exact_point_order_means_and_origin_grid():
     cells[2::3] = cells[::3][:len(cells[2::3])]
     points = np.c_[(cells + rng.uniform(.05, .95, cells.shape)) * GRID_SIZE,
                    np.resize([1e20, 1., -1e20], len(cells))].astype(np.float32)
-    # Large cancelling values expose changes in within-cell reduction order.
+    # Distinct intensities expose accidental averaging instead of point selection.
     samples = (points, points[:1], np.tile(points[:1], (7, 1)),
                np.array([[np.nextafter(np.float32(.05), np.float32(0)), -1., 2., .3],
                          [.05, -1., 2., .4], [-.05, -1., 2., .5]], np.float32))
@@ -27,16 +27,22 @@ def test_voxel_sort_preserves_exact_point_order_means_and_origin_grid():
         unique, inverse, counts = np.unique(grid, axis=0, return_inverse=True, return_counts=True)
         order = np.argsort(inverse, kind="stable")
         pointer = np.r_[0, np.cumsum(counts)].astype(np.int64)
-        mean = (np.add.reduceat(xyzi[order].astype(np.float64), pointer[:-1], axis=0)
-                / counts[:, None]).astype(np.float32)
-        expected = dict(xyzi=xyzi, grid=unique - (unique.min(axis=0) // 16) * 16,
-                        voxel_xyzi=mean, inverse=inverse, order=order, pointer=pointer,
+        expected = dict(xyzi=xyzi, grid=unique - unique.min(axis=0),
+                        voxel_xyzi=xyzi[order[pointer[:-1]]], inverse=inverse, order=order, pointer=pointer,
                         offset=((xyzi[:, :3].astype(np.float64) - (grid + .5) * GRID_SIZE)
                                 / GRID_SIZE).astype(np.float32))
         actual = voxelize(xyzi)
         for key, value in expected.items():
             assert actual[key].numpy().dtype == value.dtype
             np.testing.assert_array_equal(actual[key].numpy(), value, err_msg=key)
+        sampled = voxelize(xyzi, rng=np.random.default_rng(91))
+        repeated = voxelize(xyzi, rng=np.random.default_rng(91))
+        for key in expected:
+            np.testing.assert_array_equal(sampled[key], repeated[key], err_msg=key)
+            if key != "voxel_xyzi":
+                np.testing.assert_array_equal(sampled[key], actual[key], err_msg=key)
+        for cell, representative in enumerate(sampled["voxel_xyzi"].numpy()):
+            assert np.any(np.all(xyzi[inverse == cell] == representative, axis=1))
 
 
 def test_normal_semantics_keeps_unseen_training_classes_and_false_positives():
@@ -126,7 +132,9 @@ def matched_checkpoint(variant):
                   source_mapping={"24": [8, 9]}, target_mapping={"40": 8}, initial_sha256="official",
                   seed=206, source_epochs=1, target_epochs=8, batch=2, queries=4096,
                   source_replay_fraction=.2, eval_every=2000, target_eval_every=225,
-                  selection="normal semantic quality first", budget={"source": {"visits": 100}, "target": {"visits": 200}})
+                  selection="normal semantic quality first", budget={"source": {"visits": 100}, "target": {"visits": 200}},
+                  optimization={"learning_rate": .001}, implementation={"point_order": "same"},
+                  source_validation_indices=[0, 2], target_validation_indices=[1, 3])
     stage = dict(trained_frames=100, trained_updates=50, planned_frames=100, planned_updates=50,
                  budget_complete=True, selected_update=40)
     return dict(config=config, frozen=True, stages=dict(source=deepcopy(stage), target=deepcopy(stage)))
@@ -137,6 +145,18 @@ def test_independent_variants_must_have_matched_actual_training_exposure():
     checkpoints["joint"]["stages"]["target"]["selected_update"] = 30
     result = comparison_conditions(checkpoints)
     assert result["matched"] and result["training_link_ablation_available"]
+    for field, value in (("optimization", {"learning_rate": .002}),
+                         ("implementation", {"point_order": "different"}),
+                         ("source_validation_indices", [0, 1]), ("target_validation_indices", [0, 1])):
+        changed = deepcopy(checkpoints)
+        changed["joint"]["config"][field] = value
+        with pytest.raises(ValueError, match=f"config.{field} differs"):
+            comparison_conditions(changed)
+        result = comparison_conditions(changed, exploratory=True)
+        assert not result["matched"] and any(field in difference for difference in result["differences"])
+        del changed["joint"]["config"][field]
+        with pytest.raises(ValueError, match=f"missing config.{field}"):
+            comparison_conditions(changed)
     checkpoints["joint"]["stages"]["target"].update(trained_frames=90, trained_updates=45, budget_complete=False)
     with pytest.raises(ValueError, match="trained_frames"):
         comparison_conditions(checkpoints)

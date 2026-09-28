@@ -98,7 +98,9 @@ class SemanticHypotheses(nn.Module):
             nn.init.normal_(self.surface.weight, std=.001)
             nn.init.zeros_(self.surface.bias)
             with torch.no_grad():
-                self.surface.bias.reshape(components, 8)[:, 6] = -3.
+                # Equal-weight modes start at different spreads; the one-mode control uses the middle scale.
+                scales = self.surface.bias.new_tensor((.04, .08, .16) if components == 3 else (.08,))
+                self.surface.bias.reshape(components, 8)[:, 6] = torch.expm1(scales - MIN_RETURN_SCALE).log()
 
     def encode(self, observation):
         features = self.encoder(observation["features"])

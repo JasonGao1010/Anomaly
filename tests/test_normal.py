@@ -751,7 +751,7 @@ def test_predictive_distance_strata_use_fine_supported_queries_and_closed_last_e
 
 def test_measurement_rescaling_preserves_physical_targets_and_scale_initialization():
     from src.model import voxelize
-    from src.normal import SemanticHypotheses, hypothesis_observation
+    from src.normal import MIN_RETURN_SCALE, SemanticHypotheses, hypothesis_observation
     xyzi = np.array([[3., 4., 0., .2], [5., -12., 0., .8]], dtype=np.float32)
     observation = hypothesis_observation(xyzi)
     torch.testing.assert_close(observation["features"][:, :3], torch.from_numpy(xyzi[:, :3] / 25))
@@ -766,8 +766,10 @@ def test_measurement_rescaling_preserves_physical_targets_and_scale_initializati
     assert torch.equal(observation["cells"], farther["cells"])
     voxel = voxelize(xyzi)
     torch.testing.assert_close(voxel["voxel_xyzi"][voxel["inverse"]], torch.from_numpy(xyzi))
-    model = SemanticHypotheses()
-    # Zero state isolates the bias from the intentionally small random output weights.
-    raw = model.surface(torch.zeros(1, 48)).reshape(1, 3, 8)
-    assert torch.equal(raw[..., 6], torch.full((1, 3), -3.))
-    torch.testing.assert_close(.001 + F.softplus(raw[..., 6]), torch.full((1, 3), .04958735))
+    for components, scales in ((3, [.04, .08, .16]), (1, [.08])):
+        model = SemanticHypotheses(components=components)
+        # Zero state isolates the bias from the intentionally small random output weights.
+        raw = model.surface(torch.zeros(1, 48)).reshape(1, components, 8)
+        torch.testing.assert_close(MIN_RETURN_SCALE + F.softplus(raw[..., 6]), torch.tensor([scales]))
+        assert torch.count_nonzero(raw[..., :6]) == 0
+        assert torch.count_nonzero(raw[..., 7]) == 0

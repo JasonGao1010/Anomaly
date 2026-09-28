@@ -1,0 +1,110 @@
+{
+  "scope": "One disposable accumulated update on one source and one STU 206 training scan per variant; implementation validation, not reproduction metrics. All diagnostic weights discarded.",
+  "samples": [
+    {
+      "source": "nuscenes",
+      "scene": "scene-0001",
+      "scan": "/home/jasongao/Data/Nuscenes/samples/LIDAR_TOP/n015-2018-07-18-11-07-57+0800__LIDAR_TOP__1531883530449377.pcd.bin"
+    },
+    {
+      "source": "normal_stu",
+      "scene": "206",
+      "scan": "/home/jasongao/Data/STU/train/206/velodyne/000428.bin"
+    }
+  ],
+  "variants": [
+    {
+      "variant": "joint",
+      "losses": [
+        4.329506874084473,
+        5.501623630523682
+      ],
+      "seconds": 3.5314332030102378,
+      "peak_vram_bytes": 7992196608,
+      "finite": true,
+      "repeat_evaluation_exact": true
+    },
+    {
+      "variant": "semantic",
+      "losses": [
+        4.060575008392334,
+        4.973845481872559
+      ],
+      "seconds": 0.9197241770016262,
+      "peak_vram_bytes": 7517104640,
+      "finite": true,
+      "repeat_evaluation_exact": true
+    },
+    {
+      "variant": "separate",
+      "losses": [
+        4.322661399841309,
+        5.498778343200684
+      ],
+      "seconds": 1.0230151019932237,
+      "peak_vram_bytes": 7992196608,
+      "finite": true,
+      "repeat_evaluation_exact": true
+    },
+    {
+      "variant": "standard",
+      "losses": [
+        2.328768730163574,
+        2.983891248703003
+      ],
+      "seconds": 0.8752125299943145,
+      "peak_vram_bytes": 7369370624,
+      "finite": true
+    },
+    {
+      "variant": "cssr",
+      "losses": [
+        3.465526580810547,
+        4.4502716064453125
+      ],
+      "seconds": 0.9687039320124313,
+      "peak_vram_bytes": 7932159488,
+      "finite": true
+    },
+    {
+      "variant": "target_available",
+      "losses": [
+        4.314449787139893,
+        5.4926323890686035
+      ],
+      "seconds": 1.0279973530123243,
+      "peak_vram_bytes": 7998391808,
+      "finite": true
+    },
+    {
+      "variant": "single_component",
+      "losses": [
+        4.325898170471191,
+        5.526124477386475
+      ],
+      "seconds": 1.0368630349985324,
+      "peak_vram_bytes": 7984598528,
+      "finite": true
+    },
+    {
+      "variant": "no_nll",
+      "losses": [
+        4.546018123626709,
+        5.578847885131836
+      ],
+      "seconds": 1.0086313219944714,
+      "peak_vram_bytes": 7992196608,
+      "finite": true
+    },
+    {
+      "variant": "no_compactness",
+      "losses": [
+        4.0429205894470215,
+        5.211479187011719
+      ],
+      "seconds": 1.020936453001923,
+      "peak_vram_bytes": 7992196608,
+      "finite": true
+    }
+  ]
+}

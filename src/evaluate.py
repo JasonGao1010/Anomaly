@@ -273,7 +273,8 @@ def comparison_conditions(checkpoints, *, exploratory=False):
         raise ValueError("comparison requires independent semantic and joint checkpoints; separate is optional")
     keys = ("data_identity", "source_mapping", "target_mapping", "initial_sha256", "seed", "source_epochs",
             "target_epochs", "batch", "queries", "source_replay_fraction", "eval_every", "target_eval_every",
-            "selection", "budget")
+            "selection", "budget", "optimization", "implementation",
+            "source_validation_indices", "target_validation_indices")
     baseline = checkpoints["semantic"]
     differences, selections = [], {}
     for method, saved in checkpoints.items():

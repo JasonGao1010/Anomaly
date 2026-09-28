@@ -604,7 +604,10 @@ class NormalScans:
             rotation = np.array([[np.cos(angle), -np.sin(angle), 0],
                                  [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
             raw["xyzi"][:, :3] = raw["xyzi"][:, :3] @ rotation.T
-        result = voxelize(raw["xyzi"])
+        # Voxel representatives must not consume rotation or query randomness.
+        voxel_rng = (np.random.default_rng(np.random.SeedSequence([self.seed, index, epoch, visit, 3253]))
+                     if self.augment else None)
+        result = voxelize(raw["xyzi"], rng=voxel_rng)
         result.update(allowed=torch.from_numpy(raw["allowed"]), slots=torch.from_numpy(raw["slots"]),
                       slot_count=raw["slot_count"], index=index,
                       observation=hypothesis_observation(raw["xyzi"]))

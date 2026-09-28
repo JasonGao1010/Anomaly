@@ -16,7 +16,7 @@ WEIGHTS_REVISION = "a8e76e92efbb2061639f5c683968bc5d248ee002"
 WEIGHTS_SHA256 = "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"
 GRID_SIZE = .05
 POINT_CHUNK = 65536
-NORMAL_VERSION = "SERVE-2"
+NORMAL_VERSION = "SERVE-3"
 NORMAL_ARCHITECTURE = "multimode48_return_verification"
 NORMAL_SCORE_VERSION = "joint_density_logtail"
 NORMAL_VARIANTS = ("joint", "semantic", "separate", "standard", "cssr", "target_available",
@@ -32,7 +32,7 @@ def mlp(inputs, hidden, outputs):
                          nn.GELU(), nn.Linear(hidden, outputs))
 
 
-def voxelize(xyzi):
+def voxelize(xyzi, *, rng=None):
     """Preserve every point identity while constructing the selected voxel input."""
     xyzi = np.asarray(xyzi)
     if xyzi.dtype != np.float32 or xyzi.ndim != 2 or xyzi.shape[1] != 4:
@@ -40,7 +40,7 @@ def voxelize(xyzi):
     if not len(xyzi) or not np.isfinite(xyzi).all() or np.any(~np.any(xyzi[:, :3] != 0, axis=1)):
         raise ValueError("voxelization requires finite real returns, with no empty ray slots")
     grid = np.floor(xyzi[:, :3].astype(np.float64) / GRID_SIZE).astype(np.int64)
-    # One stable lexicographic sort preserves both voxel and within-voxel sum order.
+    # Stable grouping preserves original point identities, including multiple returns.
     order = np.lexsort((grid[:, 2], grid[:, 1], grid[:, 0]))
     ordered_grid = grid[order]
     starts = np.r_[True, np.any(ordered_grid[1:] != ordered_grid[:-1], axis=1)]
@@ -49,11 +49,11 @@ def voxelize(xyzi):
     unique = ordered_grid[pointer[:-1]]
     inverse = np.empty(len(grid), dtype=np.int64)
     inverse[order] = np.cumsum(starts) - 1
-    mean = (np.add.reduceat(xyzi[order].astype(np.float64), pointer[:-1], axis=0)
-            / counts[:, None])
-    voxel_xyzi = mean.astype(np.float32)
-    # A multiple of 16 preserves the sensor-origin grid at all four pooling steps.
-    shift = (unique.min(axis=0) // 16) * 16
+    # Use a real return as in pretraining; evaluation fixes the first original point.
+    selected = pointer[:-1] if rng is None else pointer[:-1] + rng.integers(counts)
+    voxel_xyzi = xyzi[order[selected]]
+    # Match the pretrained pooling origin without translating physical coordinates.
+    shift = unique.min(axis=0)
     return dict(xyzi=torch.from_numpy(xyzi), grid=torch.from_numpy(unique - shift),
                 voxel_xyzi=torch.from_numpy(voxel_xyzi), inverse=torch.from_numpy(inverse),
                 order=torch.from_numpy(order), pointer=torch.from_numpy(pointer),

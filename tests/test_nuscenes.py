@@ -9,7 +9,8 @@ def normal_sample(monkeypatch):
     import torch
     from src import data
 
-    monkeypatch.setattr("src.model.voxelize", lambda points: dict(xyzi=torch.from_numpy(points.copy())))
+    monkeypatch.setattr("src.model.voxelize", lambda points, *, rng=None:
+                        dict(xyzi=torch.from_numpy(points.copy())))
 
     def sample(allowed, *, queries=4096, seed=206, key=0, augment=False):
         points = np.zeros((len(allowed), 4), dtype=np.float32)
@@ -130,3 +131,33 @@ def test_query_and_rotation_streams_are_paired_and_change_per_visit(normal_sampl
     torch.testing.assert_close(integer["queries"], explicit["queries"], atol=0, rtol=0)
     with pytest.raises(ValueError):
         normal_sample(allowed, key=(1, 0))
+
+
+def test_voxel_randomness_is_isolated_from_other_sample_streams(normal_sample, monkeypatch):
+    import torch
+    allowed = np.zeros((300, 19), dtype=bool)
+    allowed[:150, 8] = True
+    allowed[150:, 14:16] = True
+    baseline = normal_sample(allowed, queries=64, key=(1, 0, 7), augment=True)
+    draws = []
+    consumption = 0
+
+    def voxelize(points, *, rng=None):
+        draws.append(None if rng is None else rng.integers(65536, size=16))
+        if rng is not None:
+            rng.random(consumption)
+        return dict(xyzi=torch.from_numpy(points.copy()))
+
+    monkeypatch.setattr("src.model.voxelize", voxelize)
+    for consumption in (0, 1, 10000):
+        sample = normal_sample(allowed, queries=64, key=(1, 0, 7), augment=True)
+        for key in ("xyzi", "queries", "allowed", "slots", "observation"):
+            torch.testing.assert_close(sample[key], baseline[key], atol=0, rtol=0)
+        assert sample["slot_count"] == baseline["slot_count"]
+    expected = np.random.default_rng(np.random.SeedSequence([206, 0, 1, 7, 3253])).integers(65536, size=16)
+    for draw in draws:
+        np.testing.assert_array_equal(draw, expected)
+    normal_sample(allowed, queries=64, key=(1, 0, 8), augment=True)
+    assert not np.array_equal(draws[-1], expected)
+    normal_sample(allowed, queries=64, key=(1, 0, 7), augment=False)
+    assert draws[-1] is None
