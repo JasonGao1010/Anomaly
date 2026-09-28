@@ -155,6 +155,8 @@ def comparisons(paths):
                       requested_fpr=fprs.tolist(), actual_fpr=actual_fpr,
                       confident_unknown_points=[run["confident_unknown_points"] for run in runs],
                       instance_counts=counts.tolist(), unassigned_anomaly_points=population["unassigned_anomaly_points"],
+                      instance_complete=population["unassigned_anomaly_points"] == 0,
+                      instance_population="officially evaluated anomaly points with a positive instance ID",
                       reduction="arithmetic mean and sample standard deviation across seeds; units are percentage points")
     for key, values in (("confident_unknown_recall", confidence), ("instance_coverage", objects)):
         values = np.asarray(values) * 100
@@ -168,9 +170,18 @@ def comparisons(paths):
     return statistics
 
 
-def results(path, fpr, confident_recall, object_recall, metadata, *, deviations=None):
-    fig, axes = plt.subplots(1, 2, figsize=(7.0, 3.0))
-    fig.subplots_adjust(left=0.078, right=0.985, bottom=0.24, top=0.77, wspace=0.27)
+def results(path, fpr, confident_recall, object_recall, metadata, *, deviations=None, unassigned_anomaly_points=0):
+    note = ("Eligible frames contain ≥5 anomaly points in total; individual objects may contain 1–4."
+            "\nScore ties can make the achieved false-positive rate lower than the requested budget.")
+    if unassigned_anomaly_points:
+        note += f"\nObject coverage uses positive instance IDs; {unassigned_anomaly_points:,} anomaly points have no usable ID."
+    if not np.isfinite(confident_recall).all() or not np.isfinite(object_recall).all():
+        note += "\nUndefined seed-level recalls remain blank; available seeds are not averaged on their own."
+    footer = .14 * note.count("\n")
+    height = 3.0 + footer
+    fig, axes = plt.subplots(1, 2, figsize=(7.0, height))
+    fig.subplots_adjust(left=0.078, right=0.985, bottom=(.72 + footer) / height,
+                        top=1 - .69 / height, wspace=0.27)
     for row, (name, color, marker) in enumerate(zip(METHODS, COLORS, MARKERS)):
         axes[0].plot(fpr, confident_recall[row], label=name, color=color,
                      marker=marker, markersize=4.0, linewidth=1.55,
@@ -187,21 +198,18 @@ def results(path, fpr, confident_recall, object_recall, metadata, *, deviations=
     axes[0].set_xticks(fpr, [f"{value:g}" for value in fpr])
     axes[0].minorticks_off()
     axes[0].set_xlim(fpr.min() * .8, fpr.max() * 1.22)
-    axes[0].set_xlabel("Normal false-positive rate (%)", labelpad=5)
+    axes[0].set_xlabel("Normal false-positive budget (%)", labelpad=5)
     axes[0].set_ylabel("Unknown-point recall (%)", labelpad=4)
     axes[0].set_title("(a) Confident unknown subset", loc="left", pad=9)
     axes[1].set_xticks(np.arange(len(OBJECT_BINS)), OBJECT_BINS)
     axes[1].set_xlim(-0.3, 5.3)
     axes[1].set_xlabel("Evaluated points per anomaly object", labelpad=5)
-    axes[1].set_ylabel("Object recall at 1% FPR (%)", labelpad=4)
+    axes[1].set_ylabel("Object recall at 1% FPR budget (%)", labelpad=4)
     axes[1].set_title("(b) Objects in eligible frames", loc="left", pad=9)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=3, frameon=False,
                bbox_to_anchor=(0.52, 1.003), columnspacing=2.2, handlelength=2.2)
-    note = "Eligible frames contain ≥5 anomaly points in total; individual objects may contain 1–4."
-    if not np.isfinite(confident_recall).all() or not np.isfinite(object_recall).all():
-        note += "\nUndefined seed-level recalls remain blank; available seeds are not averaged on their own."
-    fig.text(0.5, 0.035, note,
+    fig.text(0.5, .105 / height, note,
              ha="center", fontsize=7.7, color="#485361")
     save(fig, path, metadata)
 
@@ -299,5 +307,5 @@ if __name__ == "__main__":
                       if args.error_bars else None)
         results(output, np.asarray(summary["requested_fpr"]) * 100,
                 np.asarray(confidence["mean"], dtype=float), np.asarray(objects["mean"], dtype=float),
-                metadata, deviations=deviations)
+                metadata, deviations=deviations, unassigned_anomaly_points=summary["unassigned_anomaly_points"])
         print(serialized)

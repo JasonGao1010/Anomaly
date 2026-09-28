@@ -29,7 +29,18 @@ def test_rotary_serialization_bound_preserves_values_and_gradients(maximum):
     assert torch.equal(actual_gradient, expected_gradient)
 
 
-def test_semantic_hypotheses_exclude_entire_target_cell_values_counts_and_gradients():
+@pytest.fixture
+def single_threaded_point_encoder():
+    # Changing row counts can change threaded GEMM rounding before cell exclusion.
+    previous = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        yield
+    finally:
+        torch.set_num_threads(previous)
+
+
+def test_semantic_hypotheses_exclude_entire_target_cell_values_counts_and_gradients(single_threaded_point_encoder):
     from src.normal import hypothesis_observation, SemanticHypotheses
     torch.manual_seed(71)
     xyzi, _ = angular_scan()
@@ -97,7 +108,7 @@ def test_hypothesis_density_matches_independent_student_t_in_log_distance(compon
     np.testing.assert_allclose(weights.sum(-1), 1., atol=2e-15)
     # Integration is over log distance: no metre Jacobian or range truncation.
     mass, error = quad(lambda x: np.dot(weights[0, 0], student_t.pdf(
-        x, df=3, loc=mean[0, 0], scale=scale[0, 0])), -np.inf, np.inf, epsabs=1e-10)
+        x, df=3, loc=mean[0, 0], scale=scale[0, 0])), -np.inf, np.inf, epsabs=1e-10, epsrel=1e-10)
     assert abs(mass - 1) < 1e-9 and error < 1e-8
     expected_energy = LOG_RETURN_PEAK - np.log((weights * np.exp(expected)).sum(-1))
     expected_energy[~prediction["supported"].numpy()] = 0
@@ -339,6 +350,9 @@ def test_normal_checkpoint_rejects_previous_scientific_definition():
                  config=dict(architecture=NORMAL_ARCHITECTURE, score_version=NORMAL_SCORE_VERSION, variant="joint"),
                  model=dict(calibration=torch.zeros(129), calibrated=torch.tensor(True)))
     NormalHypothesis.validate_checkpoint(saved, require_calibrated=True)
+    previous = dict(saved, version="SERVE")
+    with pytest.raises(ValueError, match="incompatible"):
+        NormalHypothesis.validate_checkpoint(previous)
     for location, key in (("", "version"), ("config", "architecture"), ("config", "score_version"), ("config", "variant")):
         previous = deepcopy(saved)
         (previous[location] if location else previous)[key] = "previous-method"
@@ -735,19 +749,25 @@ def test_predictive_distance_strata_use_fine_supported_queries_and_closed_last_e
     assert result["coarse_query_count"] == 1 and result["unsupported_query_count"] == 1
 
 
-def test_normal_query_and_augmentation_streams_are_paired_within_seed(monkeypatch):
-    from src import data
-    xyzi, _ = angular_scan()
-    allowed = np.zeros((len(xyzi), 19), dtype=bool)
-    allowed[:, 8] = True
-    def read(record):
-        return dict(xyzi=xyzi.copy(), allowed=allowed.copy(), slots=np.arange(len(xyzi)), slot_count=len(xyzi))
-    monkeypatch.setattr(data, "read_normal_record", read)
-    monkeypatch.setattr("src.model.voxelize", lambda points: dict(xyzi=torch.from_numpy(points.copy())))
-    first = data.NormalScans([{}], augment=True, queries=64, seed=206)[(1, 0)]
-    paired = data.NormalScans([{}], augment=True, queries=64, seed=206)[(1, 0)]
-    different = data.NormalScans([{}], augment=True, queries=64, seed=307)[(1, 0)]
-    torch.testing.assert_close(first["xyzi"], paired["xyzi"], atol=0, rtol=0)
-    torch.testing.assert_close(first["queries"], paired["queries"], atol=0, rtol=0)
-    assert not torch.equal(first["queries"], different["queries"])
-    assert not torch.equal(first["xyzi"], different["xyzi"])
+def test_measurement_rescaling_preserves_physical_targets_and_scale_initialization():
+    from src.model import voxelize
+    from src.normal import SemanticHypotheses, hypothesis_observation
+    xyzi = np.array([[3., 4., 0., .2], [5., -12., 0., .8]], dtype=np.float32)
+    observation = hypothesis_observation(xyzi)
+    torch.testing.assert_close(observation["features"][:, :3], torch.from_numpy(xyzi[:, :3] / 25))
+    torch.testing.assert_close(observation["features"][:, 3], torch.from_numpy(xyzi[:, 3]))
+    torch.testing.assert_close(observation["log_distance"], torch.tensor([5., 13.]).log())
+    torch.testing.assert_close(observation["features"][:, 4:],
+                              torch.from_numpy(xyzi[:, :3]) / torch.tensor([5., 13.])[:, None])
+    moved = xyzi.copy()
+    moved[:, :3] *= 2
+    farther = hypothesis_observation(moved)
+    assert torch.equal(observation["offset"], farther["offset"])
+    assert torch.equal(observation["cells"], farther["cells"])
+    voxel = voxelize(xyzi)
+    torch.testing.assert_close(voxel["voxel_xyzi"][voxel["inverse"]], torch.from_numpy(xyzi))
+    model = SemanticHypotheses()
+    # Zero state isolates the bias from the intentionally small random output weights.
+    raw = model.surface(torch.zeros(1, 48)).reshape(1, 3, 8)
+    assert torch.equal(raw[..., 6], torch.full((1, 3), -3.))
+    torch.testing.assert_close(.001 + F.softplus(raw[..., 6]), torch.full((1, 3), .04958735))

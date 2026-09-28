@@ -34,6 +34,70 @@ def test_every_control_preserves_common_initialization_and_random_stream(models)
     assert models("target_available").hypotheses.target_available
 
 
+def test_serialization_is_paired_resumable_and_deterministic_in_evaluation(monkeypatch):
+    from src.model import voxelize
+    from src.normal import hypothesis_observation
+    from vendor.litept.model import Point
+
+    class OrderedBackbone(nn.Module):
+        def __init__(self, shuffle_orders, fp32_attention):
+            super().__init__()
+            assert shuffle_orders and fp32_attention
+            self.shuffle_orders = shuffle_orders
+            self.pooling = nn.ModuleList([nn.Module(), nn.Module()])
+            for stage in self.pooling:
+                stage.shuffle_orders = shuffle_orders
+            self.orders = []
+
+        def forward(self, inputs):
+            # Exercise real CPU serialization at each of the three backbone sites.
+            for stage in (self, *self.pooling):
+                point = Point(inputs)
+                point.serialization(order=("z", "z-trans", "hilbert", "hilbert-trans"),
+                                    shuffle_orders=stage.shuffle_orders)
+                self.orders.append(point.serialized_code.clone())
+            point.feat = point.feat[:, :1].expand(-1, 72)
+            return point
+
+    monkeypatch.setattr("src.model.LitePT", OrderedBackbone)
+    angle = np.deg2rad(np.arange(8) * .5 + .25)
+    xyzi = np.column_stack((10 * np.cos(angle), 10 * np.sin(angle),
+                           np.zeros(8), np.full(8, .5))).astype(np.float32)
+    sample = voxelize(xyzi)
+    sample.update(observation=hypothesis_observation(xyzi), queries=torch.arange(8),
+                  allowed=torch.nn.functional.one_hot(torch.arange(8) % 3, 19).bool())
+    streams, orders = [], []
+    for variant in NORMAL_VARIANTS:
+        torch.manual_seed(206)
+        model = NormalHypothesis(variant).train()
+        assert all(stage.shuffle_orders for stage in (model.backbone, *model.backbone.pooling))
+        state = torch.get_rng_state()
+        loss, _ = model.loss(sample)
+        expected_orders = model.backbone.orders
+        after = torch.get_rng_state()
+        assert not torch.equal(state, after)
+        torch.set_rng_state(state)
+        model.backbone.orders = []
+        repeated, _ = model.loss(sample)
+        torch.testing.assert_close(repeated, loss, atol=0, rtol=0)
+        for actual, expected in zip(model.backbone.orders, expected_orders):
+            assert torch.equal(actual, expected)
+        assert torch.equal(torch.get_rng_state(), after)
+        orders.append(expected_orders)
+        streams.append(after)
+        model.eval()
+        assert not any(stage.shuffle_orders for stage in (model.backbone, *model.backbone.pooling))
+        model.backbone.orders = []
+        first = model.features(sample)
+        second = model.features(sample)
+        torch.testing.assert_close(first, second, atol=0, rtol=0)
+        assert torch.equal(torch.get_rng_state(), after)
+        assert all(torch.equal(a, b) for a, b in zip(model.backbone.orders[:3], model.backbone.orders[3:]))
+    assert all(torch.equal(state, streams[0]) for state in streams)
+    for trace in orders[1:]:
+        assert all(torch.equal(a, b) for a, b in zip(trace, orders[0]))
+
+
 def test_fixed_readouts_match_density_arithmetic_and_share_one_forward(models, monkeypatch):
     model = models()
     appearance = torch.full((3, 19), 10., dtype=torch.float64)

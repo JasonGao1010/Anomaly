@@ -597,10 +597,10 @@ class NormalScans:
         import torch
         from .model import voxelize
         from .normal import hypothesis_observation
-        epoch, index = index if isinstance(index, tuple) else (0, index)
+        epoch, index, visit = index if isinstance(index, tuple) else (0, index, 0)
         raw = read_normal_record(self.records[index])
         if self.augment:
-            angle = np.random.default_rng(np.random.SeedSequence([self.seed, index, epoch, 613])).uniform(-np.pi, np.pi)
+            angle = np.random.default_rng(np.random.SeedSequence([self.seed, index, epoch, visit, 613])).uniform(-np.pi, np.pi)
             rotation = np.array([[np.cos(angle), -np.sin(angle), 0],
                                  [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
             raw["xyzi"][:, :3] = raw["xyzi"][:, :3] @ rotation.T
@@ -609,14 +609,17 @@ class NormalScans:
                       slot_count=raw["slot_count"], index=index,
                       observation=hypothesis_observation(raw["xyzi"]))
         valid = np.flatnonzero(raw["allowed"].any(1))
-        # Fixed class-balanced query inclusion; the backbone still sees every return.
-        rng = np.random.default_rng(np.random.SeedSequence([self.seed, index, epoch, 7291]))
+        # Balance observed label sets once each, so coarse points cannot dilute
+        # a rare singleton's quota by also belonging to that candidate class.
+        rng = np.random.default_rng(np.random.SeedSequence([self.seed, index, epoch, visit, 7291]))
+        codes = raw["allowed"][valid] @ (np.uint32(1) << np.arange(19, dtype=np.uint32))
+        _, groups, counts = np.unique(codes, return_inverse=True, return_counts=True)
+        quota = self.queries // max(1, len(counts))
         chosen = []
-        for category in range(19):
-            candidates = np.flatnonzero(raw["allowed"][:, category])
-            if len(candidates):
-                chosen.extend(rng.choice(candidates, min(len(candidates), self.queries // 19), replace=False))
-        chosen = np.unique(chosen)
+        for group, count in enumerate(counts):
+            candidates = valid[groups == group]
+            chosen.extend(candidates if count <= quota else rng.choice(candidates, quota, replace=False))
+        chosen = np.asarray(chosen, dtype=np.int64)
         remaining = np.setdiff1d(valid, chosen, assume_unique=True)
         chosen = np.r_[chosen, rng.choice(remaining, min(len(remaining), max(0, self.queries - len(chosen))), replace=False)]
         result["queries"] = torch.from_numpy(np.sort(chosen).astype(np.int64))

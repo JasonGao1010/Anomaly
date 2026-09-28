@@ -65,7 +65,7 @@ def hypothesis_observation(xyzi, cell_degrees=.5):
     da = (np.deg2rad(azimuth - 180) - ca[group] + np.pi) % (2 * np.pi) - np.pi
     de = np.deg2rad(elevation - 90) - ce[group]
     da, de = da / np.deg2rad(cell_degrees / 2), de / np.deg2rad(cell_degrees / 2)
-    values = dict(features=np.column_stack((xyz / 50, xyzi[:, 3], rays)),
+    values = dict(features=np.column_stack((xyz / 25, xyzi[:, 3], rays)),
                   log_distance=np.log(distance), group=group, order=np.argsort(group, kind="stable"),
                   pointer=np.r_[0, np.cumsum(counts)], neighbors=np.stack(neighbors, 1),
                   position=np.column_stack((np.cos(ca), np.sin(ca), ce / (np.pi / 2))),
@@ -98,7 +98,7 @@ class SemanticHypotheses(nn.Module):
             nn.init.normal_(self.surface.weight, std=.001)
             nn.init.zeros_(self.surface.bias)
             with torch.no_grad():
-                self.surface.bias.reshape(components, 8)[:, 6] = -2.
+                self.surface.bias.reshape(components, 8)[:, 6] = -3.
 
     def encode(self, observation):
         features = self.encoder(observation["features"])

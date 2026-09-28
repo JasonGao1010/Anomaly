@@ -20,6 +20,10 @@ from .evaluate import memory_available
 from .model import to_device
 
 NORMAL_SELECTION = "maximum mIoU over the fixed ground-truth-present normal development classes; minimum normal objective breaks exact ties; no anomaly labels"
+OPTIMIZATION = dict(
+    source=dict(backbone=5e-5, appearance=8e-4, measurement=4e-4),
+    target=dict(backbone=1.5e-5, appearance=2e-4, measurement=1e-4),
+    weight_decay=.005, eps=1e-6, warmup_fraction=.05, final_lr_fraction=.05)
 
 
 def seed_all(seed):
@@ -242,7 +246,7 @@ def normal_order(source_count, target_count, epochs, seed, stage, replay_pools=N
         rng = np.random.default_rng(np.random.SeedSequence([seed, int(stage == "target"), epoch]))
         ids = rng.permutation(source_count if stage == "source" else target_count)
         for visit, index in enumerate(ids):
-            order.append((epoch, int(index)))
+            order.append((epoch, int(index), len(order)))
             if stage == "target" and visit % 4 == 3:
                 # Half of the fixed replay slots preserve explicitly refined normal
                 # classes; the remainder traverse the whole source pool without replacement.
@@ -255,7 +259,7 @@ def normal_order(source_count, target_count, epochs, seed, stage, replay_pools=N
                         general = replay_rng.permutation(source_count)
                     selected = general[general_count % source_count]
                     general_count += 1
-                order.append((epoch, target_count + int(selected)))
+                order.append((epoch, target_count + int(selected), len(order)))
                 replay_count += 1
     return order
 
@@ -266,7 +270,8 @@ def normal_reference(path, config):
     other = json.loads((path / "config.json").read_text())
     stages = json.loads((path / "stages.json").read_text())
     keys = ("version", "architecture", "data_identity", "classes", "source_mapping", "target_mapping", "source_epochs", "target_epochs", "batch", "seed",
-            "eval_every", "target_eval_every", "queries", "source_replay_fraction", "source_replay", "initial_sha256", "budget", "selection")
+            "eval_every", "target_eval_every", "queries", "source_replay_fraction", "source_replay", "initial_sha256", "budget", "selection",
+            "optimization", "implementation", "source_validation_indices", "target_validation_indices")
     # JSON stores integer mapping keys as strings; compare the same representation.
     comparable = json.loads(json.dumps(config))
     changed = [key for key in keys if identity(comparable.get(key)) != identity(other.get(key))]
@@ -283,12 +288,19 @@ def normal_reference(path, config):
 
 
 def normal_optimizer(model, stage):
-    groups = []
-    for backbone in (True, False):
-        rate = ((1e-4, 8e-4) if stage == "source" else (3e-5, 2e-4))[int(not backbone)]
-        parameters = [p for name, p in model.named_parameters() if name.startswith("backbone.") == backbone]
-        groups.append(dict(params=parameters, lr=rate, peak_lr=rate))
-    return torch.optim.AdamW(groups, weight_decay=.005, eps=1e-6)
+    parameters = defaultdict(list)
+    for name, parameter in model.named_parameters():
+        if name.startswith("backbone."):
+            group = "backbone"
+        elif name.startswith("hypotheses.") and name != "hypotheses.queries":
+            group = "measurement"
+        else:
+            # Shared class vectors also define appearance; keep their original rate.
+            group = "appearance"
+        parameters[group].append(parameter)
+    groups = [dict(name=name, params=values, lr=OPTIMIZATION[stage][name],
+                   peak_lr=OPTIMIZATION[stage][name]) for name, values in parameters.items()]
+    return torch.optim.AdamW(groups, weight_decay=OPTIMIZATION["weight_decay"], eps=OPTIMIZATION["eps"])
 
 
 def normal_reference_points(allowed, frame, seed):
@@ -378,11 +390,12 @@ def learning_rate_factor(update, updates):
     """Use optimizer-update coordinates, independent of model speed or checkpoint selection."""
     if not 1 <= update <= updates:
         raise ValueError("learning-rate update must lie within the complete stage")
-    warmup = max(1, math.ceil(.03 * updates))
+    warmup = max(1, math.ceil(OPTIMIZATION["warmup_fraction"] * updates))
     if update <= warmup:
         return update / warmup
     phase = (update - warmup) / max(1, updates - warmup)
-    return .05 + .95 * (1 + math.cos(math.pi * phase)) / 2
+    minimum = OPTIMIZATION["final_lr_fraction"]
+    return minimum + (1 - minimum) * (1 + math.cos(math.pi * phase)) / 2
 
 
 def train_stage(model, records, development, selection, order, config, stage, output,
@@ -530,6 +543,12 @@ def run(args):
                   target_mapping=STU_NORMAL_SEMANTICS, synthetic_anomalies=False,
                   source_epochs=2, target_epochs=8, batch=2, queries=4096,
                   eval_every=2000, target_eval_every=225, selection=NORMAL_SELECTION,
+                  optimization=OPTIMIZATION,
+                  implementation=dict(
+                      query_sampling="equal observed allowed sets, then uniform unselected reliable points",
+                      random_stream="seed, record index, epoch, visit; matched across variants",
+                      backbone_shuffle_training=True, backbone_shuffle_evaluation=False,
+                      measurement_coordinate_divisor=25., initial_scale_bias=-3.),
                   initial_sha256=initial["sha256"], loss=model.loss_weights(),
                   source_replay_fraction=.2,
                   source_replay=dict(rule="one source replay per four target scans; half prioritize absent refined classes",
@@ -540,7 +559,7 @@ def run(args):
                   source_validation_indices=selection["source"], target_validation_indices=selection["target"],
                   budget={stage: dict(visits=len(order), updates=math.ceil(len(order)/2),
                                       order_identity=identity(order),
-                                      schedule="3% linear warmup times cosine decay to 5%; indexed by optimizer update")
+                                      schedule="5% linear warmup times cosine decay to 5%; indexed by optimizer update")
                           for stage, order in orders.items()},
                   precision="float32", calibrated_output=args.calibrate)
     # JSON normalization also makes equality stable after restoring a saved run.
@@ -606,16 +625,17 @@ def run(args):
 def suite(args):
     """Run the complete matched study sequentially on the available validation data."""
     from .evaluate import summarize_experiments
-    from .model import NormalHypothesis, NORMAL_VARIANTS
+    from .model import NormalHypothesis, NORMAL_VARIANTS, NORMAL_VERSION
     root = args.output
     root.mkdir(parents=True, exist_ok=True)
     variants = ("semantic", "joint", "separate", *[name for name in NORMAL_VARIANTS
                                                   if name not in ("semantic", "joint", "separate")])
-    status = dict(seeds=[206, 307, 409], variants=list(variants), completed=[],
+    status = dict(version=NORMAL_VERSION, seeds=[206, 307, 409], variants=list(variants), completed=[],
                   test_status="unavailable: neither hidden test inputs nor an official evaluation service were supplied")
     if (root / "progress.json").exists():
         previous = json.loads((root / "progress.json").read_text())
-        if previous["seeds"] != status["seeds"] or previous["variants"] != status["variants"]:
+        if (previous.get("version") != NORMAL_VERSION or previous["seeds"] != status["seeds"]
+                or previous["variants"] != status["variants"]):
             raise ValueError("the existing study uses a different experiment matrix")
         status["completed"] = previous["completed"]
     common = ["--device", args.device]
@@ -648,6 +668,8 @@ def suite(args):
                         or not saved.get("frozen") or not all(row["budget_complete"] for row in saved["stages"].values())):
                     raise ValueError(f"existing run does not complete this study task: {folder}")
                 normal_reference(folder, saved["config"])
+                if variant != "semantic":
+                    normal_reference(root / f"semantic-{seed}", saved["config"])
                 del saved
             else:
                 arguments = ["--variant", variant, "--seed", seed, "--output", folder,
@@ -666,43 +688,46 @@ def suite(args):
                         command("src.evaluate", ["validate", "--checkpoint", checkpoint, "--manifest", args.manifest,
                                 "--readout", readout, "--output", destination, *common],
                                 f"validate {variant}/{readout} seed {seed}")
-        paths = [item for name in ("semantic", "joint", "separate")
-                 for item in ("--" + name, root / f"{name}-{seed}" / "model.pt")]
-        paired = root / f"paired-{seed}"
-        comparison_path = paired / "comparison.json"
-        if not comparison_path.exists():
-            # Interrupted point exports are deterministic scratch arrays owned by this task.
-            if paired.exists():
-                expected = {f"{name}.npy" for name in ("semantic", "joint", "separate", "joint_appearance",
-                                                     "joint_common_density", "joint_independent_minima", "returns", "labels")}
-                files = list(paired.iterdir())
-                if any(not path.is_file() or path.name not in expected for path in files):
-                    raise ValueError(f"unrecognized incomplete comparison contents in {paired}")
-                for path in files:
-                    path.unlink()
-            command("src.evaluate", ["compare", *paths, "--manifest", args.manifest, "--output", paired,
-                    "--fixed-readouts", "--discard-fixed-records", "--normal-fpr", .001, .005, .01, .02, .05, *common],
-                    f"paired validation seed {seed}")
-        comparison = json.loads(comparison_path.read_text())
-        for variant in ("semantic", "joint", "separate"):
-            folder = root / f"{variant}-{seed}"
-            config = json.loads((folder / "config.json").read_text())
-            normal = json.loads((folder / "normal201.json").read_text())
-            # These metrics use the same forward pass as the paired decisions.
-            write_json(folder / "val.json", dict(variant=variant, seed=seed, readout="joint", split="val",
-                complete=True, version=config["version"], architecture=config["architecture"],
-                score_version=config["score_version"], manifest_sha256=comparison["manifest_sha256"],
-                metrics=comparison["methods"][variant]["metrics"], normal201=normal,
-                points=comparison["points"], scans=comparison["scans"], source=str(comparison_path)))
-        if not (paired / "normal.json").exists():
-            command("src.evaluate", ["compare-normal", *paths, "--data", args.stu_root, "--fixed-readouts",
-                    "--output", paired / "normal.json", *common], f"paired normal decisions seed {seed}")
-        for variant in ("semantic", "joint"):
-            folder = root / f"{variant}-{seed}"
-            if not (folder / "runtime.json").exists():
-                command("src.evaluate", ["benchmark", "--checkpoint", folder / "model.pt",
-                        "--manifest", args.manifest, "--output", folder / "runtime.json",
-                        "--device", args.device], f"runtime {variant} seed {seed}")
+            if variant != "separate":
+                continue
+            # Resolve the main comparison before spending time on further ablations.
+            paths = [item for name in ("semantic", "joint", "separate")
+                     for item in ("--" + name, root / f"{name}-{seed}" / "model.pt")]
+            paired = root / f"paired-{seed}"
+            comparison_path = paired / "comparison.json"
+            if not comparison_path.exists():
+                # Interrupted point exports are deterministic scratch arrays owned by this task.
+                if paired.exists():
+                    expected = {f"{name}.npy" for name in ("semantic", "joint", "separate", "joint_appearance",
+                                                         "joint_common_density", "joint_independent_minima", "returns", "labels")}
+                    files = list(paired.iterdir())
+                    if any(not path.is_file() or path.name not in expected for path in files):
+                        raise ValueError(f"unrecognized incomplete comparison contents in {paired}")
+                    for path in files:
+                        path.unlink()
+                command("src.evaluate", ["compare", *paths, "--manifest", args.manifest, "--output", paired,
+                        "--fixed-readouts", "--discard-fixed-records", "--normal-fpr", .001, .005, .01, .02, .05, *common],
+                        f"paired validation seed {seed}")
+            comparison = json.loads(comparison_path.read_text())
+            for name in ("semantic", "joint", "separate"):
+                folder = root / f"{name}-{seed}"
+                config = json.loads((folder / "config.json").read_text())
+                normal = json.loads((folder / "normal201.json").read_text())
+                # These metrics use the same forward pass as the paired decisions.
+                write_json(folder / "val.json", dict(variant=name, seed=seed, readout="joint", split="val",
+                    complete=True, version=config["version"], architecture=config["architecture"],
+                    score_version=config["score_version"], manifest_sha256=comparison["manifest_sha256"],
+                    metrics=comparison["methods"][name]["metrics"], normal201=normal,
+                    points=comparison["points"], scans=comparison["scans"], source=str(comparison_path)))
+            if not (paired / "normal.json").exists():
+                command("src.evaluate", ["compare-normal", *paths, "--data", args.stu_root, "--fixed-readouts",
+                        "--output", paired / "normal.json", *common], f"paired normal decisions seed {seed}")
+            for name in ("semantic", "joint"):
+                folder = root / f"{name}-{seed}"
+                if not (folder / "runtime.json").exists():
+                    command("src.evaluate", ["benchmark", "--checkpoint", folder / "model.pt",
+                            "--manifest", args.manifest, "--output", folder / "runtime.json",
+                            "--device", args.device], f"runtime {name} seed {seed}")
     write_json(root / "summary.json", summarize_experiments(root))
     subprocess.run([sys.executable, "figures/preview.py", "--comparisons",
                     *[str(root / f"paired-{seed}" / "comparison.json") for seed in status["seeds"]]], check=True)

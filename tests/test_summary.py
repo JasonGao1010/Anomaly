@@ -78,7 +78,21 @@ def test_summary_reports_every_table_and_uses_seed_level_sample_deviations(exper
     assert result["predictive"]["joint"]["coverage90"]["mean"] == 89
     assert result["predictive"]["joint"]["by_range"][3]["query_share"]["mean"] == 40
     assert result["confident_unknown"]["methods"]["joint"][2]["confident_unknown_recall"]["mean"] == 60
+    assert result["instance_coverage"]["complete"] is True
     json.dumps(result, allow_nan=False)
+
+
+def test_missing_instance_ids_leave_point_results_available_and_mark_object_population(experiment_directory):
+    for seed in (206, 307, 409):
+        path = experiment_directory / f"paired-{seed}/comparison.json"
+        paired = json.loads(path.read_text())
+        paired["instance_coverage"]["unassigned_anomaly_points"] = 3
+        write(path, paired)
+    result = summarize_experiments(experiment_directory)
+    coverage = result["instance_coverage"]
+    assert coverage["complete"] is False and coverage["unassigned_anomaly_points"] == 3
+    assert "positive instance ID" in coverage["population"]
+    assert result["main"]["joint"]["validation"]["AP"]["mean"] == 23
 
 
 def test_summary_rejects_unmatched_seeds_or_reordered_operating_points(experiment_directory):

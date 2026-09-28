@@ -1,11 +1,29 @@
 """Check original source observations and exact reviewed normal annotations."""
 
 import numpy as np
+import pytest
+
+
+@pytest.fixture
+def normal_sample(monkeypatch):
+    import torch
+    from src import data
+
+    monkeypatch.setattr("src.model.voxelize", lambda points: dict(xyzi=torch.from_numpy(points.copy())))
+
+    def sample(allowed, *, queries=4096, seed=206, key=0, augment=False):
+        points = np.zeros((len(allowed), 4), dtype=np.float32)
+        points[:, 0] = np.linspace(5, 25, len(points))
+        points[:, 1], points[:, 3] = .3, .5
+        monkeypatch.setattr(data, "read_normal_record", lambda record:
+            dict(xyzi=points.copy(), allowed=allowed.copy(), slots=np.arange(len(points)), slot_count=len(points)))
+        return data.NormalScans([{}], queries=queries, seed=seed, augment=augment)[key]
+
+    return sample
 
 
 def test_background_split_preserves_full_context_and_normal_only_labels(tmp_path, monkeypatch):
     import json
-    import pytest
     from src import nuscenes
     from src.data import read_nuscenes, point_targets, load_manifest
 
@@ -42,7 +60,6 @@ def test_background_split_preserves_full_context_and_normal_only_labels(tmp_path
 
 
 def test_reviewed_normals_are_point_specific(tmp_path):
-    import pytest
     from src.data import read_nuscenes
 
     raw = np.array([[5., 0., 0., 100., 0.], [6., 0., 0., 90., 1.],
@@ -57,3 +74,59 @@ def test_reviewed_normals_are_point_specific(tmp_path):
     for slots in ([2], [0, 0], [-1], [3]):
         with pytest.raises(ValueError, match='supplemental normal'):
             read_nuscenes(dict(record, normal_slots=slots), mapping)
+
+
+def test_queries_balance_distinct_allowed_sets_including_rare_singletons(normal_sample):
+    allowed = np.zeros((20008, 19), dtype=bool)
+    allowed[:10000, 8:12] = True
+    allowed[10000:20000, 14:16] = True
+    allowed[20000:, 9] = True
+    sample = normal_sample(allowed, queries=18)
+    chosen = sample["queries"].numpy()
+    # Different coarse-set cardinalities must not multiply their sampling quota.
+    np.testing.assert_array_equal(np.bincount(np.searchsorted([10000, 20000], chosen, side="right")), [6, 6, 6])
+    assert len(chosen) == len(np.unique(chosen)) == 18
+    np.testing.assert_array_equal(sample["allowed"], allowed)
+    assert len(sample["xyzi"]) == len(allowed)
+
+
+@pytest.mark.parametrize("queries", [4096, 30000])
+def test_queries_fill_budget_once_and_keep_all_rare_points_when_quota_permits(normal_sample, queries):
+    allowed = np.zeros((20040, 19), dtype=bool)
+    allowed[:10000, 8:12] = True
+    allowed[10000:20000, 14:16] = True
+    allowed[20000:20008, 9] = True
+    sample = normal_sample(allowed, queries=queries)
+    chosen = sample["queries"].numpy()
+    assert len(chosen) == len(np.unique(chosen)) == min(queries, 20008)
+    assert np.isin(np.arange(20000, 20008), chosen).all()
+    assert np.all(np.diff(chosen) > 0) and np.all(chosen < 20008)
+    assert len(sample["xyzi"]) == 20040  # Ignored points remain model input.
+
+
+def test_empty_supervision_preserves_input_and_has_no_queries(normal_sample):
+    sample = normal_sample(np.zeros((20, 19), dtype=bool))
+    assert len(sample["xyzi"]) == 20 and len(sample["queries"]) == 0
+
+
+def test_query_and_rotation_streams_are_paired_and_change_per_visit(normal_sample):
+    import torch
+    allowed = np.zeros((300, 19), dtype=bool)
+    allowed[:150, 8] = True
+    allowed[150:, 14:16] = True
+    first = normal_sample(allowed, queries=64, key=(1, 0, 7), augment=True)
+    paired = normal_sample(allowed, queries=64, key=(1, 0, 7), augment=True)
+    repeated = normal_sample(allowed, queries=64, key=(1, 0, 8), augment=True)
+    different_seed = normal_sample(allowed, queries=64, key=(1, 0, 7), seed=307, augment=True)
+    for key in ("xyzi", "queries", "allowed", "slots"):
+        torch.testing.assert_close(first[key], paired[key], atol=0, rtol=0)
+    for other in (repeated, different_seed):
+        assert not torch.equal(first["xyzi"], other["xyzi"])
+        assert not torch.equal(first["queries"], other["queries"])
+        torch.testing.assert_close(first["allowed"], other["allowed"], atol=0, rtol=0)
+        torch.testing.assert_close(first["xyzi"][:, :3].norm(dim=1), other["xyzi"][:, :3].norm(dim=1))
+    integer = normal_sample(allowed, queries=64, key=0)
+    explicit = normal_sample(allowed, queries=64, key=(0, 0, 0))
+    torch.testing.assert_close(integer["queries"], explicit["queries"], atol=0, rtol=0)
+    with pytest.raises(ValueError):
+        normal_sample(allowed, key=(1, 0))

@@ -9,6 +9,7 @@ import sys
 import hashlib
 
 import src.evaluate as evaluation
+from src.model import NORMAL_VERSION
 from vendor.stu.compute_point_level_ood import PointOODMetricsCalculator
 
 
@@ -78,7 +79,7 @@ def test_validate_command_keeps_metric_metadata_and_identity_records_separate(tm
                   slots=torch.arange(7), targets=torch.tensor([0, 0, 1, 1, 1, 1, 1], dtype=torch.int8))
     manifest = dict(kind="val", sha256="test-population", records=[
         dict(eligible=True, normal=2, anomaly=5, points=7, slots=7)])
-    saved = dict(version="SERVE", frozen=True,
+    saved = dict(version=NORMAL_VERSION, frozen=True,
                  config=dict(seed=206, variant="joint", architecture="test", score_version="test"),
                  normal201=dict(mean_iou_gt=.5, scans=1))
     monkeypatch.setattr(evaluation, "PreparedScans", lambda manifest: [sample])
@@ -129,6 +130,7 @@ def test_instance_coverage_counts_scan_pairs_and_retains_sparse_objects():
     assert result["methods"]["joint"][0]["detected"][0] == 2
     assert result["methods"]["joint"][0]["recall"][0] == pytest.approx(2 / 3)
     assert result["unassigned_anomaly_points"] == 1
+    assert result["complete"] is False and "positive instance ID" in result["population"]
 
 
 def test_normal_corrections_use_independent_reference_and_keep_absent_candidates():

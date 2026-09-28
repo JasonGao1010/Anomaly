@@ -445,6 +445,8 @@ def instance_coverage(identities, frames, predictions, methods):
                 detected[name][index] += np.bincount(bins[2 * hits >= sizes], minlength=6)
     result = dict(size_bins=["1-4", "5-9", "10-19", "20-49", "50-99", "100+"],
                   instance_counts=counts.tolist(), unassigned_anomaly_points=unassigned,
+                  population="officially evaluated anomaly points with a positive instance ID",
+                  complete=unassigned == 0,
                   definition="equal weight per scan-instance pair; at least half of post-mask points score above the threshold; unassigned instance IDs are excluded",
                   methods={})
     for name, totals in detected.items():
@@ -1004,7 +1006,8 @@ def summarize_experiments(directory):
         confident_unknown=dict(confidence_threshold=.9,
             points_per_seed={str(seed): row["confident_unknown_points"] for seed, row in zip(seeds, paired, strict=True)},
             methods=confidence), instance_coverage=dict(size_bins=bins, instance_counts=counts,
-                unassigned_anomaly_points=unassigned, methods=instances),
+                unassigned_anomaly_points=unassigned, complete=unassigned == 0,
+                population="officially evaluated anomaly points with a positive instance ID", methods=instances),
         normal_corrections=corrections, predictive=predictive, runtime=timing, missing_test=missing_test,
         external_references="Published LIDO, NDP and COVAL results are literature references, not measurements produced by this suite.")
 

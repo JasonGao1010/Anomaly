@@ -16,7 +16,7 @@ WEIGHTS_REVISION = "a8e76e92efbb2061639f5c683968bc5d248ee002"
 WEIGHTS_SHA256 = "95f151f6edcfbf315cd06df6afd261f2a2fde300d3c693dd26b1305d642ecc30"
 GRID_SIZE = .05
 POINT_CHUNK = 65536
-NORMAL_VERSION = "SERVE"
+NORMAL_VERSION = "SERVE-2"
 NORMAL_ARCHITECTURE = "multimode48_return_verification"
 NORMAL_SCORE_VERSION = "joint_density_logtail"
 NORMAL_VARIANTS = ("joint", "semantic", "separate", "standard", "cssr", "target_available",
@@ -85,7 +85,7 @@ class NormalHypothesis(nn.Module):
             raise ValueError(f"unknown normal perception variant: {variant}")
         self.variant = variant
         self.mode = "normal_hypothesis"
-        self.backbone = LitePT(shuffle_orders=False, fp32_attention=True)
+        self.backbone = LitePT(shuffle_orders=True, fp32_attention=True)
         self.detail = mlp(7, 32, 32)
         self.embedding = mlp(104, 96, 48)
         self.appearance_modes = nn.Parameter(torch.randn(19, 4, 48) * .05)
@@ -108,6 +108,14 @@ class NormalHypothesis(nn.Module):
                 self.register_buffer("cssr_fitted", torch.tensor(False))
         self.register_buffer("calibration", torch.zeros(len(CALIBRATION_PROBABILITIES)))
         self.register_buffer("calibrated", torch.tensor(False))
+
+    def train(self, mode=True):
+        super().train(mode)
+        # Pooling stages keep their own order setting; evaluation must fix all of them.
+        for module in self.backbone.modules():
+            if hasattr(module, "shuffle_orders"):
+                module.shuffle_orders = mode
+        return self
 
     @staticmethod
     def validate_checkpoint(saved, *, require_calibrated=False, require_fitted=False):

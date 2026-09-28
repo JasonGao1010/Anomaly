@@ -239,8 +239,9 @@ def test_normal_replay_preserves_budget_and_covers_refined_training_classes(tmp_
     assert order == normal_order(20, 9, 8, 206, "target", pools)
     assert len(order) == 8 * (9 + 9 // 4)
     for epoch in range(8):
-        assert sorted(index for visit, index in order if visit == epoch and index < 9) == list(range(9))
-    replay = [index - 9 for _, index in order if index >= 9]
+        assert sorted(index for turn, index, _ in order if turn == epoch and index < 9) == list(range(9))
+    assert [visit for _, _, visit in order] == list(range(len(order)))
+    replay = [index - 9 for _, index, _ in order if index >= 9]
     assert set(replay[::4]) == {1, 2} and set(replay[2::4]) == {10, 11}
     assert len(set(replay[1::2])) == len(replay[1::2])
     # Source pretraining does not depend on replay priorities or model variants.
@@ -252,7 +253,8 @@ def test_normal_reference_rejects_truncated_or_changed_comparison_budget(tmp_pat
     budget = {stage: dict(visits=visits, updates=visits // 2, order_identity=stage, schedule="fixed")
               for stage, visits in (("source", 20), ("target", 22))}
     config = dict(variant="semantic", architecture="method", budget=budget, seed=206,
-                  source_mapping={2: (5,), 14: (1, 6)})
+                  source_mapping={2: (5,), 14: (1, 6)},
+                  source_validation_indices=[0, 2], target_validation_indices=[1, 3])
     stages = {stage: dict(budget_complete=True, trained_frames=row["visits"], trained_updates=row["updates"],
                           planned_frames=row["visits"], planned_updates=row["updates"], selected_update=1)
               for stage, row in budget.items()}
@@ -262,6 +264,9 @@ def test_normal_reference_rejects_truncated_or_changed_comparison_budget(tmp_pat
     assert normal_reference(tmp_path, dict(config, variant="joint"))[0]["variant"] == "semantic"
     with pytest.raises(ValueError, match="initialization or training budget"):
         normal_reference(tmp_path, dict(config, seed=207))
+    for field in ("source_validation_indices", "target_validation_indices"):
+        with pytest.raises(ValueError, match=field):
+            normal_reference(tmp_path, dict(config, **{field: [0, 1]}))
     for field, value in (("budget_complete", False), ("trained_frames", 20),
                          ("trained_updates", 10), ("planned_updates", 12)):
         changed = deepcopy(stages)
@@ -441,7 +446,7 @@ def test_training_accumulates_frames_and_resumes_exact_rng_and_schedule(tmp_path
             self.records = records
 
         def __getitem__(self, key):
-            epoch, index = key
+            epoch, index, visit = key
             return dict(x=torch.tensor([[float(index + 1), float(epoch + 1)]]))
 
     class Model(nn.Module):
@@ -468,7 +473,7 @@ def test_training_accumulates_frames_and_resumes_exact_rng_and_schedule(tmp_path
     monkeypatch.setattr(training, 'normal_development', development)
     monkeypatch.setattr(training, 'disk_check', lambda *args: {})
     config = dict(batch=2, queries=19, seed=206, eval_every=2, target_eval_every=2)
-    order = [(0, i) for i in range(6)] + [(1, 0)]
+    order = [(0, i, i) for i in range(6)] + [(1, 0, 6)]
     full, interrupted = tmp_path / 'full', tmp_path / 'interrupted'
     full.mkdir()
     interrupted.mkdir()
@@ -517,5 +522,28 @@ def test_source_development_uses_distinct_scene_centers_and_fixed_update_rates()
     assert development_indices([{}] * 682, 68) == np.linspace(0, 681, 68, dtype=int).tolist()
     assert len(normal_order(28130, 449, 2, 206, 'source')) // 2 == 28130
     assert len(normal_order(28130, 449, 8, 206, 'target')) // 2 == 2244
-    assert learning_rate_factor(30, 1000) == 1
+    assert learning_rate_factor(50, 1000) == 1
     assert learning_rate_factor(1000, 1000) == .05
+
+
+def test_optimizer_keeps_shared_prototypes_with_appearance_and_slows_measurement():
+    from src.train import normal_optimizer, OPTIMIZATION
+
+    model = nn.Module()
+    model.backbone = nn.Linear(2, 2)
+    model.embedding = nn.Linear(2, 2)
+    model.hypotheses = nn.Module()
+    model.hypotheses.queries = nn.Parameter(torch.randn(3, 2))
+    model.hypotheses.surface = nn.Linear(2, 3)
+    for stage in ('source', 'target'):
+        optimizer = normal_optimizer(model, stage)
+        groups = {group['name']: group for group in optimizer.param_groups}
+        assigned = {id(p): name for name, group in groups.items() for p in group['params']}
+        assert len(assigned) == sum(len(group['params']) for group in groups.values())
+        assert set(assigned) == {id(p) for p in model.parameters()}
+        assert assigned[id(model.hypotheses.queries)] == 'appearance'
+        assert assigned[id(model.hypotheses.surface.weight)] == 'measurement'
+        assert assigned[id(model.backbone.weight)] == 'backbone'
+        for name, group in groups.items():
+            assert group['lr'] == OPTIMIZATION[stage][name] == group['peak_lr']
+        assert groups['backbone']['lr'] < groups['measurement']['lr'] < groups['appearance']['lr']
